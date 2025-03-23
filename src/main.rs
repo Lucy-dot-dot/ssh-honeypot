@@ -49,6 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_id: SshId::Standard(String::from("SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4")), // Mimic a real SSH server
         keys: vec![
             PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap(),
+            PrivateKey::random(&mut OsRng, Algorithm::Rsa { hash: None }).unwrap(),
+            PrivateKey::random(&mut OsRng, Algorithm::Ecdsa { curve: EcdsaCurve::NistP521 }).unwrap(),
         ],
         ..Default::default()
     };
@@ -59,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db_tx_clone = db_tx.clone();
 
-    let mut tasks = Vec::new();
+    let mut tasks = Vec::with_capacity(app.interfaces.len());
 
     for interface in app.interfaces {
         let conf = config.clone();

@@ -8,7 +8,6 @@ license-file = "LICENSE"
 readme = "README.md"
 
 [dependencies]
-
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 russh = "0.51.1"
 log = "0.4.26"
