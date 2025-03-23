@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 // A struct to represent file metadata
 pub struct FakeFile {
     pub name: String,
+    #[allow(dead_code)]
     pub is_dir: bool,
     pub size: u64,
     pub permissions: String,
@@ -15,6 +16,7 @@ pub struct FakeFile {
 
 // A struct to represent a directory with its contents
 pub struct FakeDir {
+    #[allow(dead_code)]
     pub path: String,
     pub files: Vec<FakeFile>,
 }
