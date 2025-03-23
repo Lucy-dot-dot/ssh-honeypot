@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 repository = "https://github.com/Lucy-dot-dot/ssh-honeypot.git"
 license = "MIT"
+license-file = "LICENSE"
+readme = "README.md"
 
 [dependencies]
 
