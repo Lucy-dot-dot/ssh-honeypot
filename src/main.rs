@@ -462,6 +462,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = App::parse();
 
+    log::info!("Current config:");
+    log::info!("DB Path: {}", app.db_path.display());
+    for interface in &app.interfaces {
+        log::info!("Interface: {}", interface);
+    }
+    log::info!("Disable CLI interface: {}", app.disable_cli_interface);
+
     // Create a channel for database communications
     let (db_tx, db_rx) = mpsc::channel(100);
 
