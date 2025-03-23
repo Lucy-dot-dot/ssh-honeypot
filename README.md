@@ -2,16 +2,16 @@
 
 ## About
 
-A small SSH server that allows for advanced honeypot usage [0]. This tool provides a fake command interface mimicking Ubuntu without any fear of malicious code execution, since no commands are actually executed. It also records all commands in a central database for later analysis [0].
+A small SSH server that allows for advanced honeypot usage. This tool provides a fake command interface mimicking Ubuntu without any fear of malicious code execution, since no commands are actually executed. It also records all commands in a central database for later analysis.
 
 ## Features
 
 - Simulates an Ubuntu-like environment safely
 - Logs all attempted commands
-- Records authentication attempts (successful and unsuccessful) [2]
-- Tracks session information (start time, end time, duration) [2]
-- Stores commands and activity in a database for analysis [2]
-- Provides fake system file contents (like `/proc/cpuinfo`) [3]
+- Records authentication attempts (successful and unsuccessful)
+- Tracks session information (start time, end time, duration)
+- Stores commands and activity in a database for analysis
+- Provides fake system file contents (like `/proc/cpuinfo`)
 
 ## Usage
 
@@ -21,21 +21,21 @@ honeypot-ssh-server [OPTIONS]
 
 ### Options
 
-- `-i, --interface <ADDRESSES>`: The IP addresses and ports to listen on (default: 0.0.0.0:2222 for IPv4 and [::]:2222 for IPv6) [0]
-- `-d, --db <PATH>`: Path to the database file (default: "honeypot.db") [0]
+- `-i, --interface <ADDRESSES>`: The IP addresses and ports to listen on (default: 0.0.0.0:2222 for IPv4 and [::]:2222 for IPv6)
+- `-d, --db <PATH>`: Path to the database file (default: "honeypot.db")
 
 ### Environment Variables
 
-- `INTERFACE`: Alternative way to specify the listening interfaces [0]
-- `DATABASE_PATH`: Alternative way to specify the database path [0]
+- `INTERFACE`: Alternative way to specify the listening interfaces
+- `DATABASE_PATH`: Alternative way to specify the database path
 
 ## Requirements
 
-- For binding to ports under 1000, you'll need to use the Linux `setcap cap_net_bind_service` command [0]
+- For binding to ports under 1000, you'll need to use the Linux `setcap cap_net_bind_service` command
 
 ## Database
 
-The tool records several types of information [2]:
+The tool records several types of information:
 - Authentication attempts (IP, username, password/key, success status)
 - Commands entered by attackers
 - Session information (duration, start/end times)
