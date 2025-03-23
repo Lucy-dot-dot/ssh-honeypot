@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use async_trait::async_trait;
 use chrono::prelude::*;
 use futures::Future;
-use russh::keys::ssh_key::rand_core::OsRng;
+use russh::keys::ssh_key::rand_core::{OsRng, RngCore};
 use russh::keys::*;
 use russh::server::{Auth, Handler, Session, Msg};
 use russh::Channel;
@@ -19,7 +19,7 @@ use russh::server::Server as _;
 use russh::*;
 use std::sync::Arc;
 use clap::Parser;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -106,7 +106,8 @@ impl Handler for SshHandler {
             }).await;
 
             // Simulate a small delay like a real SSH server
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let delay = OsRng::default().next_u64() % 501;
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
             if self.disable_cli_interface {
                 log::info!("Cli interface is disabled");
@@ -149,7 +150,8 @@ impl Handler for SshHandler {
             }).await;
 
             // Simulate a small delay like a real SSH server
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let delay = OsRng::default().next_u64() % 501;
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
             if self.disable_cli_interface {
                 log::debug!("Cli interface is disabled");
