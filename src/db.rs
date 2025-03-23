@@ -2,7 +2,34 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Result as SqlResult};
 use tokio::sync::mpsc;
-use crate::DbMessage;
+
+// Database message types
+#[derive(Debug)]
+pub enum DbMessage {
+    RecordAuth {
+        id: String,
+        timestamp: DateTime<Utc>,
+        ip: String,
+        username: String,
+        auth_type: String,
+        password: Option<String>,
+        public_key: Option<String>,
+        successful: bool,
+    },
+    RecordCommand {
+        id: String,
+        auth_id: String,
+        timestamp: DateTime<Utc>,
+        command: String,
+    },
+    RecordSession {
+        auth_id: String,
+        start_time: DateTime<Utc>,
+        end_time: DateTime<Utc>,
+        duration_seconds: i64,
+    },
+    Shutdown,
+}
 
 // Database handler function that runs in its own task
 pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf) {
