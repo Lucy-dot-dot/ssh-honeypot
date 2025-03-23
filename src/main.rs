@@ -70,6 +70,7 @@ struct SshHandler {
     current_cmd: String,
     cwd: String,
     hostname: String,
+    disable_cli_interface: bool,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -107,6 +108,11 @@ impl Handler for SshHandler {
             // Simulate a small delay like a real SSH server
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
+            if self.disable_cli_interface {
+                log::info!("Cli interface is disabled");
+                return Ok(Auth::reject())
+            }
+            log::info!("Accepted new connection");
             // For honeypot, we accept all auth attempts
             Ok(Auth::Accept)
         }
@@ -145,6 +151,11 @@ impl Handler for SshHandler {
             // Simulate a small delay like a real SSH server
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
+            if self.disable_cli_interface {
+                log::debug!("Cli interface is disabled");
+                return Ok(Auth::reject())
+            }
+            log::info!("Accepted new connection");
             // For honeypot, we accept all auth attempts
             Ok(Auth::Accept)
         }
@@ -361,6 +372,7 @@ impl SshHandler {
 // Implementation of Server trait
 struct SshServerHandler {
     db_tx: mpsc::Sender<DbMessage>,
+    disable_cli_interface: bool,
 }
 
 impl server::Server for SshServerHandler {
@@ -379,6 +391,7 @@ impl server::Server for SshServerHandler {
             current_cmd: String::new(),
             cwd: String::from("/home/user"),
             hostname: "server01".to_string(),
+            disable_cli_interface: self.disable_cli_interface,
         }
     }
 
@@ -479,6 +492,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let conf = config.clone();
         let mut server_handler = SshServerHandler {
             db_tx: db_tx.clone(),
+            disable_cli_interface: app.disable_cli_interface,
         };
         tasks.push(tokio::spawn(async move {
             // Start the SSH server
@@ -494,7 +508,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Ctrl+C handler for graceful shutdown
     let handle = tokio::task::spawn(async move {
+        log::info!("Waiting for shutdown signal");
+        #[cfg(unix)]
+        {
+            let mut sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("Failed to listen for SIGTERM");
+            tokio::select! {
+                _ = sig.recv() => {},
+                _ = tokio::signal::ctrl_c() => {},
+            }
+        }
+        #[cfg(windows)]
         tokio::signal::ctrl_c().await.expect("Failed to listen for ctrl+c");
+
         log::info!("Shutting down honeypot...");
         let _ = db_tx_clone.send(DbMessage::Shutdown).await;
         match db_handle.await {

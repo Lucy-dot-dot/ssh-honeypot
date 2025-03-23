@@ -1,0 +1,25 @@
+services:
+  ssh-honeypot:
+    build: .
+    environment:
+      DATABASE_PATH: /db/honeypot.db
+      INTERFACE: 0.0.0.0:2222
+      DISABLE_CLI_INTERFACE: true
+    volumes:
+      - db:/db
+    dns_search: []
+    ports:
+      - protocol: tcp
+        mode: host
+        host_ip: 0.0.0.0
+        name: ssh-ipv4
+        published: 2222
+        target: 2222
+    cap_drop:
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  db:
