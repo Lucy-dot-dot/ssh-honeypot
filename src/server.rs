@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
-use russh::{server, Channel, ChannelId, ChannelMsg, CryptoVec};
+use russh::{server, Channel, ChannelId, ChannelMsg, CryptoVec, Error};
 use russh::keys::{HashAlg, PublicKey};
 use russh::keys::signature::rand_core::OsRng;
 use russh::keys::ssh_key::rand_core::RngCore;
@@ -32,6 +32,7 @@ pub struct SshHandler {
     cwd: String,
     hostname: String,
     disable_cli_interface: bool,
+    authentication_banner: Option<String>,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -55,7 +56,7 @@ impl Handler for SshHandler {
             log::info!("Password auth attempt - Username: {}, Password: {}, IP: {}", user, password, peer_str);
 
             // Record authentication attempt in database
-            let _ = self.db_tx.send(DbMessage::RecordAuth {
+            match self.db_tx.send(DbMessage::RecordAuth {
                 id: auth_id,
                 timestamp: Utc::now(),
                 ip: peer_str,
@@ -64,10 +65,14 @@ impl Handler for SshHandler {
                 password: Some(password.to_string()),
                 public_key: None,
                 successful: true, // We're accepting all auth in honeypot
-            }).await;
+            }).await {
+                Ok(_) => { log::trace!("Send RecordAuth to db task") },
+                Err(err) => { log::error!("Failed to send RecordAuth to db task: {}", err) },
+            };
 
             // Simulate a small delay like a real SSH server
             let delay = OsRng::default().next_u64() % 501;
+            log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
             if self.disable_cli_interface {
@@ -99,7 +104,7 @@ impl Handler for SshHandler {
             log::info!("Public key auth attempt - Username: {}, Key: {}, IP: {}", user_str, key_str, peer_str);
 
             // Record authentication attempt in database
-            let _ = self.db_tx.send(DbMessage::RecordAuth {
+            match self.db_tx.send(DbMessage::RecordAuth {
                 id: auth_id,
                 timestamp: Utc::now(),
                 ip: peer_str,
@@ -108,10 +113,14 @@ impl Handler for SshHandler {
                 password: None,
                 public_key: Some(key_str),
                 successful: true, // We're accepting all auth in honeypot
-            }).await;
+            }).await {
+                Ok(_) => { log::trace!("Send RecordAuth to db task") },
+                Err(err) => { log::error!("Failed to send RecordAuth to db task: {}", err) },
+            };
 
             // Simulate a small delay like a real SSH server
             let delay = OsRng::default().next_u64() % 501;
+            log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
             if self.disable_cli_interface {
@@ -121,6 +130,15 @@ impl Handler for SshHandler {
             log::info!("Accepted new connection");
             // For honeypot, we accept all auth attempts
             Ok(Auth::Accept)
+        }
+    }
+
+    fn authentication_banner(
+        &mut self,
+    ) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send {
+        async move {
+            log::trace!("Displaying banner: {:?}", self.authentication_banner.as_ref());
+            Ok(self.authentication_banner.clone())
         }
     }
 
@@ -144,6 +162,7 @@ impl Handler for SshHandler {
                 // Start the fake shell for the attacker
                 let db_tx = self.db_tx.clone();
                 // Handle the shell session within this future
+                log::trace!("Starting tokio task for shell session saving");
                 tokio::spawn(async move {
                     handle_shell_session(channel, data, db_tx).await;
                 });
@@ -161,18 +180,26 @@ impl Handler for SshHandler {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
             if data[0] == 4 {
-                let _ = session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()));
-                return Err(russh::Error::Disconnect);
+                log::debug!("Client requested closing of connection");
+                match session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes())) {
+                    Ok(_) => { log::trace!("Send closing connection text to client") },
+                    Err(err) => { log::error!("Failed to send closing connection to client: {}", err) },
+                };
+                return Err(Error::Disconnect);
             }
             if data[0] == 127 || data[0] == 8 {
                 log::trace!("Received backspace, backspacing...");
                 // Well we don't want to delete prompt do we? Maybe I could send the bell code?
                 // TODO: Send bell ascii code
                 if self.current_cmd.is_empty() {
+                    log::trace!("current cmd is empty, so why are you still backspacing?");
                     return Ok(());
                 }
 
-                let _ = session.data(channel, CryptoVec::from_slice(&[8u8, 32u8, 8u8]));
+                match session.data(channel, CryptoVec::from_slice(&[8u8, 32u8, 8u8])) {
+                    Ok(_) => { log::trace!("Send backspace code to client") },
+                    Err(err) =>  { log::error!("Failed to send backspace code to client: {}", err) },
+                };
                 self.current_cmd.pop();
                 return Ok(());
             }
@@ -182,7 +209,10 @@ impl Handler for SshHandler {
                 log::trace!("Received ctrl+c, clearing current command");
                 self.current_cmd = String::new();
                 let prompt = format!("\r\n{}@{}:~$ ", self.session_data.user, self.hostname);
-                let _ = session.data(channel, CryptoVec::from(prompt.as_bytes()));
+                match session.data(channel, CryptoVec::from(prompt.as_bytes())) {
+                    Ok(_) => { log::trace!("Send prompt to client") },
+                    Err(err) => { log::error!("Failed to send prompt to client: {}", err) },
+                }
                 return Ok(());
             }
 
@@ -194,19 +224,25 @@ impl Handler for SshHandler {
                     self.session_data.commands.push(self.current_cmd.clone());
 
                     // Record command in database
-                    let _ = self.db_tx.send(DbMessage::RecordCommand {
+                    match self.db_tx.send(DbMessage::RecordCommand {
                         id: Uuid::new_v4().to_string(),
                         auth_id: self.session_data.auth_id.clone(),
                         timestamp: Utc::now(),
                         command: self.current_cmd.clone(),
-                    }).await;
+                    }).await {
+                        Ok(_) => { log::trace!("Send record command to db task") },
+                        Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+                    };
 
                     if self.current_cmd == "exit" || self.current_cmd == "logout" {
                         log::debug!("Closing session {} due to exit command", self.session_data.auth_id);
                         // Send goodbye message
-                        let _ = session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()));
+                        match session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes())) {
+                            Ok(_) => { log::trace!("Sent closing connection to client") },
+                            Err(err) => { log::error!("Failed to send closing connection to client: {}", err) },
+                        };
                         // Close the channel
-                        return Err(russh::Error::Disconnect);
+                        return Err(Error::Disconnect);
                     }
 
                     // Process the command
@@ -214,16 +250,28 @@ impl Handler for SshHandler {
                     self.current_cmd = String::new();
 
                     // Send the response
-                    let _ = session.data(channel, CryptoVec::from("\r\n".as_bytes()));
-                    let _ = session.data(channel, CryptoVec::from(response.as_bytes()));
+                    match session.data(channel, CryptoVec::from("\r\n".as_bytes())) {
+                        Ok(_) => { log::trace!("Sent newline for command execution to client") },
+                        Err(err) => { log::error!("Failed to send newline to client: {}", err) },
+                    };
+                    match session.data(channel, CryptoVec::from(response.as_bytes())) {
+                        Ok(_) => { log::trace!("Sent command result data to client") },
+                        Err(err) => { log::error!("Failed to send command result data to client: {}", err) },
+                    };
                     let prompt = format!("\r\n{}@{}:~$ ", self.session_data.user, self.hostname);
-                    let _ = session.data(channel, CryptoVec::from(prompt.as_bytes()));
+                    match session.data(channel, CryptoVec::from(prompt.as_bytes())) {
+                        Ok(_) => { log::trace!("Sent prompt to client") },
+                        Err(err) => { log::error!("Failed to send prompt to client after command execution: {}", err) },
+                    };
 
                 } else {
                     log::trace!("Appending to command: {}", cmd);
                     if !cmd.is_empty() {
                         self.current_cmd += &*cmd;
-                        let _ = session.data(channel, CryptoVec::from(cmd.as_bytes()));
+                        match session.data(channel, CryptoVec::from(cmd.as_bytes())) {
+                            Ok(_) => { log::trace!("Sent character back to client") },
+                            Err(err) => { log::error!("Failed to send character back to client: {}", err) },
+                        };
                     }
                 }
             } else {
@@ -232,8 +280,11 @@ impl Handler for SshHandler {
                 // Check for CTRL+D (ASCII 4) in raw data
                 if data.contains(&4) {
                     // Send goodbye message and close connection
-                    let _ = session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()));
-                    return Err(russh::Error::Disconnect);
+                    match session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes())) {
+                        Ok(_) => { log::trace!("Sent logout message to client") },
+                        Err(err) => { log::error!("Failed to send logout message to client: {}", err) },
+                    };
+                    return Err(Error::Disconnect);
                 }
             }
             Ok(())
@@ -254,11 +305,17 @@ impl Handler for SshHandler {
                 Local::now().format("%a %b %e %H:%M:%S %Y")
             );
 
-            let _ = session.data(channel, CryptoVec::from(welcome.as_bytes()));
+            match session.data(channel, CryptoVec::from(welcome.as_bytes())) {
+                Ok(_) => { log::trace!("Send welcome message to client") },
+                Err(err) => { log::error!("Failed to send welcome message to client: {}", err) },
+            };
 
             // Send prompt
             let prompt = format!("{}@{}:~$ ", self.session_data.user, self.hostname);
-            let _ = session.data(channel, CryptoVec::from(prompt.as_bytes()));
+            match session.data(channel, CryptoVec::from(prompt.as_bytes())) {
+                Ok(_) => { log::trace!("Sent prompt to client") },
+                Err(err) => { log::error!("Failed to send prompt to client: {}", err) },
+            };
 
             Ok(())
         }
@@ -336,6 +393,7 @@ impl SshHandler {
 pub struct SshServerHandler {
     db_tx: mpsc::Sender<DbMessage>,
     disable_cli_interface: bool,
+    authentication_banner: Option<String>,
 }
 
 impl server::Server for SshServerHandler {
@@ -355,6 +413,7 @@ impl server::Server for SshServerHandler {
             cwd: String::from("/home/user"),
             hostname: "server01".to_string(),
             disable_cli_interface: self.disable_cli_interface,
+            authentication_banner: self.authentication_banner.clone()
         }
     }
 
@@ -369,10 +428,11 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>) -> SshServerHandler {
         Self {
             disable_cli_interface,
-            db_tx
+            db_tx,
+            authentication_banner
         }
     }
 }
@@ -386,6 +446,7 @@ async fn handle_shell_session(
     // We don't need to do anything specific here since
     // commands are handled in the data/shell_request/exec_request methods
 
+    log::trace!("Waiting for channel to close before saving metadata");
     // Just wait for the channel to close
     while let Some(msg) = channel.wait().await {
         match msg {
@@ -406,6 +467,7 @@ async fn handle_shell_session(
     let end_time = Utc::now();
     let duration = end_time - session_data.start_time;
 
+    log::info!("Session closed for {}. Session start {}, Session end: {}, Duration: {}", session_data.auth_id, session_data.start_time, end_time, duration);
     // Log session end to database
     match db_tx.send(DbMessage::RecordSession {
         auth_id: session_data.auth_id,

@@ -32,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Interface: {}", interface);
     }
     log::info!("Disable CLI interface: {}", app.disable_cli_interface);
+    log::info!("Authentication BANNER: {}", app.authentication_banner.clone().unwrap_or_default());
 
     // Create a channel for database communications
     let (db_tx, db_rx) = mpsc::channel(100);
@@ -41,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_db_handler(db_rx, app.db_path).await;
     });
 
+    log::trace!("Creating server config and generating keys");
     // Set up the SSH server configuration
     let config = russh::server::Config {
         inactivity_timeout: Some(std::time::Duration::from_secs(30)),
@@ -54,6 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
         ..Default::default()
     };
+    log::trace!("Finished generating keys");
 
     let config = Arc::new(config);
 
@@ -65,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for interface in app.interfaces {
         let conf = config.clone();
-        let mut server_handler = SshServerHandler::new(db_tx.clone(), app.disable_cli_interface);
+        
+        let mut server_handler = SshServerHandler::new(db_tx.clone(), app.disable_cli_interface, app.authentication_banner.clone());
         tasks.push(tokio::spawn(async move {
             // Start the SSH server
             log::info!("Starting SSH honeypot on {}", interface);

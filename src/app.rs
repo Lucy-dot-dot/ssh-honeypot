@@ -14,4 +14,8 @@ pub struct App {
     /// Disable the fake cli interface provided and only save passwords and/or key authentication attempts
     #[arg(short = 'c', long = "disable-cli-interface", default_value_t = false, env = "DISABLE_CLI_INTERFACE")]
     pub disable_cli_interface: bool,
+    
+    /// Authentication banner to show. Can make the server more realistic
+    #[arg(short, long, env = "AUTHENTICATION_BANNER")]
+    pub authentication_banner: Option<String>,
 }

@@ -1,5 +1,5 @@
 pub fn get_fake_file_content(file_path: &str) -> Option<String> {
-    match file_path {
+    let res = match file_path {
         // System info files
         "/proc/cpuinfo" => Some(
             "processor\t: 0\r\nvendor_id\t: GenuineIntel\r\ncpu family\t: 6\r\nmodel\t\t: 158\r\nmodel name\t: Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz\r\nstepping\t: 12\r\nmicrocode\t: 0xde\r\ncpu MHz\t\t: 3600.000\r\ncache size\t: 12288 KB\r\nphysical id\t: 0\r\nsiblings\t: 8\r\ncore id\t\t: 0\r\ncpu cores\t: 8\r\napicid\t\t: 0\r\ninitial apicid\t: 0\r\nfpu\t\t: yes\r\nfpu_exception\t: yes\r\ncpuid level\t: 22\r\nwp\t\t: yes\r\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf pni pclmulqdq dtes64 monitor ds_cpl vmx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb invpcid_single pti ssbd ibrs ibpb stibp tpr_shadow vnmi flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid mpx rdseed adx smap clflushopt intel_pt xsaveopt xsavec xgetbv1 xsaves dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp md_clear flush_l1d\r\nbugs\t\t: cpu_meltdown spectre_v1 spectre_v2 spec_store_bypass l1tf mds swapgs itlb_multihit\r\nbogomips\t: 7200.00\r\nclflush size\t: 64\r\ncache_alignment\t: 64\r\naddress sizes\t: 46 bits physical, 48 bits virtual\r\npower management:\r\n\r\n".to_string()
@@ -68,5 +68,7 @@ pub fn get_fake_file_content(file_path: &str) -> Option<String> {
 
         // Handle relative paths within allowed directories
         _ => None, // Return None for any other path, will trigger the default "file not found" message
-    }
+    };
+    log::trace!("Fake file content for {}: {:?}", file_path, res);
+    res
 }
