@@ -3,6 +3,7 @@ mod db;
 mod shell;
 mod server;
 
+use std::fs::OpenOptions;
 use app::App;
 use db::run_db_handler;
 
@@ -12,9 +13,10 @@ use russh::server::Server as _;
 use russh::*;
 use std::sync::Arc;
 use clap::Parser;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use crate::server::SshServerHandler;
+use shell::filesystem::fs2::FileSystem;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,10 +68,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut tasks = Vec::with_capacity(app.interfaces.len());
 
+    log::trace!("Creating filesystem");
+    let fs2 = Arc::new(RwLock::new(FileSystem::default()));
+    log::trace!("Reading base.tar.gz and processing it");
+    match OpenOptions::new().create(false).write(false).read(true).open("base.tar.gz") {
+        Ok(file) => {
+            log::trace!("Opened base.tar.gz");
+            match fs2.write().await.process_targz(file) {
+                Ok(_) => {
+                    log::debug!("Processed base.tar.gz successfully");
+                },
+                Err(err) => {
+                    if !app.disable_cli_interface {
+                        log::error!("Failed to process base.tar.gz: {:?}. Continuing anyway", err);
+                    } else {
+                        log::debug!("Failed to process base.tar.gz: {:?}. Continuing anyway", err);
+                    }
+                }
+            }
+        },
+        Err(err) => {
+            if !app.disable_cli_interface {
+                log::error!("Failed to open base.tar.gz: {:?}. Continuing anyway", err);
+            } else {
+                log::debug!("Failed to process base.tar.gz: {:?}. Continuing anyway", err);
+            }
+        }
+    }
+
     for interface in app.interfaces {
         let conf = config.clone();
         
-        let mut server_handler = SshServerHandler::new(db_tx.clone(), app.disable_cli_interface, app.authentication_banner.clone());
+        let mut server_handler = SshServerHandler::new(db_tx.clone(), app.disable_cli_interface, app.authentication_banner.clone(), app.tarpit, fs2.clone());
         tasks.push(tokio::spawn(async move {
             // Start the SSH server
             log::info!("Starting SSH honeypot on {}", interface);

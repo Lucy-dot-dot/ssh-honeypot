@@ -18,4 +18,8 @@ pub struct App {
     /// Authentication banner to show. Can make the server more realistic
     #[arg(short, long, env = "AUTHENTICATION_BANNER")]
     pub authentication_banner: Option<String>,
+
+    /// Makes the response veryyyyy slooooooooooowww in order to slow down attackers and "tarpit" them
+    #[arg(short, long, env = "TARPIT", default_value_t = false)]
+    pub tarpit: bool,
 }

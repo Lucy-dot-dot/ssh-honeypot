@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
 use russh::{server, Channel, ChannelId, ChannelMsg, CryptoVec, Error};
@@ -7,10 +8,16 @@ use russh::keys::signature::rand_core::OsRng;
 use russh::keys::ssh_key::rand_core::RngCore;
 use russh::server::{Auth, Handler, Msg, Session};
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
+use rand::{rng, Rng};
 use crate::db::DbMessage;
-use crate::shell::cat::get_fake_file_content;
+use crate::shell::commands::cat::get_fake_file_content;
+use crate::shell::commands::echo::handle_echo_command;
 use crate::shell::filesystem;
+use crate::shell::commands::free::handle_free_command;
+use crate::shell::filesystem::fs2::{FileContent, FileSystem};
+use crate::shell::commands::ps::handle_ps_command;
 
 #[derive(Clone, Default)]
 // Store session data
@@ -33,6 +40,8 @@ pub struct SshHandler {
     hostname: String,
     disable_cli_interface: bool,
     authentication_banner: Option<String>,
+    tarpit: bool,
+    fs2: Arc<RwLock<FileSystem>>,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -181,7 +190,7 @@ impl Handler for SshHandler {
         async move {
             if data[0] == 4 {
                 log::debug!("Client requested closing of connection");
-                match session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes())) {
+                match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
                     Ok(_) => { log::trace!("Send closing connection text to client") },
                     Err(err) => { log::error!("Failed to send closing connection to client: {}", err) },
                 };
@@ -196,7 +205,7 @@ impl Handler for SshHandler {
                     return Ok(());
                 }
 
-                match session.data(channel, CryptoVec::from_slice(&[8u8, 32u8, 8u8])) {
+                match self.tarpit_data(session, channel, &[8u8, 32u8, 8u8]).await {
                     Ok(_) => { log::trace!("Send backspace code to client") },
                     Err(err) =>  { log::error!("Failed to send backspace code to client: {}", err) },
                 };
@@ -209,7 +218,7 @@ impl Handler for SshHandler {
                 log::trace!("Received ctrl+c, clearing current command");
                 self.current_cmd = String::new();
                 let prompt = format!("\r\n{}@{}:~$ ", self.session_data.user, self.hostname);
-                match session.data(channel, CryptoVec::from(prompt.as_bytes())) {
+                match self.tarpit_data(session, channel, prompt.as_bytes()).await {
                     Ok(_) => { log::trace!("Send prompt to client") },
                     Err(err) => { log::error!("Failed to send prompt to client: {}", err) },
                 }
@@ -237,7 +246,7 @@ impl Handler for SshHandler {
                     if self.current_cmd == "exit" || self.current_cmd == "logout" {
                         log::debug!("Closing session {} due to exit command", self.session_data.auth_id);
                         // Send goodbye message
-                        match session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes())) {
+                        match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
                             Ok(_) => { log::trace!("Sent closing connection to client") },
                             Err(err) => { log::error!("Failed to send closing connection to client: {}", err) },
                         };
@@ -246,20 +255,20 @@ impl Handler for SshHandler {
                     }
 
                     // Process the command
-                    let response = self.process_command();
+                    let response = self.process_command().await;
                     self.current_cmd = String::new();
 
                     // Send the response
-                    match session.data(channel, CryptoVec::from("\r\n".as_bytes())) {
+                    match self.tarpit_data(session, channel, "\r\n".as_bytes()).await {
                         Ok(_) => { log::trace!("Sent newline for command execution to client") },
                         Err(err) => { log::error!("Failed to send newline to client: {}", err) },
                     };
-                    match session.data(channel, CryptoVec::from(response.as_bytes())) {
+                    match self.tarpit_data(session, channel, response.as_bytes()).await {
                         Ok(_) => { log::trace!("Sent command result data to client") },
                         Err(err) => { log::error!("Failed to send command result data to client: {}", err) },
                     };
                     let prompt = format!("\r\n{}@{}:~$ ", self.session_data.user, self.hostname);
-                    match session.data(channel, CryptoVec::from(prompt.as_bytes())) {
+                    match self.tarpit_data(session, channel, prompt.as_bytes()).await {
                         Ok(_) => { log::trace!("Sent prompt to client") },
                         Err(err) => { log::error!("Failed to send prompt to client after command execution: {}", err) },
                     };
@@ -268,7 +277,7 @@ impl Handler for SshHandler {
                     log::trace!("Appending to command: {}", cmd);
                     if !cmd.is_empty() {
                         self.current_cmd += &*cmd;
-                        match session.data(channel, CryptoVec::from(cmd.as_bytes())) {
+                        match self.tarpit_data(session, channel, cmd.as_bytes()).await {
                             Ok(_) => { log::trace!("Sent character back to client") },
                             Err(err) => { log::error!("Failed to send character back to client: {}", err) },
                         };
@@ -280,7 +289,7 @@ impl Handler for SshHandler {
                 // Check for CTRL+D (ASCII 4) in raw data
                 if data.contains(&4) {
                     // Send goodbye message and close connection
-                    match session.data(channel, CryptoVec::from("\r\nlogout\r\nConnection to host closed.\r\n".as_bytes())) {
+                    match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
                         Ok(_) => { log::trace!("Sent logout message to client") },
                         Err(err) => { log::error!("Failed to send logout message to client: {}", err) },
                     };
@@ -305,14 +314,14 @@ impl Handler for SshHandler {
                 Local::now().format("%a %b %e %H:%M:%S %Y")
             );
 
-            match session.data(channel, CryptoVec::from(welcome.as_bytes())) {
+            match self.tarpit_data(session, channel, welcome.as_bytes()).await {
                 Ok(_) => { log::trace!("Send welcome message to client") },
                 Err(err) => { log::error!("Failed to send welcome message to client: {}", err) },
             };
 
             // Send prompt
             let prompt = format!("{}@{}:~$ ", self.session_data.user, self.hostname);
-            match session.data(channel, CryptoVec::from(prompt.as_bytes())) {
+            match self.tarpit_data(session, channel, prompt.as_bytes()).await {
                 Ok(_) => { log::trace!("Sent prompt to client") },
                 Err(err) => { log::error!("Failed to send prompt to client: {}", err) },
             };
@@ -324,7 +333,7 @@ impl Handler for SshHandler {
 
 impl SshHandler {
     // Process commands and return fake responses
-    fn process_command(&mut self) -> String {
+    async fn process_command(&mut self) -> String {
         log::debug!("Processing command: {}", self.current_cmd);
         // First, split on pipes to handle simple command piping
         let cmd = self.current_cmd.clone();
@@ -332,6 +341,8 @@ impl SshHandler {
 
         let primary_cmd = cmd_parts.next().unwrap_or("").trim();
         log::debug!("Identified primary cmd: {}", primary_cmd);
+
+
 
         // Process the primary command
         let mut output = match primary_cmd {
@@ -346,9 +357,9 @@ impl SshHandler {
 
             "uname" => "Linux server01 5.4.0-109-generic #123-Ubuntu SMP Fri Apr 8 09:10:54 UTC 2022 x86_64 x86_64 x86_64 GNU/Linux".to_string(),
 
-            "ps" => "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\r\nroot         1  0.0  0.0 168940  9488 ?        Ss   Jun10   0:01 /sbin/init\r\nroot         2  0.0  0.0      0     0 ?        S    Jun10   0:00 [kthreadd]\r\nroot        10  0.0  0.0      0     0 ?        I<   Jun10   0:00 [rcu_tasks_kthr]\r\nuser      1820  0.0  0.0  17672  3396 pts/0    R+   12:34   0:00 ps aux\r\n".to_string(),
-
-            cmd if cmd.starts_with("cat ") => {
+            cmd if cmd.starts_with("ps") => handle_ps_command(cmd),
+            
+            cmd if cmd.starts_with("cat") => {
                 let file_path = cmd[4..].trim();
                 match get_fake_file_content(file_path) {
                     Some(content) => content,
@@ -358,18 +369,64 @@ impl SshHandler {
 
             "wget" | "curl" => format!("{cmd}: missing URL\r\nUsage: {cmd} [OPTION]... [URL]...\r\n\r\nTry `{cmd}` --help' for more options.", cmd=cmd),
 
-            "sudo" => if cmd.contains("-l") { "Sorry, user user may not run sudo on server01.".to_string() } else { "".to_string() },
+            cmd if cmd.contains("sudo") => { "Sorry, user may not run sudo on server01.".to_string() },
 
-            "cd" => "".to_string(),
+            cmd if cmd.starts_with("cd") => {
+                let mut path = cmd.replace("cd ", "");
+                if path.starts_with(".") || path.starts_with("..") {
+                    let cwd = self.cwd.clone();
+                    path = if cwd.ends_with("/") {
+                        cwd + &path
+                    } else {
+                        cwd + "/" + &path
+                    }
+                }
+
+                let fs = self.fs2.read().await;
+
+                let resolved = fs.resolve_absolute_path(&path);
+
+                match fs.follow_symlink(&resolved) {
+                    Ok(entry) => {
+                        match entry.file_content {
+                            None => {
+                                log::error!("Failed to get file content for path: {}", resolved);
+                                format!("bash: cd: {}: No such file or directory", resolved)
+                            }
+                            Some(ref content) => {
+                                match content {
+                                    FileContent::Directory(_) => {
+                                        self.cwd = resolved.clone();
+                                        "".to_string()
+                                    }
+                                    FileContent::RegularFile(_) => {
+                                        log::error!("Failed to cd into a regular file: {}", resolved);
+                                        format!("bash: cd: {}: Not a directory", resolved)
+                                    }
+                                    FileContent::SymbolicLink(_) => {
+                                        log::error!("Failed to resolve symbolic link to a non symbolic link. Should never happen!");
+                                        format!("bash: cd: {}: Not a directory", resolved)
+                                    }
+                                }
+                            }
+                        }
+                        "".to_string()
+                    },
+                    Err(err) => {
+                        log::error!("Failed to resolve path: {}", err);
+                        format!("bash: cd: {}: No such file or directory", resolved)
+                    }
+                }
+
+            },
 
             "exit" | "logout" => "".to_string(),
 
             "date" => Local::now().format("%a %b %e %H:%M:%S %Z %Y").to_string(),
 
-            "free" => "              total        used        free      shared  buff/cache   available\r\nMem:           3953        1499        1427         272        1027        1903\r\nSwap:          2048           0        2048".to_string(),
+            cmd if cmd.starts_with("free") => handle_free_command(cmd),
 
-            "echo" => "".to_string(),
-            cmd if cmd.starts_with("echo ") => cmd[5..].to_string() + "\r\n",
+            cmd if cmd.starts_with("echo") => handle_echo_command(cmd),
 
             _ => format!("bash: {}: command not found\r\n", primary_cmd),
         };
@@ -387,6 +444,53 @@ impl SshHandler {
 
         output
     }
+
+
+    /// Handles the transmission of data over the provided session and channel, with an optional "tarpit" mode
+    /// to delay the data flow intentionally.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - A mutable reference to the session through which the data is sent.
+    /// * `channel` - The channel identifier where the data will be transmitted.
+    /// * `data` - A byte slice representing the data to be sent.
+    ///
+    /// # Behavior
+    ///
+    /// - If the `self.tarpit` flag is set to `true`, each byte of the `data` slice is sent with an intentional delay
+    ///   (between 500 to 2000 milliseconds, randomized for each byte) to simulate a slow response or tarpit mechanism.
+    /// - If the `self.tarpit` flag is `false`, the entire `data` slice is sent immediately without delay.
+    ///
+    /// # Returns
+    ///
+    /// This method returns a `Result` type:
+    /// - `Ok(())` if data is successfully sent.
+    /// - `Err(russh::Error)` if an error occurs during data transmission.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the random number generator (`rng()`) fails to initialize properly
+    /// or if an invalid range is provided.
+    ///
+    ///
+    /// # Notes
+    ///
+    /// - The tarpit mechanism is often used to slow down malicious clients or as a defensive mechanism.
+    /// - The randomness of the delay is determined by a helper function `rng().random_range(500..2000)`,
+    ///   which should be ensured to return consistent results within the given range.
+    async fn tarpit_data(&mut self, session: &mut Session, channel: ChannelId, data: &[u8]) -> Result<(), russh::Error> {
+        log::trace!("Tarpitting: {}, data len: {}", self.tarpit, data.len());
+        if self.tarpit {
+            for datum in data.iter() {
+                let wait_time = std::time::Duration::from_millis(rng().random_range(500..2000));
+                tokio::time::sleep(wait_time).await;
+                session.data(channel, CryptoVec::from(vec![*datum]))?;
+            }
+        } else {
+            session.data(channel, CryptoVec::from(data))?;
+        }
+        Ok(())
+    }
 }
 
 // Implementation of Server trait
@@ -394,6 +498,8 @@ pub struct SshServerHandler {
     db_tx: mpsc::Sender<DbMessage>,
     disable_cli_interface: bool,
     authentication_banner: Option<String>,
+    tarpit: bool,
+    fs2: Arc<RwLock<FileSystem>>,
 }
 
 impl server::Server for SshServerHandler {
@@ -413,7 +519,9 @@ impl server::Server for SshServerHandler {
             cwd: String::from("/home/user"),
             hostname: "server01".to_string(),
             disable_cli_interface: self.disable_cli_interface,
-            authentication_banner: self.authentication_banner.clone()
+            authentication_banner: self.authentication_banner.clone(),
+            tarpit: self.tarpit,
+            fs2: self.fs2.clone(),
         }
     }
 
@@ -428,11 +536,13 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>) -> SshServerHandler {
         Self {
             disable_cli_interface,
             db_tx,
-            authentication_banner
+            authentication_banner,
+            tarpit,
+            fs2,
         }
     }
 }

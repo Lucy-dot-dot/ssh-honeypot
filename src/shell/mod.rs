@@ -1,2 +1,2 @@
-pub mod cat;
 pub mod filesystem;
+pub mod commands;
