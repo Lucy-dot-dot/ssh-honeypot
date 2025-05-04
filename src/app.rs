@@ -1,5 +1,6 @@
 use std::net::{SocketAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
+use clap::ArgAction;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about = "A small ssh server that allows for advanced honeypot usage", long_about = "A small ssh server  that allows for advanced honeypot usage. It provides a fake command interface mimicking ubuntu without any fear of malicious code execution, since no commands are actually executed. It also records all commands in a central sqlite database")]
@@ -22,4 +23,8 @@ pub struct App {
     /// Makes the response veryyyyy slooooooooooowww in order to slow down attackers and "tarpit" them
     #[arg(short, long, env = "TARPIT", default_value_t = false)]
     pub tarpit: bool,
+    
+    /// Disables the base tar.gz loading, which is used to load the base system
+    #[arg(short = 'g', long, env = "DISABLE_BASE_TAR_GZ_LOADING", default_value_t = false, action = ArgAction::SetTrue)]
+    pub disable_base_tar_gz_loading: bool,
 }

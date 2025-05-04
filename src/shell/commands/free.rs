@@ -1,5 +1,4 @@
-use rand::{Rng, thread_rng};
-use std::fmt;
+use rand::{Rng, rng};
 
 /// Represents simulated system memory usage
 struct MemoryStats {
@@ -18,26 +17,26 @@ struct MemoryStats {
 impl MemoryStats {
     /// Generate realistic system memory stats
     fn generate() -> Self {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         // Generate values in a realistic and consistent way
         // Memory values in KB
-        let total_mem = rng.gen_range(2_000_000..16_000_000); // 2GB to 16GB
-        let buff_cache_mem = total_mem * rng.gen_range(5..25) / 100; // 5-25% for buffers/cache
-        let used_raw = total_mem * rng.gen_range(30..70) / 100; // 30-70% usage
+        let total_mem = rng.random_range(2_000_000..16_000_000); // 2GB to 16GB
+        let buff_cache_mem = total_mem * rng.random_range(5..25) / 100; // 5-25% for buffers/cache
+        let used_raw = total_mem * rng.random_range(30..70) / 100; // 30-70% usage
         let used_mem = used_raw - buff_cache_mem; // Used minus buffers/cache
         let free_mem = total_mem - used_raw;
-        let shared_mem = total_mem * rng.gen_range(1..10) / 100; // 1-10% shared
+        let shared_mem = total_mem * rng.random_range(1..10) / 100; // 1-10% shared
         let available_mem = free_mem + buff_cache_mem * 8 / 10; // Most of buff/cache is available
 
         // Swap values
         let total_swap = total_mem / 2; // Typical swap size
-        let used_swap = if rng.gen_bool(0.7) {
+        let used_swap = if rng.random_bool(0.7) {
             // 70% chance of minimal swap usage
-            rng.gen_range(0..total_swap / 20)
+            rng.random_range(0..total_swap / 20)
         } else {
             // 30% chance of significant swap usage
-            rng.gen_range(total_swap / 10..total_swap / 2)
+            rng.random_range(total_swap / 10..total_swap / 2)
         };
         let free_swap = total_swap - used_swap;
 
@@ -119,10 +118,10 @@ fn format_with_unit(stats: &MemoryStats, divisor: u64, unit_label: &str, show_to
 
     // Column headers based on wide flag
     if wide {
-        result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
+        result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
                                  "", "total", "used", "free", "shared", "buff/cache", "available"));
     } else {
-        result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
+        result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
                                  "", "total", "used", "free", "shared", "buff/cache", "available"));
     }
 
@@ -173,10 +172,10 @@ fn format_human_readable(stats: &MemoryStats, show_total: bool, wide: bool) -> S
 
     // Column headers based on wide flag
     if wide {
-        result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
+        result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
                                  "", "total", "used", "free", "shared", "buff/cache", "available"));
     } else {
-        result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
+        result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
                                  "", "total", "used", "free", "shared", "buff/cache", "available"));
     }
 

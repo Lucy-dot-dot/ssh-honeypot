@@ -12,12 +12,10 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 use rand::{rng, Rng};
 use crate::db::DbMessage;
-use crate::shell::commands::cat::get_fake_file_content;
-use crate::shell::commands::echo::handle_echo_command;
-use crate::shell::filesystem;
-use crate::shell::commands::free::handle_free_command;
+use crate::shell::commands::{handle_cat_command, handle_echo_command, handle_ls_command, handle_uname_command};
+use crate::shell::commands::handle_free_command;
 use crate::shell::filesystem::fs2::{FileContent, FileSystem};
-use crate::shell::commands::ps::handle_ps_command;
+use crate::shell::commands::handle_ps_command;
 
 #[derive(Clone, Default)]
 // Store session data
@@ -342,12 +340,12 @@ impl SshHandler {
         let primary_cmd = cmd_parts.next().unwrap_or("").trim();
         log::debug!("Identified primary cmd: {}", primary_cmd);
 
-
-
         // Process the primary command
         let mut output = match primary_cmd {
-            cmd if cmd.starts_with("ls") =>
-                filesystem::handle_ls_command(cmd, &*self.cwd),
+            cmd if cmd.starts_with("ls") => {
+                let fs = self.fs2.read().await;
+                handle_ls_command(cmd, &self.cwd, &fs)
+            },
 
             "pwd" => self.cwd.clone(),
 
@@ -355,16 +353,13 @@ impl SshHandler {
 
             "id" => "uid=1000(user) gid=1000(user) groups=1000(user),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),120(lpadmin),131(lxd),132(sambashare)".to_string(),
 
-            "uname" => "Linux server01 5.4.0-109-generic #123-Ubuntu SMP Fri Apr 8 09:10:54 UTC 2022 x86_64 x86_64 x86_64 GNU/Linux".to_string(),
+            cmd if cmd.starts_with("uname") => handle_uname_command(cmd, &*self.hostname),
 
             cmd if cmd.starts_with("ps") => handle_ps_command(cmd),
             
             cmd if cmd.starts_with("cat") => {
-                let file_path = cmd[4..].trim();
-                match get_fake_file_content(file_path) {
-                    Some(content) => content,
-                    None => format!("cat: {}: No such file or directory\n", file_path)
-                }
+                let fs = self.fs2.read().await;
+                handle_cat_command(cmd, &fs)
             },
 
             "wget" | "curl" => format!("{cmd}: missing URL\r\nUsage: {cmd} [OPTION]... [URL]...\r\n\r\nTry `{cmd}` --help' for more options.", cmd=cmd),
@@ -410,7 +405,6 @@ impl SshHandler {
                                 }
                             }
                         }
-                        "".to_string()
                     },
                     Err(err) => {
                         log::error!("Failed to resolve path: {}", err);

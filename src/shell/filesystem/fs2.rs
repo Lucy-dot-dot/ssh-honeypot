@@ -1,5 +1,5 @@
 /*!
-This module implements a simple, in-memory file system with `FileSystem`, `DirEntry`, and `Inode` structs to simulate hierarchical storage and operations critical to a file system. The code provides features like path resolution, creating files/directories, and retrieving directory or file entries using structured interfaces.
+This module (fs2) implements a simple, in-memory file system with `FileSystem`, `DirEntry`, and `Inode` structs to simulate hierarchical storage and operations critical to a file system. The code provides features like path resolution, creating files/directories, and retrieving directory or file entries using structured interfaces.
 
 # Structs:
 - `Inode`: Represents metadata for files or directories, containing attributes such as size, timestamps, permissions, and user/group ID information.
@@ -85,7 +85,7 @@ println!("Retrieved File: {:?}", file);
 
 This module creates a lightweight simulation of a file system, enabling basic operations such as navigation, file creation, and directory management.
 */
-use std::io::{Error, ErrorKind, Read};
+use std::io::{Error, ErrorKind, Read, Write};
 use flate2::read::GzDecoder;
 use tar::Archive;
 
@@ -93,29 +93,29 @@ use tar::Archive;
 #[allow(dead_code)]
 pub struct Inode {
     // File mode (type and permissions)
-    i_mode: u16,
+    pub(crate) i_mode: u16,
     // Lower 16 bits of user ID
-    i_uid: u16,
+    pub(crate) i_uid: u16,
     // Lower 32 bits of size in bytes
-    i_size_lo: u32,
+    pub(crate) i_size_lo: u32,
     // Last access time in seconds since epoch
     i_atime: u32,
     // Last inode change time
     i_ctime: u32,
     // Last data modification time
-    i_mtime: u32,
+    pub(crate) i_mtime: u32,
     // Deletion time
     i_dtime: u32,
     // Lower 16 bits of group ID
-    i_gid: u16,
+    pub(crate) i_gid: u16,
     // Hard link count
-    i_links_count: u16,
+    pub(crate) i_links_count: u16,
     // File flags
     i_flags: u32,
     // High 16 bits of user ID
-    i_uid_high: u16,
+    pub(crate) i_uid_high: u16,
     // High 16 bits of group ID
-    i_gid_high: u16,
+    pub(crate) i_gid_high: u16,
     // Extra modification time (nanoseconds)
     i_atime_extra: u32,
     // File creation time (seconds since epoch)
@@ -288,12 +288,12 @@ impl FileSystem {
         Ok(current)
     }
 
-    pub fn create_directory(&mut self, path: &str) -> std::io::Result<()> {
+    pub fn create_directory(&mut self, path: &str) -> std::io::Result<&mut DirEntry> {
         let sanitized_path = self.resolve_absolute_path(path);
 
         // Root directory always exists
         if sanitized_path == "/" {
-            return Ok(())
+            return Err(Error::new(ErrorKind::InvalidInput, "File exists"))
         }
 
         // Get the parent directory path and new directory name
@@ -307,7 +307,7 @@ impl FileSystem {
 
         // If dir_name is empty, this is the root directory
         if dir_name.is_empty() {
-            return Ok(());
+            return Err(Error::new(ErrorKind::InvalidInput, "File exists"))
         }
 
         // Find the parent directory
@@ -322,14 +322,15 @@ impl FileSystem {
                                           format!("Directory '{}' already exists", dir_name)));
                 }
 
-                // Create the new directory entry
-                entries.push(DirEntry {
+                let ent = DirEntry {
                     name: dir_name.to_string(),
                     file_content: Some(FileContent::Directory(Vec::new())),
                     ..Default::default()
-                });
+                };
+                // Create the new directory entry
+                entries.push(ent);
 
-                Ok(())
+                Ok(entries.last_mut().unwrap())
             },
             _ => Err(Error::new(ErrorKind::Other, "Parent is not a directory")),
         }
@@ -468,37 +469,109 @@ impl FileSystem {
 
         for entry in archive.entries()? {
             let mut entry = entry?;
-            log::trace!("Processing entry: {}", entry.path()?.display());
+            log::trace!("Processing entry: {} Type: {:?} Size: {}", entry.path()?.display(), entry.header().entry_type(), entry.header().size().unwrap_or(0));
+            std::io::stdout().flush()?;
+            std::io::stderr().flush()?;
             let path = entry.path()?;
             let path_str = path.to_string_lossy().to_string();
 
-            if entry.header().entry_type().is_dir() {
-                self.create_directory(&path_str)?;
-            } else if entry.header().entry_type().is_file() {
+            let header = entry.header();
+
+            // Prepare common inode metadata from tar header
+            let mut inode = Inode::default();
+
+            // Set file mode (permissions)
+            inode.i_mode = header.mode()? as u16;
+
+            // Set user/group IDs
+            let uid = header.uid()? as u32;
+            inode.i_uid = (uid & 0xFFFF) as u16;
+            inode.i_uid_high = ((uid >> 16) & 0xFFFF) as u16;
+
+            let gid = header.gid()? as u32;
+            inode.i_gid = (gid & 0xFFFF) as u16;
+            inode.i_gid_high = ((gid >> 16) & 0xFFFF) as u16;
+
+            // Set timestamps
+            if let Ok(mtime) = header.mtime() {
+                inode.i_mtime = mtime as u32;
+            }
+
+            // FIXME: Maybe check if it's gnu and not assume?
+            if let Ok(atime) = header.as_gnu().unwrap().atime() {
+                inode.i_atime = atime as u32;
+            }
+
+            if let Ok(ctime) = header.as_gnu().unwrap().ctime() {
+                inode.i_ctime = ctime as u32;
+            }
+
+            // Set file size
+            inode.i_size_lo = header.size()? as u32;
+
+            // Set link count
+            inode.i_links_count = 1;
+
+            if header.entry_type().is_dir() {
+                // Create directory
+                match self.create_directory(&path_str) {
+                    Ok(value) => {
+                        value.inode = inode;
+                    }
+                    Err(err) => {
+                        match err.kind() {
+                            ErrorKind::InvalidInput => {
+                                log::trace!("Directory already exists: {}", path_str);
+                            },
+                            _ => {
+                                log::warn!("Failed to create directory: {}", path_str);
+                            }
+                        }
+                    }
+                }
+            } else if header.entry_type().is_file() {
+                // Create file
                 let file_entry = self.create_file(&path_str)?;
 
+                // Update file metadata
+                file_entry.inode = inode;
+
+                // Read and set file content
                 let mut content = Vec::new();
                 entry.read_to_end(&mut content)?;
 
                 if let Some(FileContent::RegularFile(ref mut data)) = file_entry.file_content {
                     *data = content;
+
+                    // Update file size to match actual content size
+                    file_entry.inode.i_size_lo = data.len() as u32;
                 }
-            } else if entry.header().entry_type().is_symlink() {
+            } else if header.entry_type().is_symlink() {
                 // Handle symbolic links
                 let link_name = path_str;
                 let target = entry.link_name()?.ok_or_else(|| {
                     Error::new(ErrorKind::Other, "Symbolic link target is missing")
                 })?.to_string_lossy().to_string();
 
-                self.create_symlink(&link_name, &target)?;
+                let symlink_entry = self.create_symlink(&link_name, &target)?;
+
+                // Update symlink metadata
+                symlink_entry.inode = inode;
+
+                // Update symlink size to match target length
+                symlink_entry.inode.i_size_lo = target.len() as u32;
+            } else if header.entry_type().is_hard_link() {
+                // For hard links, we could create a new entry pointing to the same inode
+                // This would require more extensive changes to the file system implementation
+                log::warn!("Hard links are not fully supported: {}", path_str);
+            } else {
+                // Log but skip other entry types
+                log::warn!("Skipping unsupported entry type: {}", path_str);
             }
-            // Handle other types as needed
         }
 
         Ok(())
     }
-    
-    
 }
 
 #[cfg(test)]
