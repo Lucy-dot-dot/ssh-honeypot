@@ -152,19 +152,16 @@ pub fn handle_ps_command(cmd: &str) -> String {
     let mut long_format = false;
     let mut show_forest = false;
     let mut show_header = true;
-    let mut wide_output = false;
 
     for part in &parts[1..] {
         match *part {
             "a" | "-a" => show_all = true,
             "u" | "-u" => long_format = true,
-            "x" | "-x" => wide_output = true,
             "f" | "-f" => show_forest = true,
             "-e" | "-A" => show_all = true,
             "aux" | "-aux" => {
                 show_all = true;
                 long_format = true;
-                wide_output = true;
             },
             "--no-headers" => show_header = false,
             _ => {}
