@@ -479,7 +479,8 @@ impl SshHandler {
         log::trace!("Tarpitting: {}, data len: {}", self.tarpit, data.len());
         if self.tarpit {
             for datum in data.iter() {
-                let wait_time = std::time::Duration::from_millis(rng().random_range(500..2000));
+                let wait_time = std::time::Duration::from_millis(rng().random_range(10..700));
+                log::trace!("Tarpit delay: {}", wait_time.as_millis());
                 tokio::time::sleep(wait_time).await;
                 session.data(channel, CryptoVec::from(vec![*datum]))?;
             }
