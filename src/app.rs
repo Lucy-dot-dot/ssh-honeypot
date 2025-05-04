@@ -21,7 +21,7 @@ pub struct App {
     pub authentication_banner: Option<String>,
 
     /// Makes the response veryyyyy slooooooooooowww in order to slow down attackers and "tarpit" them
-    #[arg(short, long, env = "TARPIT", default_value_t = false)]
+    #[arg(short, long, env = "TARPIT", default_value_t = false, action = ArgAction::SetTrue)]
     pub tarpit: bool,
 
     /// Disables the base tar.gz loading, which is used to load the base system
