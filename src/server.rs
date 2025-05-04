@@ -54,6 +54,8 @@ impl Handler for SshHandler {
     ) -> impl Future<Output = Result<Auth, Self::Error>> + Send {
         async move {
             self.user = Some(user.to_string());
+            self.cwd = format!("/home/{}", user);
+            self.ensure_user_home_exists().await;
             let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
 
             // Generate a UUID for this auth attempt
@@ -100,7 +102,8 @@ impl Handler for SshHandler {
     ) -> impl Future<Output = Result<Auth, Self::Error>> + Send {
         async move {
             self.user = Some(user.to_string());
-            let user_str = user.to_string();
+            self.cwd = format!("/home/{}", user);
+            self.ensure_user_home_exists().await;
             let key_str = format!("{}", public_key.key_data().fingerprint(HashAlg::Sha512));
             let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
 
@@ -108,14 +111,14 @@ impl Handler for SshHandler {
             let auth_id = Uuid::new_v4().to_string();
             self.auth_id = Some(auth_id.clone());
 
-            log::info!("Public key auth attempt - Username: {}, Key: {}, IP: {}", user_str, key_str, peer_str);
+            log::info!("Public key auth attempt - Username: {}, Key: {}, IP: {}", user, key_str, peer_str);
 
             // Record authentication attempt in database
             match self.db_tx.send(DbMessage::RecordAuth {
                 id: auth_id,
                 timestamp: Utc::now(),
                 ip: peer_str,
-                username: user_str,
+                username: user.to_string(),
                 auth_type: "publickey".to_string(),
                 password: None,
                 public_key: Some(key_str),
@@ -484,6 +487,19 @@ impl SshHandler {
             session.data(channel, CryptoVec::from(data))?;
         }
         Ok(())
+    }
+
+    async fn ensure_user_home_exists(&mut self) {
+        let mut fs2 = self.fs2.write().await;
+        // We don't care if the directory already exists or if it can't be created. This is a honeypot not linux
+        match fs2.create_directory(&self.cwd) {
+            Ok(_) => {
+                log::debug!("Created user home directory: {}", self.cwd);
+            },
+            Err(err) => {
+                log::warn!("Failed to create user home directory: {}", err);
+            }
+        }
     }
 }
 
