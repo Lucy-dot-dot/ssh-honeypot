@@ -78,15 +78,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         log::trace!("Reading base.tar.gz and processing it");
 
-        match OpenOptions::new().create(false).write(false).read(true).open("base.tar.gz") {
+        match OpenOptions::new().create(false).write(false).read(true).open(app.base_tar_gz_path.clone()) {
             Ok(file) => {
-                log::trace!("Opened base.tar.gz");
-                match fs2.write().await.process_targz(file) {
-                    Ok(_) => {
-                        log::debug!("Processed base.tar.gz successfully");
+                match file.metadata() {
+                    Ok(meta) => {
+                        log::debug!("File size: {}", meta.len());
                     },
                     Err(err) => {
-                        log::error!("Failed to process base.tar.gz: {:?}. Continuing anyway", err);
+                        log::error!("Failed to get metadata for {}: {:?}", app.base_tar_gz_path.display(), err);
+                    }
+                }
+                log::trace!("Opened {}", app.base_tar_gz_path.display());
+                match fs2.write().await.process_targz(file) {
+                    Ok(_) => {
+                        log::debug!("Processed {} successfully", app.base_tar_gz_path.display());
+                    },
+                    Err(err) => {
+                        log::error!("Failed to process {}: {:?}. Continuing anyway", app.base_tar_gz_path.display(), err);
                     }
                 }
             },

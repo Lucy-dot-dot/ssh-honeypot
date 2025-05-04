@@ -23,8 +23,12 @@ pub struct App {
     /// Makes the response veryyyyy slooooooooooowww in order to slow down attackers and "tarpit" them
     #[arg(short, long, env = "TARPIT", default_value_t = false)]
     pub tarpit: bool,
-    
+
     /// Disables the base tar.gz loading, which is used to load the base system
     #[arg(short = 'g', long, env = "DISABLE_BASE_TAR_GZ_LOADING", default_value_t = false, action = ArgAction::SetTrue)]
     pub disable_base_tar_gz_loading: bool,
+
+    /// The path to the base tar.gz file to load. Default is a debian 12 deboostrap'ed base system
+    #[arg(short = 'b', long, env = "BASE_TAR_GZ_PATH", default_value = "base.tar.gz")]
+    pub base_tar_gz_path: PathBuf,
 }
