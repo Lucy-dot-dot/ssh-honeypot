@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use chrono::{Local, TimeZone};
 use crate::shell::filesystem::fs2::*;
 
@@ -205,7 +206,17 @@ pub fn handle_ls_command(cmd: &str, cwd: &str, fs: &FileSystem) -> String {
     // Try to get the file/directory
     let entry = match fs.get_file(&resolved_path) {
         Ok(entry) => entry,
-        Err(e) => return format!("ls: cannot access '{}': {}", target_path, e),
+        Err(e) => return match e.kind() {
+            ErrorKind::NotFound => {
+                format!("ls: cannot access '{}': No such file or directory", target_path)
+            }
+            ErrorKind::PermissionDenied => {
+                format!("ls: cannot access '{}': Permission denied", target_path)
+            }
+            _ => {
+                format!("ls: cannot access '{}': {}", target_path, e)
+            }
+        },
     };
 
     let mut result = String::new();
