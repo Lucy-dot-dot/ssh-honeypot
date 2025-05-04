@@ -47,6 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::trace!("Creating server config and generating keys");
     // Set up the SSH server configuration
     let config = russh::server::Config {
+        keepalive_max: 5,
+        keepalive_interval: Some(std::time::Duration::from_secs(20)),
         inactivity_timeout: Some(std::time::Duration::from_secs(30)),
         auth_rejection_time: std::time::Duration::from_secs(3),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
