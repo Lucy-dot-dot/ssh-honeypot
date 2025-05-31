@@ -2,15 +2,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
-use russh::{server, Channel, ChannelId, ChannelMsg, CryptoVec, Error};
+use russh::{server, Channel, ChannelId, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, CryptoVec, Error};
 use russh::keys::{HashAlg, PublicKey};
-use russh::keys::signature::rand_core::OsRng;
-use russh::keys::ssh_key::rand_core::RngCore;
 use russh::server::{Auth, Handler, Msg, Session};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 use rand::{rng, Rng};
+use rand_core::RngCore;
 use crate::db::DbMessage;
 use crate::shell::commands::{handle_cat_command, handle_echo_command, handle_ls_command, handle_uname_command};
 use crate::shell::commands::handle_free_command;
@@ -21,9 +20,9 @@ use crate::shell::commands::handle_ps_command;
 // Store session data
 struct SessionData {
     auth_id: String,
-    user: String,
     commands: Vec<String>,
     start_time: DateTime<Utc>,
+    prompt: String,
 }
 
 // Define our SSH server handler
@@ -40,6 +39,8 @@ pub struct SshHandler {
     authentication_banner: Option<String>,
     tarpit: bool,
     fs2: Arc<RwLock<FileSystem>>,
+    send_task: Option<tokio::task::JoinHandle<()>>,
+    send_task_tx: Option<mpsc::Sender<String>>,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -80,7 +81,7 @@ impl Handler for SshHandler {
             };
 
             // Simulate a small delay like a real SSH server
-            let delay = OsRng::default().next_u64() % 501;
+            let delay = rng().next_u64() % 501;
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
@@ -129,7 +130,7 @@ impl Handler for SshHandler {
             };
 
             // Simulate a small delay like a real SSH server
-            let delay = OsRng::default().next_u64() % 501;
+            let delay = rng().next_u64() % 501;
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
@@ -163,19 +164,30 @@ impl Handler for SshHandler {
                 // Initialize session data once we have a channel session
                 let data = SessionData {
                     auth_id: auth_id.clone(),
-                    user: user.clone(),
                     commands: Vec::new(),
                     start_time: Utc::now(),
+                    prompt: format!("{}@{}:~$ ", user, self.hostname)
                 };
                 self.session_data = data.clone();
 
                 // Start the fake shell for the attacker
                 let db_tx = self.db_tx.clone();
+                let (channel_reader, channel_writer) = channel.split();
+
                 // Handle the shell session within this future
                 log::trace!("Starting tokio task for shell session saving");
                 tokio::spawn(async move {
-                    handle_shell_session(channel, data, db_tx).await;
+                    handle_shell_session(channel_reader, data, db_tx).await;
                 });
+
+                let (sender_task, recv_task) = mpsc::channel::<String>(1000);
+                let tarpit = self.tarpit;
+                self.send_task = Some(tokio::spawn(async move {
+                    // TODO: Implement sending data to client from other thread
+                    Self::async_data_writer(channel_writer, recv_task, tarpit).await;
+                }));
+                self.send_task_tx = Some(sender_task);
+
             }
 
             Ok(true)
@@ -218,7 +230,7 @@ impl Handler for SshHandler {
             if data == [3] {
                 log::trace!("Received ctrl+c, clearing current command");
                 self.current_cmd = String::new();
-                let prompt = format!("\r\n{}@{}:~$ ", self.session_data.user, self.hostname);
+                let prompt = format!("\r\n{}", self.session_data.prompt);
                 match self.tarpit_data(session, channel, prompt.as_bytes()).await {
                     Ok(_) => { log::trace!("Send prompt to client") },
                     Err(err) => { log::error!("Failed to send prompt to client: {}", err) },
@@ -268,7 +280,7 @@ impl Handler for SshHandler {
                         Ok(_) => { log::trace!("Sent command result data to client") },
                         Err(err) => { log::error!("Failed to send command result data to client: {}", err) },
                     };
-                    let prompt = format!("\r\n{}@{}:~$ ", self.session_data.user, self.hostname);
+                    let prompt = format!("\r\n{} ", self.session_data.prompt);
                     match self.tarpit_data(session, channel, prompt.as_bytes()).await {
                         Ok(_) => { log::trace!("Sent prompt to client") },
                         Err(err) => { log::error!("Failed to send prompt to client after command execution: {}", err) },
@@ -321,13 +333,22 @@ impl Handler for SshHandler {
             };
 
             // Send prompt
-            let prompt = format!("{}@{}:~$ ", self.session_data.user, self.hostname);
+            let prompt = self.session_data.prompt.clone();
             match self.tarpit_data(session, channel, prompt.as_bytes()).await {
                 Ok(_) => { log::trace!("Sent prompt to client") },
                 Err(err) => { log::error!("Failed to send prompt to client: {}", err) },
             };
 
             Ok(())
+        }
+    }
+    
+}
+
+impl Drop for SshHandler {
+    fn drop(&mut self) {
+        if let Some(send_task) = self.send_task.take() {
+            send_task.abort();
         }
     }
 }
@@ -482,10 +503,10 @@ impl SshHandler {
                 let wait_time = std::time::Duration::from_millis(rng().random_range(10..700));
                 log::trace!("Tarpit delay: {}", wait_time.as_millis());
                 tokio::time::sleep(wait_time).await;
-                session.data(channel, CryptoVec::from(vec![*datum]))?;
+                session.data(channel, CryptoVec::from_slice(&[*datum]))?;
             }
         } else {
-            session.data(channel, CryptoVec::from(data))?;
+            session.data(channel, CryptoVec::from_slice(data))?;
         }
         Ok(())
     }
@@ -499,6 +520,91 @@ impl SshHandler {
             },
             Err(err) => {
                 log::warn!("Failed to create user home directory: {}", err);
+            }
+        }
+    }
+
+    /// Asynchronously writes data from a receiver to a channel writer, with optional tarpit-induced delay.
+    ///
+    /// # Parameters
+    ///
+    /// - `channel_writer`: A [`ChannelWriteHalf<Msg>`] instance used to send data to a client over a channel.
+    /// - `recv_task`: An [`Receiver<String>`] that supplies messages (in string format) to be sent asynchronously.
+    /// - `tarpit`: A boolean indicating whether to introduce a "tarpit" behavior, which adds random delays between sending each byte of the data.
+    ///
+    /// # Behavior
+    ///
+    /// This function runs an infinite loop that waits for incoming data from the `recv_task` receiver. When data is available:
+    ///
+    /// - If `tarpit` is `true`, the function introduces random delays (between 10 milliseconds and 700 milliseconds) before sending each byte of the data individually to the client.
+    /// - If `tarpit` is `false`, the full data buffer is sent to the client in one go.
+    ///
+    /// The function uses the `channel_writer` to send data to the client and logs the progress:
+    ///
+    /// - If the data is successfully sent, a debug-level log is recorded.
+    /// - If there is an error while sending data, it logs an error and exits the loop.
+    ///
+    /// If `recv_task.recv()` returns `None`, an error is logged (indicating that the task has been closed) and the loop breaks.
+    ///
+    /// The `tarpit` behavior is particularly useful for simulating delayed or throttled transmission of data.
+    ///
+    /// # Logging
+    ///
+    /// - Uses `log::trace!` to provide detailed trace-level logs for debugging purposes.
+    /// - Uses `log::error!` to record and highlight errors during the execution.
+    ///
+    /// # Errors
+    ///
+    /// - Logs an error if sending data to the client fails.
+    /// - Logs an error if the `recv_task` channel unexpectedly closes.
+    ///
+    /// # Dependencies
+    ///
+    /// - [`tokio`] for asynchronous execution and `sleep` functionality.
+    /// - [`log`] for structured application logging.
+    /// - [`rng()`] to generate random delay durations when `tarpit` is enabled.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let (writer, receiver) = create_channel(); // Hypothetical channel creation
+    /// let recv_task: Receiver<String> = create_recv_task();
+    /// async_data_writer(writer, recv_task, true).await;
+    /// ```
+    async fn async_data_writer(channel_writer: ChannelWriteHalf<Msg>, mut recv_task: mpsc::Receiver<String>, tarpit: bool) {
+        loop {
+            match recv_task.recv().await {
+                Some(data) => {
+                    log::trace!("Sending data to client: {}", data);
+                    let data = data.as_bytes();
+                    if tarpit {
+                        for datum in data.iter() {
+                            let wait_time = std::time::Duration::from_millis(rng().random_range(10..700));
+                            log::trace!("Tarpit delay: {}", wait_time.as_millis());
+                            tokio::time::sleep(wait_time).await;
+                            let data: &[u8] = &[*datum];
+                            match channel_writer.data(data).await {
+                                Ok(_) => { log::trace!("Sent data to client") },
+                                Err(err) => {
+                                    log::error!("Failed to send data to client: {}", err);
+                                    break;
+                                },
+                            };
+                        }
+                    } else {
+                        match channel_writer.data(data).await {
+                            Ok(_) => { log::trace!("Sent data in full to client") },
+                            Err(err) => {
+                                log::error!("Failed to send data to client: {}", err);
+                                break;
+                            },
+                        }
+                    }
+                },
+                None => {
+                    log::error!("Send task received None from channel");
+                    break;
+                },
             }
         }
     }
@@ -533,6 +639,8 @@ impl server::Server for SshServerHandler {
             authentication_banner: self.authentication_banner.clone(),
             tarpit: self.tarpit,
             fs2: self.fs2.clone(),
+            send_task: None,
+            send_task_tx: None
         }
     }
 
@@ -560,7 +668,7 @@ impl SshServerHandler {
 
 // Function to handle the fake shell session
 async fn handle_shell_session(
-    mut channel: Channel<Msg>,
+    mut channel: ChannelReadHalf,
     session_data: SessionData,
     db_tx: mpsc::Sender<DbMessage>,
 ) {

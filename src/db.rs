@@ -56,17 +56,17 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf)
                     &conn, id, timestamp, ip, username, auth_type,
                     password, public_key, successful
                 ) {
-                    eprintln!("Database error recording auth: {}", e);
+                    log::error!("Database error recording auth: {}", e);
                 }
             },
             DbMessage::RecordCommand { id, auth_id, timestamp, command } => {
                 if let Err(e) = record_command(&conn, id, auth_id, timestamp, command) {
-                    eprintln!("Database error recording command: {}", e);
+                    log::error!("Database error recording command: {}", e);
                 }
             },
             DbMessage::RecordSession { auth_id, start_time, end_time, duration_seconds } => {
                 if let Err(e) = record_session(&conn, auth_id, start_time, end_time, duration_seconds) {
-                    eprintln!("Database error recording session: {}", e);
+                    log::error!("Database error recording session: {}", e);
                 }
             },
             DbMessage::Shutdown => {
