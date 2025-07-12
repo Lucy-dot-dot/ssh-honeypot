@@ -151,6 +151,7 @@ pub struct FileSystem {
     root: DirEntry,
 
     // Device info
+    #[allow(dead_code)]
     device: String,
 }
 

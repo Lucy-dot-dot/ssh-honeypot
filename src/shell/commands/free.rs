@@ -128,9 +128,9 @@ fn format_with_unit(stats: &MemoryStats, divisor: u64, unit_label: &str, show_to
     // Format values with the given unit
     let format_value = |value: u64| -> String {
         if divisor == 1 {
-            format!("{}", value)
+            format!("{} {}", value, unit_label)
         } else {
-            format!("{}", value / divisor)
+            format!("{} {}", value / divisor, unit_label)
         }
     };
 
@@ -220,4 +220,67 @@ fn format_human_readable(stats: &MemoryStats, show_total: bool, wide: bool) -> S
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_memory_stats_generation() {
+        let stats = MemoryStats::generate();
+
+        // Basic sanity checks
+        assert!(stats.total_mem >= 2_000_000 && stats.total_mem <= 16_000_000);
+        assert!(stats.used_mem + stats.free_mem <= stats.total_mem);
+        assert_eq!(stats.total_swap, stats.used_swap + stats.free_swap);
+        assert!(stats.available_mem <= stats.total_mem);
+    }
+
+    #[test]
+    fn test_basic_free_command() {
+        let output = handle_free_command("free");
+        assert!(output.contains("Mem:"));
+        assert!(output.contains("Swap:"));
+        assert!(output.contains("kB"));
+    }
+
+    #[test]
+    fn test_human_readable_flag() {
+        let output = handle_free_command("free -h");
+        assert!(output.contains("G") || output.contains("M") || output.contains("K"));
+    }
+
+    #[test]
+    fn test_unit_flags() {
+        let bytes = handle_free_command("free -b");
+        assert!(bytes.contains("B"));
+
+        let mega = handle_free_command("free -m");
+        assert!(mega.contains("MB"));
+
+        let giga = handle_free_command("free -g");
+        assert!(giga.contains("GB"));
+    }
+
+    #[test]
+    fn test_total_flag() {
+        let output = handle_free_command("free -t");
+        assert!(output.contains("Total:"));
+    }
+
+    #[test]
+    fn test_wide_flag() {
+        let output = handle_free_command("free -w");
+        assert!(output.contains("buff/cache"));
+        assert!(output.contains("available"));
+    }
+
+    #[test]
+    fn test_combined_flags() {
+        let output = handle_free_command("free -h -t -w");
+        assert!(output.contains("Total:"));
+        assert!(output.contains("buff/cache"));
+        assert!(output.contains("G") || output.contains("M") || output.contains("K"));
+    }
 }

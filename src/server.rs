@@ -212,9 +212,13 @@ impl Handler for SshHandler {
             if data[0] == 127 || data[0] == 8 {
                 log::trace!("Received backspace, backspacing...");
                 // Well we don't want to delete prompt do we? Maybe I could send the bell code?
-                // TODO: Send bell ascii code
+                // Send bell ascii code (ASCII 7) when trying to backspace on an empty command
                 if self.current_cmd.is_empty() {
                     log::trace!("current cmd is empty, so why are you still backspacing?");
+                    match self.tarpit_data(session, channel, &[7u8]).await {
+                        Ok(_) => { log::trace!("Sent bell code to client") },
+                        Err(err) => { log::error!("Failed to send bell code to client: {}", err) },
+                    };
                     return Ok(());
                 }
 
@@ -342,7 +346,7 @@ impl Handler for SshHandler {
             Ok(())
         }
     }
-    
+
 }
 
 impl Drop for SshHandler {
@@ -380,7 +384,7 @@ impl SshHandler {
             cmd if cmd.starts_with("uname") => handle_uname_command(cmd, &*self.hostname),
 
             cmd if cmd.starts_with("ps") => handle_ps_command(cmd),
-            
+
             cmd if cmd.starts_with("cat") => {
                 let fs = self.fs2.read().await;
                 handle_cat_command(cmd, &fs)

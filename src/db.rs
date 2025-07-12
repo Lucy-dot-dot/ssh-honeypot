@@ -38,7 +38,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf)
     // Create database connection
     let conn = match initialize_database(&db_path) {
         Ok(conn) => {
-            log::trace!("db connection successfully and initialized");
+            log::trace!("db connection successful and initialized");
             conn
         },
         Err(e) => {

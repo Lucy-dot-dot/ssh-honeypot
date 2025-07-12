@@ -31,4 +31,8 @@ pub struct App {
     /// The path to the base tar.gz file to load. Default is a debian 12 deboostrap'ed base system
     #[arg(short = 'b', long, env = "BASE_TAR_GZ_PATH", default_value = "base.tar.gz")]
     pub base_tar_gz_path: PathBuf,
+
+    /// Key folder
+    #[arg(short = 'k', long, env = "KEY_FOLDER", default_value = "/tmp")]
+    pub key_folder: PathBuf,
 }
