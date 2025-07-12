@@ -35,4 +35,14 @@ pub struct App {
     /// Key folder
     #[arg(short = 'k', long, env = "KEY_FOLDER", default_value = "/tmp")]
     pub key_folder: PathBuf,
+
+    /// Disable SO_REUSEPORT for ssh tcp socket
+    /// Disabling this may result in issues with IPv6 Ports. Can be disabled safely if net.ipv6.bindv6only = 1 is set
+    #[arg(short = 'r', long, env = "DISABLE_SO_REUSEPORT", default_value_t = false, action = ArgAction::SetTrue)]
+    pub disable_so_reuseport: bool,
+
+    /// Disable SO_REUSEADDR for ssh tcp socket
+    /// Disabling this may result in issues with IPv6 Ports. Can be disabled safely if net.ipv6.bindv6only = 1 is set
+    #[arg(short = 's', long, env = "DISABLE_SO_REUSEADDR", default_value_t = false, action = ArgAction::SetTrue)]
+    pub disable_so_reuseaddr: bool,
 }

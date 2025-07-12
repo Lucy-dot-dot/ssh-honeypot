@@ -139,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tasks.push(tokio::spawn(async move {
             // Start the SSH server
             log::info!("Starting SSH honeypot on {}", interface);
-            let socket = match create_socket_with_reuse(interface) {
+            let socket = match create_socket_with_reuse(interface, app.disable_so_reuseaddr, app.disable_so_reuseport) {
                 Ok(socket) => socket,
                 Err(err) => {
                     log::error!(
@@ -214,17 +214,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Where if you already listen on a port on IPv4 and then bind to the same port using IPv6,
 /// binding will fail due to conflicting ports.
 /// Linux wants to be helpful and allow IPv4 clients to connect to an IPv6 socket. But if something already listens...
-fn create_socket_with_reuse(addr: SocketAddr) -> io::Result<TcpListener> {
+fn create_socket_with_reuse(addr: SocketAddr, disable_reuse_addr: bool, disable_reuse_port: bool) -> io::Result<TcpListener> {
     let socket = if addr.is_ipv4() {
         TcpSocket::new_v4()?
     } else {
         TcpSocket::new_v6()?
     };
-
-    socket.set_reuseaddr(true)?;
+    socket.set_reuseaddr(!disable_reuse_addr)?;
 
     #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
-    socket.set_reuseport(true)?;
+    socket.set_reuseport(!disable_reuse_port)?;
 
     socket.bind(addr)?;
     socket.listen(1024)
