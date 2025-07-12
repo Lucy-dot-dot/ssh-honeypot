@@ -384,7 +384,7 @@ impl SshHandler {
             cmd if cmd.starts_with("uname") => handle_uname_command(cmd, &*self.hostname),
 
             cmd if cmd.starts_with("ps") => handle_ps_command(cmd),
-
+            
             cmd if cmd.starts_with("cat") => {
                 let fs = self.fs2.read().await;
                 handle_cat_command(cmd, &fs)
