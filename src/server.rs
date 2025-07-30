@@ -11,10 +11,12 @@ use uuid::Uuid;
 use rand::{rng, Rng};
 use rand_core::RngCore;
 use crate::db::DbMessage;
-use crate::shell::commands::{handle_cat_command, handle_echo_command, handle_ls_command, handle_uname_command};
-use crate::shell::commands::handle_free_command;
-use crate::shell::filesystem::fs2::{FileContent, FileSystem};
-use crate::shell::commands::handle_ps_command;
+use crate::shell::commands::{
+    CommandDispatcher, CommandContext,
+    EchoCommand, CatCommand, DateCommand, FreeCommand, PsCommand, UnameCommand, LsCommand,
+    PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand
+};
+use crate::shell::filesystem::fs2::FileSystem;
 
 #[derive(Clone, Default)]
 // Store session data
@@ -41,6 +43,7 @@ pub struct SshHandler {
     fs2: Arc<RwLock<FileSystem>>,
     send_task: Option<tokio::task::JoinHandle<()>>,
     send_task_tx: Option<mpsc::Sender<String>>,
+    command_dispatcher: CommandDispatcher,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -368,90 +371,25 @@ impl SshHandler {
         let primary_cmd = cmd_parts.next().unwrap_or("").trim();
         log::debug!("Identified primary cmd: {}", primary_cmd);
 
-        // Process the primary command
-        let mut output = match primary_cmd {
-            cmd if cmd.starts_with("ls") => {
-                let fs = self.fs2.read().await;
-                handle_ls_command(cmd, &self.cwd, &fs)
-            },
-
-            "pwd" => self.cwd.clone(),
-
-            "whoami" => "user".to_string(),
-
-            "id" => "uid=1000(user) gid=1000(user) groups=1000(user),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),120(lpadmin),131(lxd),132(sambashare)".to_string(),
-
-            cmd if cmd.starts_with("uname") => handle_uname_command(cmd, &*self.hostname),
-
-            cmd if cmd.starts_with("ps") => handle_ps_command(cmd),
-            
-            cmd if cmd.starts_with("cat") => {
-                let fs = self.fs2.read().await;
-                handle_cat_command(cmd, &fs)
-            },
-
-            "wget" | "curl" => format!("{cmd}: missing URL\r\nUsage: {cmd} [OPTION]... [URL]...\r\n\r\nTry `{cmd}` --help' for more options.", cmd=cmd),
-
-            cmd if cmd.contains("sudo") => { "Sorry, user may not run sudo on server01.".to_string() },
-
-            cmd if cmd.starts_with("cd") => {
-                let mut path = cmd.replace("cd ", "");
-                if path.starts_with(".") || path.starts_with("..") {
-                    let cwd = self.cwd.clone();
-                    path = if cwd.ends_with("/") {
-                        cwd + &path
-                    } else {
-                        cwd + "/" + &path
-                    }
-                }
-
-                let fs = self.fs2.read().await;
-
-                let resolved = fs.resolve_absolute_path(&path);
-
-                match fs.follow_symlink(&resolved) {
-                    Ok(entry) => {
-                        match entry.file_content {
-                            None => {
-                                log::error!("Failed to get file content for path: {}", resolved);
-                                format!("bash: cd: {}: No such file or directory", resolved)
-                            }
-                            Some(ref content) => {
-                                match content {
-                                    FileContent::Directory(_) => {
-                                        self.cwd = resolved.clone();
-                                        "".to_string()
-                                    }
-                                    FileContent::RegularFile(_) => {
-                                        log::error!("Failed to cd into a regular file: {}", resolved);
-                                        format!("bash: cd: {}: Not a directory", resolved)
-                                    }
-                                    FileContent::SymbolicLink(_) => {
-                                        log::error!("Failed to resolve symbolic link to a non symbolic link. Should never happen!");
-                                        format!("bash: cd: {}: Not a directory", resolved)
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    Err(err) => {
-                        log::error!("Failed to resolve path: {}", err);
-                        format!("bash: cd: {}: No such file or directory", resolved)
-                    }
-                }
-
-            },
-
-            "exit" | "logout" => "".to_string(),
-
-            "date" => Local::now().format("%a %b %e %H:%M:%S %Z %Y").to_string(),
-
-            cmd if cmd.starts_with("free") => handle_free_command(cmd),
-
-            cmd if cmd.starts_with("echo") => handle_echo_command(cmd),
-
-            _ => format!("bash: {}: command not found\r\n", primary_cmd),
-        };
+        // Create command context
+        let mut context = CommandContext::new(
+            self.cwd.clone(),
+            self.user.clone().unwrap_or_else(|| "user".to_string()),
+            self.hostname.clone(),
+            self.fs2.clone(),
+            self.session_data.auth_id.clone(),
+        );
+        
+        // Use the new dispatcher for all commands
+        let mut output = self.command_dispatcher.execute(primary_cmd, &mut context).await;
+        
+        // Update cwd from context in case it changed (e.g., from cd command)
+        self.cwd = context.cwd.clone();
+        
+        // Handle special exit commands
+        if primary_cmd == "exit" || primary_cmd == "logout" {
+            return "".to_string();
+        }
 
         for piped_cmd in cmd_parts {
             if piped_cmd.trim().starts_with("grep ") {
@@ -644,7 +582,8 @@ impl server::Server for SshServerHandler {
             tarpit: self.tarpit,
             fs2: self.fs2.clone(),
             send_task: None,
-            send_task_tx: None
+            send_task_tx: None,
+            command_dispatcher: Self::create_command_dispatcher(),
         }
     }
 
@@ -667,6 +606,32 @@ impl SshServerHandler {
             tarpit,
             fs2,
         }
+    }
+    
+    /// Create and initialize the command dispatcher with available commands
+    fn create_command_dispatcher() -> CommandDispatcher {
+        let mut dispatcher = CommandDispatcher::new();
+        
+        // Register regular commands
+        dispatcher.registry_mut().register_command(Arc::new(EchoCommand));
+        dispatcher.registry_mut().register_command(Arc::new(CatCommand));
+        dispatcher.registry_mut().register_command(Arc::new(DateCommand));
+        dispatcher.registry_mut().register_command(Arc::new(FreeCommand));
+        dispatcher.registry_mut().register_command(Arc::new(PsCommand));
+        dispatcher.registry_mut().register_command(Arc::new(UnameCommand));
+        dispatcher.registry_mut().register_command(Arc::new(LsCommand));
+        dispatcher.registry_mut().register_command(Arc::new(PwdCommand));
+        dispatcher.registry_mut().register_command(Arc::new(WhoamiCommand));
+        dispatcher.registry_mut().register_command(Arc::new(IdCommand));
+        dispatcher.registry_mut().register_command(Arc::new(WgetCommand));
+        dispatcher.registry_mut().register_command(Arc::new(CurlCommand));
+        dispatcher.registry_mut().register_command(Arc::new(SudoCommand));
+        dispatcher.registry_mut().register_command(Arc::new(ExitCommand));
+        
+        // Register stateful commands
+        dispatcher.registry_mut().register_stateful_command(Arc::new(CdCommand));
+        
+        dispatcher
     }
 }
 
