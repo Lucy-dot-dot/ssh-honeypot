@@ -15,7 +15,7 @@ async-trait = "0.1.88"
 rand_core = { version =  "0.9.3", features = ["std"]  }
 chrono = "0.4"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
-uuid = { version = "1.17", features = ["v4", "serde"] }
+uuid = { version = "1.18", features = ["v4", "serde"] }
 clap = { version =  "4.5.43", features = ["derive", "env", "usage", "suggestions", "color"] }
 flate2 = "1.1.2"
 tar = "0.4.44"
