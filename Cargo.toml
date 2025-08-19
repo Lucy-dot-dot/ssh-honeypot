@@ -11,7 +11,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 russh = "0.54.1"
 log = "0.4.27"
 env_logger = "0.11.8"
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 rand_core = { version =  "0.9.3", features = ["std"]  }
 chrono = "0.4"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
