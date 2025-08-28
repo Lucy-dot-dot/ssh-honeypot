@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -712,7 +713,17 @@ impl server::Server for SshServerHandler {
 
     fn handle_session_error(&mut self, error: <Self::Handler as Handler>::Error) {
         match error {
-            <Self::Handler as Handler>::Error::Disconnect => {}
+            Error::Disconnect => {},
+            Error::IO(err) => {
+                match err.kind() {
+                    ErrorKind::UnexpectedEof => {
+                        log::warn!("Session did not properly closed. Bad bot.");
+                    }
+                    _ => {
+                        log::error!("Session error: {:#?}", err);
+                    }
+                }
+            },
             _ => {
                 log::error!("Session error: {:#?}", error);
             }
