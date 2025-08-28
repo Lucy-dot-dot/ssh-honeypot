@@ -1,15 +1,16 @@
 mod app;
 mod db;
 mod keys;
+mod paths;
 mod server;
 mod shell;
+mod sftp;
 
 use app::App;
 use db::run_db_handler;
 use std::fs::OpenOptions;
 
 use crate::server::SshServerHandler;
-use clap::Parser;
 use russh::server::Server as _;
 use russh::*;
 use shell::filesystem::fs2::FileSystem;
@@ -28,7 +29,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_module("russh", log::LevelFilter::Info)
         .init();
 
-    let app = App::parse();
+    let app = match App::load() {
+        Ok(app) => app,
+        Err(e) => {
+            log::error!("Failed to load configuration: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     log::info!("Current config:");
     log::info!("DB Path: {}", app.db_path.display());
@@ -135,6 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.authentication_banner.clone(),
             app.tarpit,
             fs2.clone(),
+            app.disable_sftp,
         );
         tasks.push(tokio::spawn(async move {
             // Start the SSH server

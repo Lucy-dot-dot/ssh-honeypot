@@ -7,6 +7,9 @@ services:
       DISABLE_CLI_INTERFACE: true
     volumes:
       - db:/db
+      - source: ./config.toml
+        target: /config.toml
+        type: bind
     dns_search: []
     ports:
       - protocol: tcp

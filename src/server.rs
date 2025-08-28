@@ -15,6 +15,7 @@ use crate::shell::commands::{handle_cat_command, handle_echo_command, handle_ls_
 use crate::shell::commands::handle_free_command;
 use crate::shell::filesystem::fs2::{FileContent, FileSystem};
 use crate::shell::commands::handle_ps_command;
+use crate::sftp::HoneypotSftpSession;
 
 #[derive(Clone, Default)]
 // Store session data
@@ -41,6 +42,7 @@ pub struct SshHandler {
     fs2: Arc<RwLock<FileSystem>>,
     send_task: Option<tokio::task::JoinHandle<()>>,
     send_task_tx: Option<mpsc::Sender<String>>,
+    disable_sftp: bool,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -347,6 +349,56 @@ impl Handler for SshHandler {
         }
     }
 
+    fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            log::debug!("Subsystem request: {} on channel {}", name, channel);
+            
+            if name == "sftp" {
+                if self.disable_sftp {
+                    log::info!("SFTP subsystem request denied (SFTP disabled): auth_id: {:?}", self.auth_id);
+                    session.channel_failure(channel)?;
+                    return Ok(());
+                }
+
+                log::info!("Starting SFTP subsystem for auth_id: {:?}", self.auth_id);
+                
+                if let Some(auth_id) = &self.auth_id {
+                    // Create SFTP session handler
+                    let _sftp_handler = HoneypotSftpSession::new(
+                        self.db_tx.clone(),
+                        self.fs2.clone(),
+                        auth_id.clone(),
+                    );
+
+                    // Accept the subsystem request
+                    session.channel_success(channel)?;
+                    
+                    // Run the SFTP server on this channel
+                    // Note: The actual channel stream handling would need to be implemented
+                    // based on the specific russh-sftp requirements
+                    log::info!("SFTP subsystem started for channel {}", channel);
+                    
+                    // For now, just log that SFTP was requested
+                    // In a complete implementation, you would need to handle the channel data
+                    // and pass it to the SFTP handler
+                } else {
+                    log::error!("No auth_id available for SFTP session");
+                    session.channel_failure(channel)?;
+                }
+            } else {
+                log::debug!("Unsupported subsystem: {}", name);
+                session.channel_failure(channel)?;
+            }
+            
+            Ok(())
+        }
+    }
+
 }
 
 impl Drop for SshHandler {
@@ -621,6 +673,7 @@ pub struct SshServerHandler {
     authentication_banner: Option<String>,
     tarpit: bool,
     fs2: Arc<RwLock<FileSystem>>,
+    disable_sftp: bool,
 }
 
 impl server::Server for SshServerHandler {
@@ -644,7 +697,8 @@ impl server::Server for SshServerHandler {
             tarpit: self.tarpit,
             fs2: self.fs2.clone(),
             send_task: None,
-            send_task_tx: None
+            send_task_tx: None,
+            disable_sftp: self.disable_sftp,
         }
     }
 
@@ -659,13 +713,14 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, disable_sftp: bool) -> SshServerHandler {
         Self {
             disable_cli_interface,
             db_tx,
             authentication_banner,
             tarpit,
             fs2,
+            disable_sftp,
         }
     }
 }

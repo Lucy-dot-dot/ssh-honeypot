@@ -28,6 +28,20 @@ pub enum DbMessage {
         end_time: DateTime<Utc>,
         duration_seconds: i64,
     },
+    RecordFileUpload {
+        id: String,
+        auth_id: String,
+        timestamp: DateTime<Utc>,
+        filename: String,
+        filepath: String,
+        file_size: u64,
+        file_hash: String,
+        claimed_mime_type: Option<String>,    // From file extension
+        detected_mime_type: Option<String>,   // From magic detection
+        format_mismatch: bool,                // Extension vs magic mismatch
+        file_entropy: Option<f64>,            // Entropy analysis
+        binary_data: Vec<u8>,
+    },
     Shutdown,
 }
 
@@ -67,6 +81,11 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf)
             DbMessage::RecordSession { auth_id, start_time, end_time, duration_seconds } => {
                 if let Err(e) = record_session(&conn, auth_id, start_time, end_time, duration_seconds) {
                     log::error!("Database error recording session: {}", e);
+                }
+            },
+            DbMessage::RecordFileUpload { id, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data } => {
+                if let Err(e) = record_file_upload(&conn, id, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data) {
+                    log::error!("Database error recording file upload: {}", e);
                 }
             },
             DbMessage::Shutdown => {
@@ -119,6 +138,27 @@ fn initialize_database(db_path: &PathBuf) -> SqlResult<Connection> {
             start_time TEXT NOT NULL,
             end_time TEXT NOT NULL,
             duration_seconds INTEGER NOT NULL,
+            FOREIGN KEY(auth_id) REFERENCES auth(id)
+        )",
+        [],
+    )?;
+
+    log::trace!("Adding uploaded_files table if not existing");
+    // Create uploaded_files table with foreign key to auth
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS uploaded_files (
+            id TEXT PRIMARY KEY,
+            auth_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            filepath TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            file_hash TEXT NOT NULL,
+            claimed_mime_type TEXT,
+            detected_mime_type TEXT,
+            format_mismatch INTEGER NOT NULL,
+            file_entropy REAL,
+            binary_data BLOB NOT NULL,
             FOREIGN KEY(auth_id) REFERENCES auth(id)
         )",
         [],
@@ -200,6 +240,50 @@ fn record_session(
             start_time.to_rfc3339(),
             end_time.to_rfc3339(),
             duration_seconds,
+        ],
+    )?;
+
+    Ok(())
+}
+
+// Record file upload in database
+fn record_file_upload(
+    conn: &Connection,
+    id: String,
+    auth_id: String,
+    timestamp: DateTime<Utc>,
+    filename: String,
+    filepath: String,
+    file_size: u64,
+    file_hash: String,
+    claimed_mime_type: Option<String>,
+    detected_mime_type: Option<String>,
+    format_mismatch: bool,
+    file_entropy: Option<f64>,
+    binary_data: Vec<u8>,
+) -> SqlResult<()> {
+    let claimed_mime_str = claimed_mime_type.unwrap_or_default();
+    let detected_mime_str = detected_mime_type.unwrap_or_default();
+    
+    log::trace!("Recording into uploaded_files table: {}, {}, {}, {}, {}, {}, {}, claimed: {}, detected: {}, mismatch: {}, entropy: {:?}, {} bytes", 
+               id, auth_id, timestamp.to_rfc3339(), filename, filepath, file_size, file_hash, claimed_mime_str, detected_mime_str, format_mismatch, file_entropy, binary_data.len());
+    
+    conn.execute(
+        "INSERT INTO uploaded_files (id, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            id,
+            auth_id,
+            timestamp.to_rfc3339(),
+            filename,
+            filepath,
+            file_size as i64,
+            file_hash,
+            claimed_mime_str,
+            detected_mime_str,
+            format_mismatch as i64,
+            file_entropy,
+            binary_data,
         ],
     )?;
 

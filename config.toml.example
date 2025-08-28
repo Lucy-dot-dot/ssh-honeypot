@@ -1,0 +1,37 @@
+# SSH Honeypot Configuration File
+# This is an example configuration file showing all available options
+# Copy to config.toml and modify as needed
+
+# Interfaces to listen on (can be IPv4 or IPv6)
+interfaces = [
+    "0.0.0.0:2222",
+    "[::]:2222"
+]
+
+# Database file path
+db_path = "honeypot.db"
+
+# Disable the fake CLI interface (only log auth attempts)
+disable_cli_interface = true
+
+# Authentication banner to show to clients
+authentication_banner = "Welcome to Ubuntu 20.04.3 LTS (GNU/Linux 5.4.0-88-generic x86_64)"
+
+# Enable tarpit mode to slow down attackers
+tarpit = false
+
+# Disable loading the base filesystem from tar.gz
+disable_base_tar_gz_loading = false
+
+# Path to the base filesystem tar.gz file
+base_tar_gz_path = "base.tar.gz"
+
+# Directory to store SSH keys (optional - uses XDG config directory by default)
+# key_folder = "/tmp"
+
+# Network socket options
+disable_so_reuseport = false
+disable_so_reuseaddr = false
+
+# Disable SFTP subsystem support
+disable_sftp = false
