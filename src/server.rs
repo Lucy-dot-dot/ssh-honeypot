@@ -767,6 +767,10 @@ async fn handle_shell_session(
             ChannelMsg::OpenFailure(_) => {
                 break;
             }
+            ChannelMsg::Exec { want_reply: _, command } => {
+                let command = String::from_utf8_lossy(&command).to_string();
+                log::debug!("Tried to do a fast one and send command directly, buddy is not getting a response for this one: {}", command);
+            }
             _ => {}
         }
     }
