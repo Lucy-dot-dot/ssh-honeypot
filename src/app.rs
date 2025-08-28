@@ -169,7 +169,17 @@ impl App {
             SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 2222),
             SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), 2222),
         ];
-        
+
+        let disable_base_tar_gz_loading = if let Some(cli_disable_base_tar_gz_loading) = cli.disable_base_tar_gz_loading {
+            if !cli_disable_base_tar_gz_loading && let Some(config_disable_base_tar_gz_loading) = config.disable_base_tar_gz_loading {
+                config_disable_base_tar_gz_loading
+            } else {
+                cli_disable_base_tar_gz_loading
+            }
+        } else {
+            false
+        };
+
         Self {
             interfaces: cli.interfaces
                 .filter(|v| !v.is_empty())
@@ -191,9 +201,7 @@ impl App {
                 .or(config.tarpit)
                 .unwrap_or(false),
             
-            disable_base_tar_gz_loading: cli.disable_base_tar_gz_loading
-                .or(config.disable_base_tar_gz_loading)
-                .unwrap_or(false),
+            disable_base_tar_gz_loading,
             
             base_tar_gz_path: cli.base_tar_gz_path
                 .or_else(|| config.base_tar_gz_path.map(PathBuf::from))

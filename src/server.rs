@@ -90,7 +90,7 @@ impl Handler for SshHandler {
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
             if self.disable_cli_interface {
-                log::info!("Cli interface is disabled");
+                log::debug!("Cli interface is disabled");
                 return Ok(Auth::reject())
             }
             log::info!("Accepted new connection");
@@ -108,7 +108,9 @@ impl Handler for SshHandler {
         async move {
             self.user = Some(user.to_string());
             self.cwd = format!("/home/{}", user);
-            self.ensure_user_home_exists().await;
+            if !self.disable_cli_interface {
+                self.ensure_user_home_exists().await;
+            }
             let key_str = format!("{}", public_key.key_data().fingerprint(HashAlg::Sha512));
             let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
 
