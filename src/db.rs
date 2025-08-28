@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Result as SqlResult};
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 // Database message types
 #[derive(Debug)]
@@ -84,7 +85,8 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf)
                 }
             },
             DbMessage::RecordSession { auth_id, start_time, end_time, duration_seconds } => {
-                if let Err(e) = record_session(&conn, auth_id, start_time, end_time, duration_seconds) {
+                let id = Uuid::new_v4().to_string();
+                if let Err(e) = record_session(&conn, &id, auth_id, start_time, end_time, duration_seconds) {
                     log::error!("Database error recording session: {}", e);
                 }
             },
@@ -147,6 +149,24 @@ fn initialize_database(db_path: &PathBuf) -> SqlResult<Connection> {
         )",
         [],
     )?;
+
+    conn.execute(
+        "DROP TABLE IF EXISTS sessions;",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            auth_id TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            duration_seconds INTEGER NOT NULL,
+            FOREIGN KEY(auth_id) REFERENCES auth(id)
+        )",
+        [],
+    )?;
+
 
     log::trace!("Adding uploaded_files table if not existing");
     // Create uploaded_files table with foreign key to auth
@@ -231,16 +251,18 @@ fn record_command(
 // Record session in database
 fn record_session(
     conn: &Connection,
+    id: &str,
     auth_id: String,
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
     duration_seconds: i64,
 ) -> SqlResult<()> {
-    log::trace!("Recording into session table: {}, {}, {}, {}", auth_id, start_time.to_rfc3339(), end_time.to_rfc3339(), duration_seconds);
+    log::trace!("Recording into session table: {}, {}, {}, {}, {}", id, auth_id, start_time.to_rfc3339(), end_time.to_rfc3339(), duration_seconds);
     conn.execute(
-        "INSERT INTO sessions (auth_id, start_time, end_time, duration_seconds)
-         VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO sessions (id, auth_id, start_time, end_time, duration_seconds)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
+            id,
             auth_id,
             start_time.to_rfc3339(),
             end_time.to_rfc3339(),
