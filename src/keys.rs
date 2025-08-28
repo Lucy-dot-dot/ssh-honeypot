@@ -9,7 +9,6 @@ pub struct Keys {
     pub ed25519: PrivateKey,
     pub rsa: PrivateKey,
     pub ecdsa: PrivateKey,
-    pub sk_ed25519: PrivateKey,
 }
 
 pub fn load_or_generate_keys(app: &App) -> Keys {
@@ -17,25 +16,21 @@ pub fn load_or_generate_keys(app: &App) -> Keys {
     let ed_path = key_dir.join("ed25519");
     let rsa_path = key_dir.join("rsa");
     let ecdsa_path = key_dir.join("ecdsa");
-    let sk_ed_path = key_dir.join("sk_ed25519");
     
-    log::debug!("Loading keys from: {}, {}, {}, {}", 
+    log::debug!("Loading keys from: {}, {}, {}", 
         ed_path.display(), 
         rsa_path.display(), 
-        ecdsa_path.display(),
-        sk_ed_path.display()
+        ecdsa_path.display()
     );
 
     let ed_key = load_or_create_key(ed_path, Algorithm::Ed25519);
     let rsa_key = load_or_create_key(rsa_path, Algorithm::Rsa { hash: Some(HashAlg::Sha512) });
     let ecdsa_key = load_or_create_key(ecdsa_path, Algorithm::Ecdsa { curve: EcdsaCurve::NistP521 });
-    let sk_ed_key = load_or_create_key(sk_ed_path, Algorithm::SkEd25519);
     
     Keys {
         ed25519: ed_key,
         rsa: rsa_key,
         ecdsa: ecdsa_key,
-        sk_ed25519: sk_ed_key,
     }
 }
 
