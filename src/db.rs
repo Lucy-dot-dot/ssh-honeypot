@@ -57,6 +57,11 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf)
         },
         Err(e) => {
             log::error!("Failed to initialize database: {}", e);
+            log::error!("========================================");
+            log::error!("🐉 DATABASE FAILED TO INITIALIZE 🐉");
+            log::error!("🚨 ATTACK DATA WILL NOT BE SAVED 🚨");
+            log::error!("🔥 HERE BE DRAGONS - FIX THIS NOW 🔥");
+            log::error!("========================================");
             return;
         }
     };

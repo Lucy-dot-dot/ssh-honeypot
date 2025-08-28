@@ -6,7 +6,8 @@ services:
       INTERFACE: 0.0.0.0:2222
       DISABLE_CLI_INTERFACE: true
     volumes:
-      - db:/db
+      # For this to work, the db directory has to be created beforehand. And owned by 1000:1000 or world writeable.
+      - ./db:/db
       - source: ./config.toml
         target: /config.toml
         type: bind
@@ -24,5 +25,3 @@ services:
       - NET_RAW
     security_opt:
       - no-new-privileges:true
-volumes:
-  db:

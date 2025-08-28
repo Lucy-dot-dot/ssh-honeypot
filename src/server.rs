@@ -58,7 +58,9 @@ impl Handler for SshHandler {
         async move {
             self.user = Some(user.to_string());
             self.cwd = format!("/home/{}", user);
-            self.ensure_user_home_exists().await;
+            if !self.disable_cli_interface {
+                self.ensure_user_home_exists().await;
+            }
             let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
 
             // Generate a UUID for this auth attempt
