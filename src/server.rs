@@ -166,7 +166,7 @@ impl Handler for SshHandler {
         _session: &mut Session,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         async move {
-            log::debug!("Open session on channel: {}", channel.id());
+            log::debug!("Open session on channel: {}, {:?}", channel.id(), channel);
             if let (Some(user), Some(auth_id)) = (&self.user, &self.auth_id) {
                 // Initialize session data once we have a channel session
                 let data = SessionData {
@@ -663,7 +663,7 @@ impl SshHandler {
                     }
                 },
                 None => {
-                    log::error!("Send task received None from channel");
+                    log::debug!("Send task received None from channel");
                     break;
                 },
             }
