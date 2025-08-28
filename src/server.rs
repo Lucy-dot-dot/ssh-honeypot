@@ -756,6 +756,7 @@ async fn handle_shell_session(
     log::trace!("Waiting for channel to close before saving metadata");
     // Just wait for the channel to close
     while let Some(msg) = channel.wait().await {
+        log::debug!("Received channel message: {:?}", msg);
         match msg {
             ChannelMsg::Close => {
                 break;
