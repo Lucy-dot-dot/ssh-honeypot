@@ -685,7 +685,11 @@ impl server::Server for SshServerHandler {
 
     // Create a new handler for each connection
     fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> Self::Handler {
-        log::info!("New connection from: {:?}", peer_addr);
+        if let Some(peer_addr) = peer_addr {
+            log::info!("New connection from: {:?}", peer_addr);
+        } else {
+            log::info!("New connection from unknown peer, what is this?");
+        }
 
         SshHandler {
             peer: peer_addr,
