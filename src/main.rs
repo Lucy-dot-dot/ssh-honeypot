@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth_rejection_time: std::time::Duration::from_secs(3),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
         server_id: SshId::Standard(String::from("SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4")), // Mimic a real SSH server
-        keys: vec![keys.ed25519, keys.rsa, keys.ecdsa, keys.sk_ed25519],
+        keys: vec![keys.ed25519, keys.rsa, keys.ecdsa],
         ..Default::default()
     };
     log::trace!("Finished generating keys");
