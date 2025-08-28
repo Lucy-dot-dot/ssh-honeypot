@@ -166,7 +166,11 @@ impl Handler for SshHandler {
         _session: &mut Session,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         async move {
-            log::debug!("Open session on channel: {}, {:?}", channel.id(), channel);
+            if let Some(peer) = self.peer {
+                log::debug!("Open session on channel: {} for ip {}", channel.id(), peer);
+            } else {
+                log::debug!("Open session on channel: {}", channel.id());
+            }
             if let (Some(user), Some(auth_id)) = (&self.user, &self.auth_id) {
                 // Initialize session data once we have a channel session
                 let data = SessionData {
@@ -756,7 +760,7 @@ async fn handle_shell_session(
     log::trace!("Waiting for channel to close before saving metadata");
     // Just wait for the channel to close
     while let Some(msg) = channel.wait().await {
-        log::debug!("Received channel message: {:?}", msg);
+        log::trace!("Received channel message: {:?}", msg);
         match msg {
             ChannelMsg::Close => {
                 break;
@@ -769,7 +773,7 @@ async fn handle_shell_session(
             }
             ChannelMsg::Exec { want_reply: _, command } => {
                 let command = String::from_utf8_lossy(&command).to_string();
-                log::debug!("Tried to do a fast one and send command directly, buddy is not getting a response for this one: {}", command);
+                log::debug!("Exec command request: {}", command);
             }
             _ => {}
         }
