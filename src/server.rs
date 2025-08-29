@@ -1,5 +1,6 @@
 use std::io::ErrorKind;
 use std::net::SocketAddr;
+use std::str::Utf8Error;
 use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
@@ -470,6 +471,18 @@ impl Handler for SshHandler {
         }
     }
 
+    /// This is ssh user@host "command", data should be UTf-8
+    fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> impl Future<Output=Result<(), Self::Error>> + Send {
+        async move {
+            let command = String::from_utf8_lossy(data);
+            let answer = format!("You thought I'm going to execute '{}'. But jokes on you. You are now my slave.", command);
+            log::debug!("Exec request received: {}", command);
+            log::debug!("Answering with: {}", answer);
+            self.tarpit_data(session, channel, answer.as_bytes()).await?;
+            Ok(())
+        }
+    }
+
 }
 
 impl Drop for SshHandler {
@@ -900,6 +913,11 @@ async fn handle_shell_session(
             ChannelMsg::Exec { want_reply: _, command } => {
                 let command = String::from_utf8_lossy(&command).to_string();
                 log::debug!("Exec command request: {}", command);
+            }
+            ChannelMsg::Eof => {
+                // TODO: Handle EOF
+                log::debug!("Eof received from client. Now how do I tell russh that the connection should be closed?");
+                break;
             }
             _ => {}
         }
