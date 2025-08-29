@@ -63,7 +63,7 @@ impl Handler for SshHandler {
             if !self.disable_cli_interface {
                 self.ensure_user_home_exists().await;
             }
-            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
+            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))).ip());
 
             // Generate a UUID for this auth attempt
             let auth_id = format!("auth_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
@@ -138,7 +138,7 @@ impl Handler for SshHandler {
                 self.ensure_user_home_exists().await;
             }
             let key_str = format!("{}", public_key.key_data().fingerprint(HashAlg::Sha512));
-            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
+            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))).ip());
 
             // Generate a UUID for this auth attempt
             let auth_id = format!("auth_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
