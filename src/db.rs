@@ -43,6 +43,21 @@ pub enum DbMessage {
         file_entropy: Option<f64>,            // Entropy analysis
         binary_data: Vec<u8>,
     },
+    RecordAbuseIpCheck {
+        ip: String,
+        timestamp: DateTime<Utc>,
+        abuse_confidence_score: Option<u8>,
+        country_code: Option<String>,
+        is_tor: bool,
+        is_whitelisted: Option<bool>,
+        total_reports: u32,
+        response_data: String, // JSON serialized CheckResponseData
+    },
+    GetAbuseIpCheck {
+        ip: String,
+        cache_ttl_days: u8,
+        response_tx: tokio::sync::oneshot::Sender<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>>,
+    },
     Shutdown,
 }
 
@@ -94,6 +109,15 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf)
                 if let Err(e) = record_file_upload(&conn, id, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data) {
                     log::error!("Database error recording file upload: {}", e);
                 }
+            },
+            DbMessage::RecordAbuseIpCheck { ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data } => {
+                if let Err(e) = record_abuse_ip_check(&conn, ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data) {
+                    log::error!("Database error recording AbuseIPDB check: {}", e);
+                }
+            },
+            DbMessage::GetAbuseIpCheck { ip, cache_ttl_days, response_tx } => {
+                let result = get_abuse_ip_check(&conn, &ip, cache_ttl_days);
+                let _ = response_tx.send(result.ok().flatten());
             },
             DbMessage::Shutdown => {
                 break;
@@ -185,6 +209,22 @@ fn initialize_database(db_path: &PathBuf) -> SqlResult<Connection> {
             file_entropy REAL,
             binary_data BLOB NOT NULL,
             FOREIGN KEY(auth_id) REFERENCES auth(id)
+        )",
+        [],
+    )?;
+
+    log::trace!("Adding abuse_ip_cache table if not existing");
+    // Create abuse_ip_cache table for caching AbuseIPDB responses
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS abuse_ip_cache (
+            ip TEXT PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            abuse_confidence_score INTEGER,
+            country_code TEXT,
+            is_tor INTEGER NOT NULL,
+            is_whitelisted INTEGER,
+            total_reports INTEGER NOT NULL,
+            response_data TEXT NOT NULL
         )",
         [],
     )?;
@@ -315,4 +355,80 @@ fn record_file_upload(
     )?;
 
     Ok(())
+}
+
+// Record AbuseIPDB check result in database
+fn record_abuse_ip_check(
+    conn: &Connection,
+    ip: String,
+    timestamp: DateTime<Utc>,
+    abuse_confidence_score: Option<u8>,
+    country_code: Option<String>,
+    is_tor: bool,
+    is_whitelisted: Option<bool>,
+    total_reports: u32,
+    response_data: String,
+) -> SqlResult<()> {
+    log::trace!("Recording AbuseIPDB check for IP: {}", ip);
+    
+    conn.execute(
+        "INSERT OR REPLACE INTO abuse_ip_cache (ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            ip,
+            timestamp.to_rfc3339(),
+            abuse_confidence_score.map(|s| s as i64),
+            country_code,
+            is_tor as i64,
+            is_whitelisted.map(|w| w as i64),
+            total_reports as i64,
+            response_data,
+        ],
+    )?;
+
+    Ok(())
+}
+
+// Get AbuseIPDB check result from database if not expired
+fn get_abuse_ip_check(
+    conn: &Connection,
+    ip: &str,
+    cache_ttl_days: u8,
+) -> SqlResult<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>> {
+    let mut stmt = conn.prepare(
+        "SELECT timestamp, response_data FROM abuse_ip_cache WHERE ip = ?1"
+    )?;
+    
+    let result = stmt.query_row([ip], |row| {
+        let timestamp_str: String = row.get(0)?;
+        let response_data: String = row.get(1)?;
+        
+        let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
+            .map_err(|e| rusqlite::Error::InvalidColumnType(0, format!("Invalid timestamp: {}", e).into(), rusqlite::types::Type::Text))?
+            .with_timezone(&Utc);
+            
+        let response: crate::abuseipdb::CheckResponseData = serde_json::from_str(&response_data)
+            .map_err(|e| rusqlite::Error::InvalidColumnType(1, format!("Invalid JSON: {}", e).into(), rusqlite::types::Type::Text))?;
+            
+        Ok((timestamp, response))
+    });
+    
+    match result {
+        Ok((timestamp, response)) => {
+            // Check if result is expired (older than cache_ttl_days)
+            let age = Utc::now() - timestamp;
+            if age.num_days() >= cache_ttl_days as i64 {
+                log::debug!("AbuseIPDB cache entry expired for IP: {} (age: {} days, TTL: {} days)", ip, age.num_days(), cache_ttl_days);
+                Ok(None)
+            } else {
+                log::debug!("AbuseIPDB cache hit from database for IP: {}", ip);
+                Ok(Some((timestamp, response)))
+            }
+        },
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            log::debug!("No AbuseIPDB cache entry found for IP: {}", ip);
+            Ok(None)
+        },
+        Err(e) => Err(e),
+    }
 }

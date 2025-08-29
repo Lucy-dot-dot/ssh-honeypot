@@ -5,12 +5,14 @@ mod paths;
 mod server;
 mod shell;
 mod sftp;
+mod abuseipdb;
 
 use app::App;
 use db::run_db_handler;
 use std::fs::OpenOptions;
 
 use crate::server::SshServerHandler;
+use crate::abuseipdb::Client as AbuseIpClient;
 use russh::server::Server as _;
 use russh::*;
 use shell::filesystem::fs2::FileSystem;
@@ -85,6 +87,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::trace!("Creating filesystem");
     let fs2 = Arc::new(RwLock::new(FileSystem::default()));
 
+    // Create AbuseIPDB client if API key is provided
+    let abuse_ip_client = if let Some(api_key) = &app.abuse_ip_db_api_key {
+        log::info!("AbuseIPDB integration enabled");
+        Some(Arc::new(AbuseIpClient::new(api_key.clone(), db_tx.clone(), None)))
+    } else {
+        log::info!("AbuseIPDB integration disabled (no API key provided)");
+        None
+    };
+
     if !app.disable_base_tar_gz_loading {
         if app.disable_cli_interface {
             log::warn!(
@@ -143,6 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.tarpit,
             fs2.clone(),
             app.disable_sftp,
+            abuse_ip_client.clone(),
         );
         tasks.push(tokio::spawn(async move {
             // Start the SSH server
@@ -235,4 +247,8 @@ fn create_socket_with_reuse(addr: SocketAddr, disable_reuse_addr: bool, disable_
 
     socket.bind(addr)?;
     socket.listen(1024)
+}
+
+async fn abuse_ip_db_task() {
+
 }

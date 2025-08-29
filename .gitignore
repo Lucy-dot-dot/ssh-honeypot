@@ -1,3 +1,4 @@
 /target
 /honeypot.db
 .idea
+/config.toml

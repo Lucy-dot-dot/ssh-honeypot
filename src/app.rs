@@ -17,6 +17,7 @@ pub struct Config {
     pub disable_so_reuseport: Option<bool>,
     pub disable_so_reuseaddr: Option<bool>,
     pub disable_sftp: Option<bool>,
+    pub abuse_ip_db_api_key: Option<String>,
 }
 
 impl Default for Config {
@@ -33,6 +34,7 @@ impl Default for Config {
             disable_so_reuseport: None,
             disable_so_reuseaddr: None,
             disable_sftp: None,
+            abuse_ip_db_api_key: None
         }
     }
 }
@@ -88,6 +90,10 @@ pub struct CliArgs {
     /// When disabled, SFTP connection attempts will be logged but not handled
     #[arg(long = "disable-sftp", env = "DISABLE_SFTP", action = ArgAction::SetTrue)]
     pub disable_sftp: Option<bool>,
+
+    /// AbuseIPDB API key for checking suspicious IPs
+    #[arg(long = "abuse-ip-db-api-key", env = "ABUSE_IP_DB_API_KEY")]
+    pub abuse_ip_db_api_key: Option<String>,
 }
 
 #[derive(Debug)]
@@ -104,6 +110,7 @@ pub struct App {
     pub disable_so_reuseaddr: bool,
     pub disable_sftp: bool,
     pub path_manager: PathManager,
+    pub abuse_ip_db_api_key: Option<String>
 }
 
 impl App {
@@ -222,6 +229,9 @@ impl App {
             disable_sftp: cli.disable_sftp
                 .or(config.disable_sftp)
                 .unwrap_or(false),
+            
+            abuse_ip_db_api_key: cli.abuse_ip_db_api_key
+                .or(config.abuse_ip_db_api_key),
             
             path_manager,
         }
