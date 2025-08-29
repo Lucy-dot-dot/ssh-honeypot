@@ -82,9 +82,9 @@ impl std::fmt::Display for CheckResponseData {
             write!(f, ", Tor: true")?;
         }
         
-        if let Some(whitelisted) = self.is_whitelisted {
-            if whitelisted {
-                write!(f, ", Whitelisted: true")?;
+        if let Some(allowlisted) = self.is_allowlisted {
+            if allowlisted {
+                write!(f, ", Allowlisted: true")?;
             }
         }
         
@@ -123,7 +123,7 @@ pub struct CheckResponseData {
     #[serde(rename = "isTor")]
     pub is_tor: bool,
     #[serde(rename = "isWhitelisted")]
-    pub is_whitelisted: Option<bool>,
+    pub is_allowlisted: Option<bool>,
     pub isp: Option<String>,
     #[serde(rename = "lastReportedAt")]
     pub last_reported_at: Option<String>,
@@ -243,7 +243,7 @@ impl Client {
             response.data.abuse_confidence_score,
             response.data.country_code.clone(),
             response.data.is_tor,
-            response.data.is_whitelisted,
+            response.data.is_allowlisted,
             response.data.total_reports,
             serde_json::to_string(&response.data).unwrap_or_default(),
         ).await {
