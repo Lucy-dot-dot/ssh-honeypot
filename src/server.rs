@@ -478,6 +478,7 @@ impl Handler for SshHandler {
             log::debug!("Exec request received: {}", command);
             log::debug!("Answering with: {}", answer);
             self.tarpit_data(session, channel, answer.as_bytes()).await?;
+            session.channel_failure(channel)?;
             Ok(())
         }
     }
