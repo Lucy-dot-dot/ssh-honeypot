@@ -29,6 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse_env(env_logger::Env::default())
         .filter_level(log::LevelFilter::Debug)
         .filter_module("russh", log::LevelFilter::Info)
+        .filter_module("hyper_util", log::LevelFilter::Info)
+        .filter_module("reqwest", log::LevelFilter::Info)
+        .filter_module("sqlx", log::LevelFilter::Info)
         .init();
 
     let app = match App::load() {
