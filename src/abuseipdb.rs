@@ -53,6 +53,56 @@ impl std::error::Error for AbuseIpError {
     }
 }
 
+impl std::fmt::Display for CheckResponseData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IP: {}", self.ip_address)?;
+        
+        if let Some(confidence) = self.abuse_confidence_score {
+            write!(f, ", Confidence: {}%", confidence)?;
+        }
+        
+        if let Some(country) = &self.country_code {
+            write!(f, ", Country: {}", country)?;
+        }
+        
+        if let Some(isp) = &self.isp {
+            write!(f, ", ISP: {}", isp)?;
+        }
+        
+        if let Some(usage_type) = &self.usage_type {
+            write!(f, ", Usage: {}", usage_type)?;
+        }
+        
+        write!(f, ", Reports: {}", self.total_reports)?;
+        
+        if self.is_tor {
+            write!(f, ", Tor: true")?;
+        }
+        
+        if let Some(whitelisted) = self.is_whitelisted {
+            if whitelisted {
+                write!(f, ", Whitelisted: true")?;
+            }
+        }
+        
+        if let Some(domain) = &self.domain {
+            write!(f, ", Domain: {}", domain)?;
+        }
+        
+        if let Some(hostnames) = &self.hostnames {
+            if !hostnames.is_empty() {
+                write!(f, ", Hostnames: [{}]", hostnames.join(", "))?;
+            }
+        }
+        
+        if let Some(last_reported) = &self.last_reported_at {
+            write!(f, ", LastReported: {}", last_reported)?;
+        }
+        
+        Ok(())
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Hash)]
 pub struct CheckResponseData {
     #[serde(rename = "abuseConfidenceScore")]

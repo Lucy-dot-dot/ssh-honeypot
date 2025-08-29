@@ -762,8 +762,9 @@ impl server::Server for SshServerHandler {
                 let ip_clone = ip.clone();
                 tokio::spawn(async move {
                     match client_clone.check_ip_with_cache(&ip_clone).await {
-                        Ok(_) => {
+                        Ok(response) => {
                             log::debug!("Background AbuseIPDB lookup completed for {}", ip_clone);
+                            log::debug!("{}", response.data);
                         },
                         Err(AbuseIpError::RateLimitExceeded(info)) => {
                             if let Some(retry_after) = info.retry_after_seconds {
