@@ -1,6 +1,5 @@
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::str::Utf8Error;
 use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};

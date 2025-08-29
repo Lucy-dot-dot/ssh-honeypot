@@ -85,15 +85,6 @@ impl PathManager {
         self.data_dir.join("base.tar.gz")
     }
     
-    
-    /// Ensure all necessary directories exist
-    pub fn ensure_directories(&self) -> Result<(), std::io::Error> {
-        fs::create_dir_all(&self.config_dir)?;
-        fs::create_dir_all(&self.data_dir)?;
-        fs::create_dir_all(&self.key_dir)?;
-        Ok(())
-    }
-    
     /// Log the current directory configuration
     pub fn log_paths(&self) {
         log::info!("Path configuration:");

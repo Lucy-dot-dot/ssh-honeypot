@@ -248,7 +248,3 @@ fn create_socket_with_reuse(addr: SocketAddr, disable_reuse_addr: bool, disable_
     socket.bind(addr)?;
     socket.listen(1024)
 }
-
-async fn abuse_ip_db_task() {
-
-}
