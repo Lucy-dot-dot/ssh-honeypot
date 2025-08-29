@@ -3,7 +3,7 @@ FROM rust:alpine AS builder
 ENV HOME=/home/root
 WORKDIR $HOME/app
 
-RUN apk add musl-dev pkgconfig openssl-dev
+RUN apk add musl-dev pkgconfig openssl-dev openssl-libs-static
 
 COPY . .
 
