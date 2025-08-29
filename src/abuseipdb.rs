@@ -122,6 +122,8 @@ impl Client {
                 .https_only(true)
                 .deflate(true)
                 .brotli(true)
+                // FIXME: For now, until I find out how to add the CA cert to the scratch container
+                .danger_accept_invalid_certs(true)
                 .build()
                 .unwrap(),
             api_key,
