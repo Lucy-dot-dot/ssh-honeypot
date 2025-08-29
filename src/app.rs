@@ -7,7 +7,7 @@ use crate::paths::PathManager;
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Config {
     pub interfaces: Option<Vec<String>>, // Store as strings for TOML compatibility
-    pub db_path: Option<String>,
+    pub database_url: Option<String>,
     pub disable_cli_interface: Option<bool>,
     pub authentication_banner: Option<String>,
     pub tarpit: Option<bool>,
@@ -18,13 +18,14 @@ pub struct Config {
     pub disable_so_reuseaddr: Option<bool>,
     pub disable_sftp: Option<bool>,
     pub abuse_ip_db_api_key: Option<String>,
+    pub abuse_ip_cache_cleanup_interval_hours: Option<u32>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             interfaces: None,
-            db_path: None,
+            database_url: None,
             disable_cli_interface: None,
             authentication_banner: None,
             tarpit: None,
@@ -34,7 +35,8 @@ impl Default for Config {
             disable_so_reuseport: None,
             disable_so_reuseaddr: None,
             disable_sftp: None,
-            abuse_ip_db_api_key: None
+            abuse_ip_db_api_key: None,
+            abuse_ip_cache_cleanup_interval_hours: None
         }
     }
 }
@@ -49,8 +51,9 @@ pub struct CliArgs {
     #[arg(short = 'i', long = "interface", env = "INTERFACE")]
     pub interfaces: Option<Vec<SocketAddr>>,
 
-    #[arg(short = 'd', long = "db", env = "DATABASE_PATH")]
-    pub db_path: Option<PathBuf>,
+    /// PostgreSQL database connection URL
+    #[arg(short = 'd', long = "database-url", env = "DATABASE_URL")]
+    pub database_url: Option<String>,
 
     /// Disable the fake cli interface provided and only save passwords and/or key authentication attempts
     #[arg(short = 'c', long = "disable-cli-interface", env = "DISABLE_CLI_INTERFACE", action = ArgAction::SetTrue)]
@@ -94,12 +97,16 @@ pub struct CliArgs {
     /// AbuseIPDB API key for checking suspicious IPs
     #[arg(long = "abuse-ip-db-api-key", env = "ABUSE_IP_DB_API_KEY")]
     pub abuse_ip_db_api_key: Option<String>,
+
+    /// Interval in hours for cleaning up expired AbuseIPDB cache entries (default: 24 hours)
+    #[arg(long = "abuse-ip-cache-cleanup-hours", env = "ABUSE_IP_CACHE_CLEANUP_HOURS")]
+    pub abuse_ip_cache_cleanup_interval_hours: Option<u32>,
 }
 
 #[derive(Debug)]
 pub struct App {
     pub interfaces: Vec<SocketAddr>,
-    pub db_path: PathBuf,
+    pub database_url: String,
     pub disable_cli_interface: bool,
     pub authentication_banner: Option<String>,
     pub tarpit: bool,
@@ -110,7 +117,8 @@ pub struct App {
     pub disable_so_reuseaddr: bool,
     pub disable_sftp: bool,
     pub path_manager: PathManager,
-    pub abuse_ip_db_api_key: Option<String>
+    pub abuse_ip_db_api_key: Option<String>,
+    pub abuse_ip_cache_cleanup_interval_hours: u32
 }
 
 impl App {
@@ -193,9 +201,9 @@ impl App {
                 .or_else(|| if config_interfaces.is_empty() { None } else { Some(config_interfaces) })
                 .unwrap_or(default_interfaces),
             
-            db_path: cli.db_path
-                .or_else(|| config.db_path.map(PathBuf::from))
-                .unwrap_or_else(|| path_manager.database_file()),
+            database_url: cli.database_url
+                .or(config.database_url)
+                .unwrap_or_else(|| "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot".to_string()),
             
             disable_cli_interface: cli.disable_cli_interface
                 .or(config.disable_cli_interface)
@@ -232,6 +240,10 @@ impl App {
             
             abuse_ip_db_api_key: cli.abuse_ip_db_api_key
                 .or(config.abuse_ip_db_api_key),
+            
+            abuse_ip_cache_cleanup_interval_hours: cli.abuse_ip_cache_cleanup_interval_hours
+                .or(config.abuse_ip_cache_cleanup_interval_hours)
+                .unwrap_or(24),
             
             path_manager,
         }

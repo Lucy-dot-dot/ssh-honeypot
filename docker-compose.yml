@@ -1,10 +1,30 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ssh-honeypot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ssh_honeypot
+      POSTGRES_USER: honeypot
+      POSTGRES_PASSWORD: honeypot
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d/
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U honeypot -d ssh_honeypot" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
   ssh-honeypot:
     build: .
     environment:
-      DATABASE_PATH: /db/honeypot.db
       INTERFACE: 0.0.0.0:2222
       DISABLE_CLI_INTERFACE: true
+      DATABASE_URL: postgresql://honeypot:honeypot@postgres:5432/ssh_honeypot
     volumes:
       # For this to work, the db directory has to be created beforehand. And owned by 1000:1000 or world writeable.
       - ./db:/db
@@ -20,8 +40,11 @@ services:
         published: 2222
         target: 2222
     cap_drop:
-      - NET_ADMIN
+      - ALL
+    cap_add:
       - NET_BIND_SERVICE
-      - NET_RAW
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  postgres_data:

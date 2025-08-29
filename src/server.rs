@@ -8,7 +8,6 @@ use russh::keys::{HashAlg, PublicKey};
 use russh::server::{Auth, Handler, Msg, Session};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 use rand::{rng, Rng};
 use rand_core::RngCore;
 use crate::db::DbMessage;
@@ -67,7 +66,7 @@ impl Handler for SshHandler {
             let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
 
             // Generate a UUID for this auth attempt
-            let auth_id = Uuid::new_v4().to_string();
+            let auth_id = format!("auth_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
             self.auth_id = Some(auth_id.clone());
 
             log::info!("Password auth attempt - Username: {}, Password: {}, IP: {}", user, password, peer_str);
@@ -104,7 +103,6 @@ impl Handler for SshHandler {
 
             // Record authentication attempt in database
             match self.db_tx.send(DbMessage::RecordAuth {
-                id: auth_id,
                 timestamp: Utc::now(),
                 ip: peer_str,
                 username: user.to_string(),
@@ -121,11 +119,6 @@ impl Handler for SshHandler {
             let delay = rng().next_u64() % 501;
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-
-            if self.disable_cli_interface {
-                log::debug!("Cli interface is disabled");
-                return Ok(Auth::reject())
-            }
             log::info!("Accepted new connection");
             // For honeypot, we accept all auth attempts
             Ok(Auth::Accept)
@@ -148,7 +141,7 @@ impl Handler for SshHandler {
             let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
 
             // Generate a UUID for this auth attempt
-            let auth_id = Uuid::new_v4().to_string();
+            let auth_id = format!("auth_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
             self.auth_id = Some(auth_id.clone());
 
             log::info!("Public key auth attempt - Username: {}, Key: {}, IP: {}", user, key_str, peer_str);
@@ -185,7 +178,6 @@ impl Handler for SshHandler {
 
             // Record authentication attempt in database
             match self.db_tx.send(DbMessage::RecordAuth {
-                id: auth_id,
                 timestamp: Utc::now(),
                 ip: peer_str,
                 username: user.to_string(),
@@ -203,10 +195,6 @@ impl Handler for SshHandler {
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
-            if self.disable_cli_interface {
-                log::debug!("Cli interface is disabled");
-                return Ok(Auth::reject())
-            }
             log::info!("Accepted new connection");
             // For honeypot, we accept all auth attempts
             Ok(Auth::Accept)
@@ -324,7 +312,6 @@ impl Handler for SshHandler {
 
                     // Record command in database
                     match self.db_tx.send(DbMessage::RecordCommand {
-                        id: Uuid::new_v4().to_string(),
                         auth_id: self.session_data.auth_id.clone(),
                         timestamp: Utc::now(),
                         command: self.current_cmd.clone(),
@@ -397,6 +384,12 @@ impl Handler for SshHandler {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
             log::debug!("Getting shell command request for channel: {}", channel);
+            if self.disable_cli_interface {
+                log::debug!("Cli interface is disabled");
+                session.channel_failure(channel)?;
+                return Ok(())
+            }
+
             // Send a welcome message
             let welcome = format!(
                 "\n\nWelcome to Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n * Support:        https://ubuntu.com/advantage\r\n\r\n  System information as of {}\r\n\r\n  System load:  0.08              Users logged in:        1\r\n  Usage of /:   42.6% of 30.88GB  IP address for eth0:    10.0.2.15\r\n  Memory usage: 38%               IP address for docker0:  172.17.0.1\r\n  Swap usage:   0%                \r\n  Processes:    116\r\n\r\nLast login: {} from 192.168.1.5\r\n",
@@ -474,6 +467,16 @@ impl Handler for SshHandler {
     fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> impl Future<Output=Result<(), Self::Error>> + Send {
         async move {
             let command = String::from_utf8_lossy(data);
+            // Record command in database
+            match self.db_tx.send(DbMessage::RecordCommand {
+                auth_id: self.session_data.auth_id.clone(),
+                timestamp: Utc::now(),
+                command: command.to_string(),
+            }).await {
+                Ok(_) => { log::trace!("Send record command to db task") },
+                Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+            };
+
             let answer = format!("You thought I'm going to execute '{}'. But jokes on you. You are now my slave.", command);
             log::debug!("Exec request received: {}", command);
             log::debug!("Answering with: {}", answer);
@@ -800,7 +803,7 @@ impl server::Server for SshServerHandler {
             // Check cache for additional connection info
             if let Some(abuse_client) = &self.abuse_ip_client {
                 let cache = abuse_client.memory_cache.clone();
-                let cache_ttl_days = abuse_client.cache_ttl_days;
+                let cache_ttl_hours = abuse_client.cache_ttl_hours;
                 let ip_for_cache = ip.clone();
                 let peer_for_log = peer_addr;
                 
@@ -808,7 +811,7 @@ impl server::Server for SshServerHandler {
                     let cache_read = cache.read().await;
                     if let Some(cached) = cache_read.get(&ip_for_cache) {
                         let age = chrono::Utc::now() - cached.cached_at;
-                        if age < chrono::Duration::days(cache_ttl_days as i64) {
+                        if age < chrono::Duration::hours(cache_ttl_hours as i64) {
                             let data = &cached.response.data;
                             let country = data.country_code.as_deref().unwrap_or("Unknown");
                             let isp = data.isp.as_deref().unwrap_or("Unknown");
@@ -909,10 +912,6 @@ async fn handle_shell_session(
             }
             ChannelMsg::OpenFailure(_) => {
                 break;
-            }
-            ChannelMsg::Exec { want_reply: _, command } => {
-                let command = String::from_utf8_lossy(&command).to_string();
-                log::debug!("Exec command request: {}", command);
             }
             ChannelMsg::Eof => {
                 // TODO: Handle EOF

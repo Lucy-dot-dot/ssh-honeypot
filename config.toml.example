@@ -1,37 +1,79 @@
-# SSH Honeypot Configuration File
-# This is an example configuration file showing all available options
-# Copy to config.toml and modify as needed
+# SSH Honeypot Configuration Example
+# Copy this file to config.toml and modify as needed
 
-# Interfaces to listen on (can be IPv4 or IPv6)
+# PostgreSQL database connection URL
+# Format: postgresql://username:password@hostname:port/database_name
+# Default: Uses local PostgreSQL with honeypot user
+database_url = "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot"
+
+# Network interfaces to listen on (can specify multiple)
+# Default: ["0.0.0.0:2222", "[::]:2222"] (IPv4 and IPv6)
 interfaces = [
-    "0.0.0.0:2222",
-    "[::]:2222"
+    "0.0.0.0:2222",        # IPv4 all interfaces
+    "[::]:2222",           # IPv6 all interfaces  
+    # "192.168.1.100:22",  # Specific IPv4 interface
+    # "127.0.0.1:2223",    # Local testing
 ]
 
-# Database file path
-db_path = "honeypot.db"
+# Disable the interactive shell simulation (only log auth attempts)
+# Default: false
+disable_cli_interface = false
 
-# Disable the fake CLI interface (only log auth attempts)
-disable_cli_interface = true
+# SSH authentication banner (makes honeypot appear more realistic)
+# Default: none
+authentication_banner = "Ubuntu 22.04.3 LTS"
 
-# Authentication banner to show to clients
-authentication_banner = "Welcome to Ubuntu 20.04.3 LTS (GNU/Linux 5.4.0-88-generic x86_64)"
-
-# Enable tarpit mode to slow down attackers
+# Enable tarpit mode (slow responses to waste attacker time)
+# Default: false
 tarpit = false
 
-# Disable loading the base filesystem from tar.gz
+# Disable loading base filesystem from base.tar.gz
+# Default: false (loads debian 12 filesystem simulation)
 disable_base_tar_gz_loading = false
 
-# Path to the base filesystem tar.gz file
-base_tar_gz_path = "base.tar.gz"
+# Path to base filesystem archive (for realistic file simulation)
+# Default: uses XDG data directory or ./base.tar.gz
+# base_tar_gz_path = "/path/to/custom/base.tar.gz"
 
-# Directory to store SSH keys (optional - uses XDG config directory by default)
-# key_folder = "/tmp"
+# Directory containing SSH server keys
+# Default: uses XDG config directory or ./keys
+# key_folder = "/path/to/ssh/keys"
 
-# Network socket options
+# Network socket options (advanced)
 disable_so_reuseport = false
 disable_so_reuseaddr = false
 
 # Disable SFTP subsystem support
+# Default: false (SFTP enabled for file upload capture)
 disable_sftp = false
+
+# AbuseIPDB API key for IP reputation checking
+# Get your free API key at: https://www.abuseipdb.com/api
+# Default: none (AbuseIPDB integration disabled)
+abuse_ip_db_api_key = "your_api_key_here"
+
+# AbuseIPDB cache cleanup interval in hours
+# How often to clean up expired database cache entries (default: 24 hours)
+# Note: Cache entries expire after 24 hours but cleanup only happens at this interval
+abuse_ip_cache_cleanup_interval_hours = 24
+
+##############################################################################
+# Environment Variable Equivalents
+##############################################################################
+# All config options can also be set via environment variables:
+#
+# DATABASE_URL=postgresql://user:pass@host:port/db
+# INTERFACE=0.0.0.0:2222
+# DISABLE_CLI_INTERFACE=true
+# AUTHENTICATION_BANNER="Ubuntu 22.04.3 LTS"  
+# TARPIT=true
+# DISABLE_BASE_TAR_GZ_LOADING=true
+# BASE_TAR_GZ_PATH=/path/to/base.tar.gz
+# KEY_FOLDER=/path/to/keys
+# DISABLE_SO_REUSEPORT=true
+# DISABLE_SO_REUSEADDR=true
+# DISABLE_SFTP=true
+# ABUSE_IP_DB_API_KEY=your_api_key_here
+# ABUSE_IP_CACHE_CLEANUP_HOURS=24
+#
+# CLI arguments take precedence over config file, which takes precedence over environment variables.

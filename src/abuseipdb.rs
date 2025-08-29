@@ -1,17 +1,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::RwLock;
 use chrono::{DateTime, Utc, Duration};
 use reqwest::{Method, StatusCode};
 use reqwest::tls::Version;
 use serde::{Deserialize, Serialize};
-use crate::db::DbMessage;
+use sqlx::PgPool;
+use crate::db::{record_abuse_ip_check, get_abuse_ip_check};
 
-const DEFAULT_CACHE_TTL_DAYS: u8 = 7;
+const DEFAULT_CACHE_TTL_HOURS: u8 = 24;
 
 #[derive(Debug, Clone)]
 pub struct RateLimitInfo {
+    #[allow(dead_code)]
     pub limit: Option<u32>,
+    #[allow(dead_code)]
     pub remaining: Option<u32>,
     pub reset_timestamp: Option<u64>,
     pub retry_after_seconds: Option<u32>,
@@ -160,12 +163,12 @@ pub struct Client {
     client: reqwest::Client,
     api_key: String,
     pub memory_cache: Arc<RwLock<HashMap<String, CachedResult>>>,
-    db_tx: mpsc::Sender<DbMessage>,
-    pub cache_ttl_days: u8,
+    pool: PgPool,
+    pub cache_ttl_hours: u8,
 }
 
 impl Client {
-    pub fn new(api_key: String, db_tx: mpsc::Sender<DbMessage>, cache_ttl_days: Option<u8>) -> Self {
+    pub fn new(api_key: String, pool: PgPool, cache_ttl_hours: Option<u8>) -> Self {
         Self {
             client: reqwest::Client::builder()
                 .min_tls_version(Version::TLS_1_2)
@@ -178,8 +181,8 @@ impl Client {
                 .unwrap(),
             api_key,
             memory_cache: Arc::new(RwLock::new(HashMap::new())),
-            db_tx,
-            cache_ttl_days: cache_ttl_days.unwrap_or(DEFAULT_CACHE_TTL_DAYS),
+            pool,
+            cache_ttl_hours: cache_ttl_hours.unwrap_or(DEFAULT_CACHE_TTL_HOURS),
         }
     }
 
@@ -188,7 +191,7 @@ impl Client {
         let cache = self.memory_cache.read().await;
         if let Some(cached) = cache.get(ip_address) {
             let age = Utc::now() - cached.cached_at;
-            if age < Duration::days(self.cache_ttl_days as i64) {
+            if age < Duration::hours(self.cache_ttl_hours as i64) {
                 log::debug!("AbuseIPDB memory cache hit for IP: {}", ip_address);
                 return Ok(cached.response.clone());
             }
@@ -196,25 +199,27 @@ impl Client {
         drop(cache); // Release read lock
         
         // Check database cache
-        let (response_tx, response_rx) = oneshot::channel();
-        if let Err(e) = self.db_tx.send(DbMessage::GetAbuseIpCheck {
-            ip: ip_address.to_string(),
-            cache_ttl_days: self.cache_ttl_days,
-            response_tx,
-        }).await {
-            log::error!("Failed to send DB query for AbuseIPDB cache: {}", e);
-        } else if let Ok(Some((timestamp, response_data))) = response_rx.await {
-            log::debug!("AbuseIPDB database cache hit for IP: {}", ip_address);
-            let response = CheckResponse { data: response_data };
-            
-            // Update memory cache
-            let mut cache = self.memory_cache.write().await;
-            cache.insert(ip_address.to_string(), CachedResult {
-                response: response.clone(),
-                cached_at: timestamp,
-            });
-            
-            return Ok(response);
+        match get_abuse_ip_check(&self.pool, ip_address, self.cache_ttl_hours).await {
+            Ok(Some((timestamp, response_data))) => {
+                log::debug!("AbuseIPDB database cache hit for IP: {}", ip_address);
+                let response = CheckResponse { data: response_data };
+                
+                // Update memory cache
+                let mut cache = self.memory_cache.write().await;
+                cache.insert(ip_address.to_string(), CachedResult {
+                    response: response.clone(),
+                    cached_at: timestamp,
+                });
+                
+                return Ok(response);
+            },
+            Ok(None) => {
+                // No cache entry or expired - continue to API call
+            },
+            Err(e) => {
+                log::error!("Failed to query AbuseIPDB cache: {}", e);
+                // Continue to API call on database error
+            }
         }
         
         // Cache miss or expired, make API call
@@ -231,16 +236,17 @@ impl Client {
         drop(cache);
         
         // Store in database cache
-        if let Err(e) = self.db_tx.send(DbMessage::RecordAbuseIpCheck {
-            ip: ip_address.to_string(),
-            timestamp: now,
-            abuse_confidence_score: response.data.abuse_confidence_score,
-            country_code: response.data.country_code.clone(),
-            is_tor: response.data.is_tor,
-            is_whitelisted: response.data.is_whitelisted,
-            total_reports: response.data.total_reports,
-            response_data: serde_json::to_string(&response.data).unwrap_or_default(),
-        }).await {
+        if let Err(e) = record_abuse_ip_check(
+            &self.pool,
+            ip_address.to_string(),
+            now,
+            response.data.abuse_confidence_score,
+            response.data.country_code.clone(),
+            response.data.is_tor,
+            response.data.is_whitelisted,
+            response.data.total_reports,
+            serde_json::to_string(&response.data).unwrap_or_default(),
+        ).await {
             log::error!("Failed to cache AbuseIPDB result in database: {}", e);
         }
         
@@ -293,6 +299,7 @@ impl Client {
         }
     }
 
+    #[allow(dead_code)]
     // 2023-10-18T11:25:11-04:00 is the format of the timestamp
     pub async fn report_ip(&self, ip_address: &str, categories: &Vec<u8>, evidence: &str, timestamp: &str) -> Result<ReportResponse, reqwest::Error> {
         // Really rust? You could just do categories.join(","), but rust says no

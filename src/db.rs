@@ -1,14 +1,11 @@
-use std::path::PathBuf;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, Result as SqlResult};
+use sqlx::{PgPool, query, Row};
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 // Database message types
 #[derive(Debug)]
 pub enum DbMessage {
     RecordAuth {
-        id: String,
         timestamp: DateTime<Utc>,
         ip: String,
         username: String,
@@ -18,7 +15,6 @@ pub enum DbMessage {
         successful: bool,
     },
     RecordCommand {
-        id: String,
         auth_id: String,
         timestamp: DateTime<Utc>,
         command: String,
@@ -30,49 +26,32 @@ pub enum DbMessage {
         duration_seconds: i64,
     },
     RecordFileUpload {
-        id: String,
         auth_id: String,
         timestamp: DateTime<Utc>,
         filename: String,
         filepath: String,
         file_size: u64,
         file_hash: String,
-        claimed_mime_type: Option<String>,    // From file extension
-        detected_mime_type: Option<String>,   // From magic detection
-        format_mismatch: bool,                // Extension vs magic mismatch
-        file_entropy: Option<f64>,            // Entropy analysis
+        claimed_mime_type: Option<String>,
+        detected_mime_type: Option<String>,
+        format_mismatch: bool,
+        file_entropy: Option<f64>,
         binary_data: Vec<u8>,
-    },
-    RecordAbuseIpCheck {
-        ip: String,
-        timestamp: DateTime<Utc>,
-        abuse_confidence_score: Option<u8>,
-        country_code: Option<String>,
-        is_tor: bool,
-        is_whitelisted: Option<bool>,
-        total_reports: u32,
-        response_data: String, // JSON serialized CheckResponseData
-    },
-    GetAbuseIpCheck {
-        ip: String,
-        cache_ttl_days: u8,
-        response_tx: tokio::sync::oneshot::Sender<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>>,
     },
     Shutdown,
 }
 
 // Database handler function that runs in its own task
-pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf) {
-    log::trace!("start db handler");
-    log::debug!("Using path to db: {}", db_path.display());
-    // Create database connection
-    let conn = match initialize_database(&db_path) {
-        Ok(conn) => {
-            log::trace!("db connection successful and initialized");
-            conn
+pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
+    log::trace!("Starting PostgreSQL database handler");
+    
+    // Verify database connection
+    match pool.acquire().await {
+        Ok(_) => {
+            log::trace!("Database connection pool initialized successfully");
         },
         Err(e) => {
-            log::error!("Failed to initialize database: {}", e);
+            log::error!("Failed to acquire database connection: {}", e);
             log::error!("========================================");
             log::error!("🐉 DATABASE FAILED TO INITIALIZE 🐉");
             log::error!("🚨 ATTACK DATA WILL NOT BE SAVED 🚨");
@@ -80,162 +59,60 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, db_path: PathBuf)
             log::error!("========================================");
             return;
         }
-    };
+    }
 
     // Process database messages
     while let Some(msg) = rx.recv().await {
-        log::trace!("handle msg: {:?}", msg);
+        log::trace!("Processing database message: {:?}", msg);
         match msg {
-            DbMessage::RecordAuth { id, timestamp, ip, username, auth_type, password, public_key, successful } => {
+            DbMessage::RecordAuth { timestamp, ip, username, auth_type, password, public_key, successful } => {
                 if let Err(e) = record_auth(
-                    &conn, id, timestamp, ip, username, auth_type,
+                    &pool, timestamp, ip, username, auth_type,
                     password, public_key, successful
-                ) {
+                ).await {
                     log::error!("Database error recording auth: {}", e);
                 }
             },
-            DbMessage::RecordCommand { id, auth_id, timestamp, command } => {
-                if let Err(e) = record_command(&conn, id, auth_id, timestamp, command) {
+            DbMessage::RecordCommand { auth_id, timestamp, command } => {
+                if let Err(e) = record_command(&pool, auth_id, timestamp, command).await {
                     log::error!("Database error recording command: {}", e);
                 }
             },
             DbMessage::RecordSession { auth_id, start_time, end_time, duration_seconds } => {
-                let id = Uuid::new_v4().to_string();
-                if let Err(e) = record_session(&conn, &id, auth_id, start_time, end_time, duration_seconds) {
+                if let Err(e) = record_session(&pool, auth_id, start_time, end_time, duration_seconds).await {
                     log::error!("Database error recording session: {}", e);
                 }
             },
-            DbMessage::RecordFileUpload { id, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data } => {
-                if let Err(e) = record_file_upload(&conn, id, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data) {
+            DbMessage::RecordFileUpload { auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data } => {
+                if let Err(e) = record_file_upload(&pool, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data).await {
                     log::error!("Database error recording file upload: {}", e);
                 }
             },
-            DbMessage::RecordAbuseIpCheck { ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data } => {
-                if let Err(e) = record_abuse_ip_check(&conn, ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data) {
-                    log::error!("Database error recording AbuseIPDB check: {}", e);
-                }
-            },
-            DbMessage::GetAbuseIpCheck { ip, cache_ttl_days, response_tx } => {
-                let result = get_abuse_ip_check(&conn, &ip, cache_ttl_days);
-                let _ = response_tx.send(result.ok().flatten());
-            },
             DbMessage::Shutdown => {
+                log::info!("Database handler shutting down");
                 break;
             }
         }
     }
-    log::trace!("db handler stopped");
+    log::trace!("Database handler stopped");
 }
 
-// Initialize the SQLite database
-fn initialize_database(db_path: &PathBuf) -> SqlResult<Connection> {
-    log::trace!("Opening db file");
-    let conn = Connection::open(db_path)?;
-
-    log::trace!("Adding auth table if not existing");
-    // Create auth table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS auth (
-            id TEXT PRIMARY KEY,
-            timestamp TEXT NOT NULL,
-            ip TEXT NOT NULL,
-            username TEXT NOT NULL,
-            auth_type TEXT NOT NULL,
-            password TEXT,
-            public_key TEXT,
-            successful INTEGER NOT NULL
-        )",
-        [],
-    )?;
-
-    log::trace!("Adding commands table if not existing");
-    // Create commands table with foreign key to auth
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS commands (
-            id TEXT PRIMARY KEY,
-            auth_id TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            command TEXT NOT NULL,
-            FOREIGN KEY(auth_id) REFERENCES auth(id)
-        )",
-        [],
-    )?;
-
-    log::trace!("Adding sessions table if not existing");
-    // Create sessions table with foreign key to auth
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS sessions (
-            auth_id TEXT PRIMARY KEY,
-            start_time TEXT NOT NULL,
-            end_time TEXT NOT NULL,
-            duration_seconds INTEGER NOT NULL,
-            FOREIGN KEY(auth_id) REFERENCES auth(id)
-        )",
-        [],
-    )?;
-
-    conn.execute(
-        "DROP TABLE IF EXISTS sessions;",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            auth_id TEXT NOT NULL,
-            start_time TEXT NOT NULL,
-            end_time TEXT NOT NULL,
-            duration_seconds INTEGER NOT NULL,
-            FOREIGN KEY(auth_id) REFERENCES auth(id)
-        )",
-        [],
-    )?;
-
-
-    log::trace!("Adding uploaded_files table if not existing");
-    // Create uploaded_files table with foreign key to auth
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS uploaded_files (
-            id TEXT PRIMARY KEY,
-            auth_id TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            filepath TEXT NOT NULL,
-            file_size INTEGER NOT NULL,
-            file_hash TEXT NOT NULL,
-            claimed_mime_type TEXT,
-            detected_mime_type TEXT,
-            format_mismatch INTEGER NOT NULL,
-            file_entropy REAL,
-            binary_data BLOB NOT NULL,
-            FOREIGN KEY(auth_id) REFERENCES auth(id)
-        )",
-        [],
-    )?;
-
-    log::trace!("Adding abuse_ip_cache table if not existing");
-    // Create abuse_ip_cache table for caching AbuseIPDB responses
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS abuse_ip_cache (
-            ip TEXT PRIMARY KEY,
-            timestamp TEXT NOT NULL,
-            abuse_confidence_score INTEGER,
-            country_code TEXT,
-            is_tor INTEGER NOT NULL,
-            is_whitelisted INTEGER,
-            total_reports INTEGER NOT NULL,
-            response_data TEXT NOT NULL
-        )",
-        [],
-    )?;
-
-    Ok(conn)
+// Initialize database connection pool and run migrations
+pub async fn initialize_database_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    log::trace!("Connecting to PostgreSQL database");
+    
+    let pool = PgPool::connect(database_url).await?;
+    
+    log::trace!("Running database migrations");
+    sqlx::migrate!("./migrations").run(&pool).await?;
+    
+    log::info!("Database initialized successfully");
+    Ok(pool)
 }
 
 // Record authentication attempt in database
-fn record_auth(
-    conn: &Connection,
-    id: String,
+async fn record_auth(
+    pool: &PgPool,
     timestamp: DateTime<Utc>,
     ip: String,
     username: String,
@@ -243,80 +120,75 @@ fn record_auth(
     password: Option<String>,
     public_key: Option<String>,
     successful: bool,
-) -> SqlResult<()> {
-    let pass = password.unwrap_or(String::new());
-    let key = public_key.unwrap_or(String::new());
-    log::trace!("Recording into auth table: {}, {}, {}, {}, {}, {}, {}, {},", id, timestamp.to_rfc3339(), ip, username, auth_type, pass, key, successful);
-    conn.execute(
-        "INSERT INTO auth (id, timestamp, ip, username, auth_type, password, public_key, successful)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![
-            id,
-            timestamp.to_rfc3339(),
-            ip,
-            username,
-            auth_type,
-            pass,
-            key,
-            successful as i32,
-        ],
-    )?;
+) -> Result<(), sqlx::Error> {
+    log::trace!("Recording auth attempt: {} from {}", username, ip);
+    
+    query(
+        "INSERT INTO auth (timestamp, ip, username, auth_type, password, public_key, successful)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)"
+    )
+    .bind(timestamp)
+    .bind(&ip.to_string())
+    .bind(username)
+    .bind(auth_type)
+    .bind(password)
+    .bind(public_key)
+    .bind(successful)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
 
 // Record command in database
-fn record_command(
-    conn: &Connection,
-    id: String,
+async fn record_command(
+    pool: &PgPool,
     auth_id: String,
     timestamp: DateTime<Utc>,
     command: String,
-) -> SqlResult<()> {
-    log::trace!("Recording into command table: {}, {}, {}, {}",  id, timestamp.to_rfc3339(), command, timestamp);
-    conn.execute(
-        "INSERT INTO commands (id, auth_id, timestamp, command)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![
-            id,
-            auth_id,
-            timestamp.to_rfc3339(),
-            command,
-        ],
-    )?;
+) -> Result<(), sqlx::Error> {
+    log::trace!("Recording command: {}", command);
+    
+    query(
+        "INSERT INTO commands (auth_id, timestamp, command)
+         VALUES ($1, $2, $3)"
+    )
+    .bind(&auth_id)
+    .bind(timestamp)
+    .bind(command)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
 
 // Record session in database
-fn record_session(
-    conn: &Connection,
-    id: &str,
+async fn record_session(
+    pool: &PgPool,
     auth_id: String,
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
     duration_seconds: i64,
-) -> SqlResult<()> {
-    log::trace!("Recording into session table: {}, {}, {}, {}, {}", id, auth_id, start_time.to_rfc3339(), end_time.to_rfc3339(), duration_seconds);
-    conn.execute(
-        "INSERT INTO sessions (id, auth_id, start_time, end_time, duration_seconds)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
-            id,
-            auth_id,
-            start_time.to_rfc3339(),
-            end_time.to_rfc3339(),
-            duration_seconds,
-        ],
-    )?;
+) -> Result<(), sqlx::Error> {
+    log::trace!("Recording session: {} duration {} seconds", auth_id, duration_seconds);
+    
+    query(
+        "INSERT INTO sessions (auth_id, start_time, end_time, duration_seconds)
+         VALUES ($1, $2, $3, $4)"
+    )
+    .bind(&auth_id)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(duration_seconds)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
 
 // Record file upload in database
-fn record_file_upload(
-    conn: &Connection,
-    id: String,
+async fn record_file_upload(
+    pool: &PgPool,
     auth_id: String,
     timestamp: DateTime<Utc>,
     filename: String,
@@ -328,38 +200,34 @@ fn record_file_upload(
     format_mismatch: bool,
     file_entropy: Option<f64>,
     binary_data: Vec<u8>,
-) -> SqlResult<()> {
-    let claimed_mime_str = claimed_mime_type.unwrap_or_default();
-    let detected_mime_str = detected_mime_type.unwrap_or_default();
+) -> Result<(), sqlx::Error> {
+    log::trace!("Recording file upload: {} ({} bytes)", filename, binary_data.len());
     
-    log::trace!("Recording into uploaded_files table: {}, {}, {}, {}, {}, {}, {}, claimed: {}, detected: {}, mismatch: {}, entropy: {:?}, {} bytes", 
-               id, auth_id, timestamp.to_rfc3339(), filename, filepath, file_size, file_hash, claimed_mime_str, detected_mime_str, format_mismatch, file_entropy, binary_data.len());
-    
-    conn.execute(
-        "INSERT INTO uploaded_files (id, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![
-            id,
-            auth_id,
-            timestamp.to_rfc3339(),
-            filename,
-            filepath,
-            file_size as i64,
-            file_hash,
-            claimed_mime_str,
-            detected_mime_str,
-            format_mismatch as i64,
-            file_entropy,
-            binary_data,
-        ],
-    )?;
+    query(
+        "INSERT INTO uploaded_files (auth_id, timestamp, filename, filepath, file_size, file_hash, 
+                                   claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
+    )
+    .bind(&auth_id)
+    .bind(timestamp)
+    .bind(filename)
+    .bind(filepath)
+    .bind(file_size as i64)
+    .bind(file_hash)
+    .bind(claimed_mime_type)
+    .bind(detected_mime_type)
+    .bind(format_mismatch)
+    .bind(file_entropy)
+    .bind(binary_data)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
 
 // Record AbuseIPDB check result in database
-fn record_abuse_ip_check(
-    conn: &Connection,
+pub async fn record_abuse_ip_check(
+    pool: &PgPool,
     ip: String,
     timestamp: DateTime<Utc>,
     abuse_confidence_score: Option<u8>,
@@ -368,67 +236,75 @@ fn record_abuse_ip_check(
     is_whitelisted: Option<bool>,
     total_reports: u32,
     response_data: String,
-) -> SqlResult<()> {
+) -> Result<(), sqlx::Error> {
+    let response_json: serde_json::Value = serde_json::from_str(&response_data)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    
     log::trace!("Recording AbuseIPDB check for IP: {}", ip);
     
-    conn.execute(
-        "INSERT OR REPLACE INTO abuse_ip_cache (ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![
-            ip,
-            timestamp.to_rfc3339(),
-            abuse_confidence_score.map(|s| s as i64),
-            country_code,
-            is_tor as i64,
-            is_whitelisted.map(|w| w as i64),
-            total_reports as i64,
-            response_data,
-        ],
-    )?;
+    query(
+        "INSERT INTO abuse_ip_cache (ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (ip) DO UPDATE SET
+            timestamp = EXCLUDED.timestamp,
+            abuse_confidence_score = EXCLUDED.abuse_confidence_score,
+            country_code = EXCLUDED.country_code,
+            is_tor = EXCLUDED.is_tor,
+            is_whitelisted = EXCLUDED.is_whitelisted,
+            total_reports = EXCLUDED.total_reports,
+            response_data = EXCLUDED.response_data"
+    )
+    .bind(&ip.to_string())
+    .bind(timestamp)
+    .bind(abuse_confidence_score.map(|s| s as i16))
+    .bind(country_code)
+    .bind(is_tor)
+    .bind(is_whitelisted)
+    .bind(total_reports as i32)
+    .bind(response_json)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
 
-// Get AbuseIPDB check result from database if not expired
-fn get_abuse_ip_check(
-    conn: &Connection,
+// Get AbuseIPDB check result from database with automatic expiration
+pub async fn get_abuse_ip_check(
+    pool: &PgPool,
     ip: &str,
-    cache_ttl_days: u8,
-) -> SqlResult<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>> {
-    let mut stmt = conn.prepare(
-        "SELECT timestamp, response_data FROM abuse_ip_cache WHERE ip = ?1"
-    )?;
+    cache_ttl_hours: u8,
+) -> Result<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>, sqlx::Error> {
     
-    let result = stmt.query_row([ip], |row| {
-        let timestamp_str: String = row.get(0)?;
-        let response_data: String = row.get(1)?;
-        
-        let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
-            .map_err(|e| rusqlite::Error::InvalidColumnType(0, format!("Invalid timestamp: {}", e).into(), rusqlite::types::Type::Text))?
-            .with_timezone(&Utc);
-            
-        let response: crate::abuseipdb::CheckResponseData = serde_json::from_str(&response_data)
-            .map_err(|e| rusqlite::Error::InvalidColumnType(1, format!("Invalid JSON: {}", e).into(), rusqlite::types::Type::Text))?;
-            
-        Ok((timestamp, response))
-    });
+    let result = query(
+        "SELECT timestamp, response_data 
+         FROM abuse_ip_cache 
+         WHERE ip = $1 
+           AND timestamp > NOW() - INTERVAL '1 hour' * $2"
+    )
+    .bind(&ip.to_string())
+    .bind(cache_ttl_hours as i32)
+    .fetch_optional(pool)
+    .await?;
     
     match result {
-        Ok((timestamp, response)) => {
-            // Check if result is expired (older than cache_ttl_days)
-            let age = Utc::now() - timestamp;
-            if age.num_days() >= cache_ttl_days as i64 {
-                log::debug!("AbuseIPDB cache entry expired for IP: {} (age: {} days, TTL: {} days)", ip, age.num_days(), cache_ttl_days);
-                Ok(None)
-            } else {
-                log::debug!("AbuseIPDB cache hit from database for IP: {}", ip);
-                Ok(Some((timestamp, response)))
+        Some(row) => {
+            let timestamp: DateTime<Utc> = row.get("timestamp");
+            let response_data: serde_json::Value = row.get("response_data");
+            
+            match serde_json::from_value::<crate::abuseipdb::CheckResponseData>(response_data) {
+                Ok(response) => {
+                    log::debug!("AbuseIPDB cache hit from database for IP: {}", ip);
+                    Ok(Some((timestamp, response)))
+                },
+                Err(e) => {
+                    log::error!("Failed to deserialize cached AbuseIPDB data for {}: {}", ip, e);
+                    Ok(None)
+                }
             }
         },
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            log::debug!("No AbuseIPDB cache entry found for IP: {}", ip);
+        None => {
+            log::debug!("No valid AbuseIPDB cache entry found for IP: {}", ip);
             Ok(None)
-        },
-        Err(e) => Err(e),
+        }
     }
 }

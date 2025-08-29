@@ -6,7 +6,6 @@ use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode, Status, Handle
 use russh_sftp::server::Handler;
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, RwLock};
-use uuid::Uuid;
 
 use crate::db::DbMessage;
 use crate::shell::filesystem::fs2::{FileContent, FileSystem};
@@ -135,7 +134,7 @@ impl Handler for HoneypotSftpSession {
             log::debug!("SFTP open request: id={}, path={}, flags={:?}", id, path, flags);
             
             // For simplicity, always create a handle for honeypot purposes
-            let handle = format!("handle_{}_{}", id, Uuid::new_v4());
+            let handle = format!("handle_{}_{}", id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
             
             // If it's a write operation, we'll track it for file upload logging
             if flags.contains(OpenFlags::CREATE) || flags.contains(OpenFlags::WRITE) {
@@ -218,11 +217,9 @@ impl Handler for HoneypotSftpSession {
             }
             
             // Record in database with enhanced analysis
-            let file_id = Uuid::new_v4().to_string();
             let file_size = data.len() as u64;
             
             match db_tx.send(DbMessage::RecordFileUpload {
-                id: file_id,
                 auth_id,
                 timestamp: Utc::now(),
                 filename,
@@ -253,7 +250,7 @@ impl Handler for HoneypotSftpSession {
         
         async move {
             log::debug!("SFTP opendir request: id={}, path={}", id, path);
-            let handle = format!("dir_handle_{}_{}", id, Uuid::new_v4());
+            let handle = format!("dir_handle_{}_{}", id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
             Ok(Handle { id, handle })
         }
     }
