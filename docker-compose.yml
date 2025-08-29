@@ -9,7 +9,15 @@ services:
       POSTGRES_PASSWORD: honeypot
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     ports:
-      - "5432:5432"
+      # Standard way to expose the port on everything
+      # - "5432:5432"
+      # Very verbose way to expose the port on localhost
+      - protocol: tcp
+        mode: host
+        host_ip: 127.0.0.1
+        name: postgres-ipv4
+        published: 5432
+        target: 5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d/
@@ -26,12 +34,9 @@ services:
       DISABLE_CLI_INTERFACE: true
       DATABASE_URL: postgresql://honeypot:honeypot@postgres:5432/ssh_honeypot
     volumes:
-      # For this to work, the db directory has to be created beforehand. And owned by 1000:1000 or world writeable.
-      - ./db:/db
       - source: ./config.toml
         target: /config.toml
         type: bind
-    dns_search: []
     ports:
       - protocol: tcp
         mode: host
