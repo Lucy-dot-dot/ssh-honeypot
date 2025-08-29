@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, query, Row};
+use sqlx::types::uuid::Uuid;
 use tokio::sync::mpsc;
 
 // Database message types
@@ -13,6 +14,7 @@ pub enum DbMessage {
         password: Option<String>,
         public_key: Option<String>,
         successful: bool,
+        response_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
     RecordCommand {
         auth_id: String,
@@ -24,6 +26,7 @@ pub enum DbMessage {
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
         duration_seconds: i64,
+        response_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
     RecordFileUpload {
         auth_id: String,
@@ -65,23 +68,37 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
     while let Some(msg) = rx.recv().await {
         log::trace!("Processing database message: {:?}", msg);
         match msg {
-            DbMessage::RecordAuth { timestamp, ip, username, auth_type, password, public_key, successful } => {
-                if let Err(e) = record_auth(
+            DbMessage::RecordAuth { timestamp, ip, username, auth_type, password, public_key, successful, response_tx } => {
+                let result = record_auth(
                     &pool, timestamp, ip, username, auth_type,
                     password, public_key, successful
-                ).await {
-                    log::error!("Database error recording auth: {}", e);
-                }
+                ).await;
+                
+                let response = match result {
+                    Ok(auth_id) => Ok(auth_id),
+                    Err(e) => {
+                        log::error!("Database error recording auth: {}", e);
+                        Err(e.to_string())
+                    }
+                };
+                let _ = response_tx.send(response);
             },
             DbMessage::RecordCommand { auth_id, timestamp, command } => {
                 if let Err(e) = record_command(&pool, auth_id, timestamp, command).await {
                     log::error!("Database error recording command: {}", e);
                 }
             },
-            DbMessage::RecordSession { auth_id, start_time, end_time, duration_seconds } => {
-                if let Err(e) = record_session(&pool, auth_id, start_time, end_time, duration_seconds).await {
-                    log::error!("Database error recording session: {}", e);
-                }
+            DbMessage::RecordSession { auth_id, start_time, end_time, duration_seconds, response_tx } => {
+                let result = record_session(&pool, auth_id, start_time, end_time, duration_seconds).await;
+                
+                let response = match result {
+                    Ok(session_id) => Ok(session_id),
+                    Err(e) => {
+                        log::error!("Database error recording session: {}", e);
+                        Err(e.to_string())
+                    }
+                };
+                let _ = response_tx.send(response);
             },
             DbMessage::RecordFileUpload { auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data } => {
                 if let Err(e) = record_file_upload(&pool, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data).await {
@@ -110,7 +127,7 @@ pub async fn initialize_database_pool(database_url: &str) -> Result<PgPool, sqlx
     Ok(pool)
 }
 
-// Record authentication attempt in database
+// Record authentication attempt in database and return the generated UUID
 async fn record_auth(
     pool: &PgPool,
     timestamp: DateTime<Utc>,
@@ -120,12 +137,13 @@ async fn record_auth(
     password: Option<String>,
     public_key: Option<String>,
     successful: bool,
-) -> Result<(), sqlx::Error> {
+) -> Result<String, sqlx::Error> {
     log::trace!("Recording auth attempt: {} from {}", username, ip);
     
-    query(
+    let row = query(
         "INSERT INTO auth (timestamp, ip, username, auth_type, password, public_key, successful)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)"
+         VALUES ($1, $2::inet, $3, $4, $5, $6, $7)
+         RETURNING id"
     )
     .bind(timestamp)
     .bind(&ip.to_string())
@@ -134,10 +152,11 @@ async fn record_auth(
     .bind(password)
     .bind(public_key)
     .bind(successful)
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
 
-    Ok(())
+    let auth_id: Uuid = row.get("id");
+    Ok(auth_id.to_string())
 }
 
 // Record command in database
@@ -151,7 +170,7 @@ async fn record_command(
     
     query(
         "INSERT INTO commands (auth_id, timestamp, command)
-         VALUES ($1, $2, $3)"
+         VALUES ($1::uuid, $2, $3)"
     )
     .bind(&auth_id)
     .bind(timestamp)
@@ -162,28 +181,30 @@ async fn record_command(
     Ok(())
 }
 
-// Record session in database
+// Record session in database and return the generated UUID
 async fn record_session(
     pool: &PgPool,
     auth_id: String,
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
     duration_seconds: i64,
-) -> Result<(), sqlx::Error> {
+) -> Result<String, sqlx::Error> {
     log::trace!("Recording session: {} duration {} seconds", auth_id, duration_seconds);
     
-    query(
+    let row = query(
         "INSERT INTO sessions (auth_id, start_time, end_time, duration_seconds)
-         VALUES ($1, $2, $3, $4)"
+         VALUES ($1::uuid, $2, $3, $4)
+         RETURNING id"
     )
     .bind(&auth_id)
     .bind(start_time)
     .bind(end_time)
     .bind(duration_seconds)
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
 
-    Ok(())
+    let session_id: Uuid = row.get("id");
+    Ok(session_id.to_string())
 }
 
 // Record file upload in database
@@ -244,7 +265,7 @@ pub async fn record_abuse_ip_check(
     
     query(
         "INSERT INTO abuse_ip_cache (ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (ip) DO UPDATE SET
             timestamp = EXCLUDED.timestamp,
             abuse_confidence_score = EXCLUDED.abuse_confidence_score,
@@ -278,7 +299,7 @@ pub async fn get_abuse_ip_check(
     let result = query(
         "SELECT timestamp, response_data 
          FROM abuse_ip_cache 
-         WHERE ip = $1 
+         WHERE ip = $1::inet
            AND timestamp > NOW() - INTERVAL '1 hour' * $2"
     )
     .bind(&ip.to_string())

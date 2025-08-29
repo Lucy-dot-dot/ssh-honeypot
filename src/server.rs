@@ -65,9 +65,7 @@ impl Handler for SshHandler {
             }
             let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))).ip());
 
-            // Generate a UUID for this auth attempt
-            let auth_id = format!("auth_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-            self.auth_id = Some(auth_id.clone());
+            // We'll get the actual UUID back from the database
 
             log::info!("Password auth attempt - Username: {}, Password: {}, IP: {}", user, password, peer_str);
 
@@ -101,7 +99,8 @@ impl Handler for SshHandler {
                 }
             }
 
-            // Record authentication attempt in database
+            // Record authentication attempt in database and get the UUID back
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             match self.db_tx.send(DbMessage::RecordAuth {
                 timestamp: Utc::now(),
                 ip: peer_str,
@@ -110,8 +109,22 @@ impl Handler for SshHandler {
                 password: Some(password.to_string()),
                 public_key: None,
                 successful: true, // We're accepting all auth in honeypot
+                response_tx,
             }).await {
-                Ok(_) => { log::trace!("Send RecordAuth to db task") },
+                Ok(_) => {
+                    match response_rx.await {
+                        Ok(Ok(auth_id)) => {
+                            log::trace!("Recorded auth with UUID: {}", auth_id);
+                            self.auth_id = Some(auth_id);
+                        },
+                        Ok(Err(e)) => {
+                            log::error!("Database error recording auth: {}", e);
+                        },
+                        Err(e) => {
+                            log::error!("Failed to receive auth response: {}", e);
+                        }
+                    }
+                },
                 Err(err) => { log::error!("Failed to send RecordAuth to db task: {}", err) },
             };
 
@@ -140,9 +153,7 @@ impl Handler for SshHandler {
             let key_str = format!("{}", public_key.key_data().fingerprint(HashAlg::Sha512));
             let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))).ip());
 
-            // Generate a UUID for this auth attempt
-            let auth_id = format!("auth_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-            self.auth_id = Some(auth_id.clone());
+            // We'll get the actual UUID back from the database
 
             log::info!("Public key auth attempt - Username: {}, Key: {}, IP: {}", user, key_str, peer_str);
 
@@ -176,7 +187,8 @@ impl Handler for SshHandler {
                 }
             }
 
-            // Record authentication attempt in database
+            // Record authentication attempt in database and get the UUID back
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             match self.db_tx.send(DbMessage::RecordAuth {
                 timestamp: Utc::now(),
                 ip: peer_str,
@@ -185,8 +197,22 @@ impl Handler for SshHandler {
                 password: None,
                 public_key: Some(key_str),
                 successful: true, // We're accepting all auth in honeypot
+                response_tx,
             }).await {
-                Ok(_) => { log::trace!("Send RecordAuth to db task") },
+                Ok(_) => {
+                    match response_rx.await {
+                        Ok(Ok(auth_id)) => {
+                            log::trace!("Recorded auth with UUID: {}", auth_id);
+                            self.auth_id = Some(auth_id);
+                        },
+                        Ok(Err(e)) => {
+                            log::error!("Database error recording auth: {}", e);
+                        },
+                        Err(e) => {
+                            log::error!("Failed to receive auth response: {}", e);
+                        }
+                    }
+                },
                 Err(err) => { log::error!("Failed to send RecordAuth to db task: {}", err) },
             };
 
@@ -262,6 +288,12 @@ impl Handler for SshHandler {
         session: &mut Session,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
+            if self.disable_cli_interface {
+                log::debug!("Cli interface is disabled");
+                session.channel_failure(channel)?;
+                return Ok(())
+            }
+
             if data[0] == 4 {
                 log::debug!("Client requested closing of connection");
                 match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
@@ -928,14 +960,26 @@ async fn handle_shell_session(
 
     log::info!("Session closed for {}. Session start {}, Session end: {}, Duration: {}", session_data.auth_id, session_data.start_time, end_time, duration);
     // Log session end to database
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
     match db_tx.send(DbMessage::RecordSession {
         auth_id: session_data.auth_id,
         start_time: session_data.start_time,
         end_time,
         duration_seconds: duration.num_seconds(),
+        response_tx,
     }).await {
         Ok(_) => {
-            log::trace!("Successfully recorded session");
+            match response_rx.await {
+                Ok(Ok(session_id)) => {
+                    log::trace!("Successfully recorded session with ID: {}", session_id);
+                },
+                Ok(Err(e)) => {
+                    log::error!("Database error recording session: {}", e);
+                },
+                Err(e) => {
+                    log::error!("Failed to receive session response: {}", e);
+                }
+            }
         },
         Err(e) => {
             log::error!("Error sending session record: {}", e);
