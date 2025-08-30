@@ -85,7 +85,7 @@ impl Handler for SshHandler {
                             if let Some(retry_after) = info.retry_after_seconds {
                                 log::warn!("AbuseIPDB daily rate limit exceeded for {}. Retry after {} seconds", ip, retry_after);
                             } else if let Some(reset_timestamp) = info.reset_timestamp {
-                                let now = chrono::Utc::now().timestamp() as u64;
+                                let now = Utc::now().timestamp() as u64;
                                 let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
                                 log::warn!("AbuseIPDB daily rate limit exceeded for {}. Resets in {} seconds", ip, wait_seconds);
                             } else {
@@ -173,7 +173,7 @@ impl Handler for SshHandler {
                             if let Some(retry_after) = info.retry_after_seconds {
                                 log::warn!("AbuseIPDB daily rate limit exceeded for {}. Retry after {} seconds", ip, retry_after);
                             } else if let Some(reset_timestamp) = info.reset_timestamp {
-                                let now = chrono::Utc::now().timestamp() as u64;
+                                let now = Utc::now().timestamp() as u64;
                                 let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
                                 log::warn!("AbuseIPDB daily rate limit exceeded for {}. Resets in {} seconds", ip, wait_seconds);
                             } else {
@@ -818,7 +818,7 @@ impl server::Server for SshServerHandler {
                             if let Some(retry_after) = info.retry_after_seconds {
                                 log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Retry after {} seconds", ip_clone, retry_after);
                             } else if let Some(reset_timestamp) = info.reset_timestamp {
-                                let now = chrono::Utc::now().timestamp() as u64;
+                                let now = Utc::now().timestamp() as u64;
                                 let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
                                 log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Resets in {} seconds", ip_clone, wait_seconds);
                             } else {
@@ -842,7 +842,7 @@ impl server::Server for SshServerHandler {
                 tokio::spawn(async move {
                     let cache_read = cache.read().await;
                     if let Some(cached) = cache_read.get(&ip_for_cache) {
-                        let age = chrono::Utc::now() - cached.cached_at;
+                        let age = Utc::now() - cached.cached_at;
                         if age < chrono::Duration::hours(cache_ttl_hours as i64) {
                             let data = &cached.response.data;
                             let country = data.country_code.as_deref().unwrap_or("Unknown");
@@ -863,6 +863,17 @@ impl server::Server for SshServerHandler {
             } else {
                 log::info!("New connection from: {:?}", peer_addr);
             }
+
+            let db_tx = self.db_tx.clone();
+            tokio::spawn(async move {
+                match db_tx.send(DbMessage::RecordConnect {
+                    ip: peer_addr.ip().to_string(),
+                    timestamp: Utc::now(),
+                }).await {
+                    Ok(_) => { log::trace!("Send record command to db task") },
+                    Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+                };
+            });
         } else {
             log::info!("New connection from unknown peer, what is this?");
         }

@@ -6,6 +6,10 @@ use tokio::sync::mpsc;
 // Database message types
 #[derive(Debug)]
 pub enum DbMessage {
+    RecordConnect {
+        timestamp: DateTime<Utc>,
+        ip: String,
+    },
     RecordAuth {
         timestamp: DateTime<Utc>,
         ip: String,
@@ -68,6 +72,16 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
     while let Some(msg) = rx.recv().await {
         log::trace!("Processing database message: {:?}", msg);
         match msg {
+            DbMessage::RecordConnect { timestamp, ip } => {
+                match record_connect(&pool, timestamp, ip).await {
+                    Ok(_) => {
+                        log::trace!("Connection recorded");
+                    }
+                    Err(err) => {
+                        log::error!("Failed to record connect event: {}", err);
+                    }
+                };
+            }
             DbMessage::RecordAuth { timestamp, ip, username, auth_type, password, public_key, successful, response_tx } => {
                 let result = record_auth(
                     &pool, timestamp, ip, username, auth_type,
@@ -157,6 +171,23 @@ async fn record_auth(
 
     let auth_id: Uuid = row.get("id");
     Ok(auth_id.to_string())
+}
+
+// Record connection attempt in database
+async fn record_connect(
+    pool: &PgPool,
+    timestamp: DateTime<Utc>,
+    ip: String
+) -> Result<(), sqlx::Error> {
+    log::trace!("Recording connection attempt from {}", ip);
+
+    query("INSERT INTO conn_track (timestamp, ip) VALUES ($1, $2::inet")
+        .bind(timestamp)
+        .bind(&ip.to_string())
+        .execute(pool)
+        .await?;
+
+    Ok(())
 }
 
 // Record command in database
