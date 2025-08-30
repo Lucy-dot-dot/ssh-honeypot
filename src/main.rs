@@ -19,7 +19,6 @@ use shell::filesystem::fs2::FileSystem;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use reqwest::Method;
 use tokio::net::{TcpListener, TcpSocket};
 use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
@@ -33,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_module("hyper_util", log::LevelFilter::Info)
         .filter_module("reqwest", log::LevelFilter::Info)
         .filter_module("sqlx", log::LevelFilter::Info)
+        .filter_module("h2", log::LevelFilter::Info)
         .init();
 
     let app = match App::load() {
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
         server_id: SshId::Standard(String::from("SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4")), // Mimic a real SSH server
         keys: vec![keys.ed25519, keys.rsa, keys.ecdsa],
-        methods: MethodSet(vec![MethodKind::PublicKey, MethodKind::Password, MethodKind::KeyboardInteractive]),
+        methods: (&[MethodKind::PublicKey, MethodKind::Password, MethodKind::KeyboardInteractive]).as_slice().into(),
         ..Default::default()
     };
     log::trace!("Finished generating keys");
