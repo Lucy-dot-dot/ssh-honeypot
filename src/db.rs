@@ -181,7 +181,7 @@ async fn record_connect(
 ) -> Result<(), sqlx::Error> {
     log::trace!("Recording connection attempt from {}", ip);
 
-    query("INSERT INTO conn_track (timestamp, ip) VALUES ($1, $2::inet")
+    query("INSERT INTO conn_track (timestamp, ip) VALUES ($1, $2::inet)")
         .bind(timestamp)
         .bind(&ip.to_string())
         .execute(pool)
