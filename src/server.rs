@@ -919,6 +919,9 @@ impl server::Server for SshServerHandler {
                     }
                 }
             },
+            Error::Elapsed(_) => {
+                log::warn!("Session timed out");
+            }
             _ => {
                 log::error!("Session error: {:#?}", error);
             }
