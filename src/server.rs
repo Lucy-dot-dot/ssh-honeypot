@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
-use russh::{server, Channel, ChannelId, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, CryptoVec, Error};
+use russh::{server, Channel, ChannelId, ChannelMsg, ChannelWriteHalf, CryptoVec, Error};
 use russh::keys::{HashAlg, PublicKey};
 use russh::server::{Auth, Handler, Msg, Session};
 use tokio::sync::mpsc;
@@ -41,8 +41,8 @@ pub struct SshHandler {
     authentication_banner: Option<String>,
     tarpit: bool,
     fs2: Arc<RwLock<FileSystem>>,
-    send_task: Option<tokio::task::JoinHandle<()>>,
-    send_task_tx: Option<mpsc::Sender<String>>,
+    /*send_task: Option<tokio::task::JoinHandle<()>>,
+    send_task_tx: Option<mpsc::Sender<String>>,*/
     disable_sftp: bool,
     abuse_ip_client: Option<Arc<AbuseIpClient>>,
 }
@@ -236,6 +236,14 @@ impl Handler for SshHandler {
         }
     }
 
+    fn channel_eof(&mut self, channel: ChannelId, session: &mut Session) -> impl Future<Output=Result<(), Self::Error>> + Send {
+        async move {
+            log::debug!("Channel EOF on channel: {}, closing channel", channel);
+            session.close(channel)?;
+            Ok(())
+        }
+    }
+
     fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
@@ -259,21 +267,20 @@ impl Handler for SshHandler {
 
                 // Start the fake shell for the attacker
                 let db_tx = self.db_tx.clone();
-                let (channel_reader, channel_writer) = channel.split();
+                //let (channel_reader, channel_writer) = channel.split();
 
                 // Handle the shell session within this future
                 log::trace!("Starting tokio task for shell session saving");
                 tokio::spawn(async move {
-                    handle_shell_session(channel_reader, data, db_tx).await;
+                    handle_shell_session(channel, data, db_tx).await;
                 });
 
-                let (sender_task, recv_task) = mpsc::channel::<String>(1000);
-                let tarpit = self.tarpit;
-                self.send_task = Some(tokio::spawn(async move {
+                //let (sender_task, recv_task) = mpsc::channel::<String>(1000);
+                /*self.send_task = Some(tokio::spawn(async move {
                     // TODO: Implement sending data to client from other thread
                     Self::async_data_writer(channel_writer, recv_task, tarpit).await;
                 }));
-                self.send_task_tx = Some(sender_task);
+                self.send_task_tx = Some(sender_task);*/
 
             }
 
@@ -520,13 +527,13 @@ impl Handler for SshHandler {
 
 }
 
-impl Drop for SshHandler {
+/*impl Drop for SshHandler {
     fn drop(&mut self) {
         if let Some(send_task) = self.send_task.take() {
             send_task.abort();
         }
     }
-}
+}*/
 
 impl SshHandler {
     // Process commands and return fake responses
@@ -891,8 +898,8 @@ impl server::Server for SshServerHandler {
             authentication_banner: self.authentication_banner.clone(),
             tarpit: self.tarpit,
             fs2: self.fs2.clone(),
-            send_task: None,
-            send_task_tx: None,
+            /*send_task: None,
+            send_task_tx: None,*/
             disable_sftp: self.disable_sftp,
             abuse_ip_client: self.abuse_ip_client.clone(),
         }
@@ -935,7 +942,7 @@ impl SshServerHandler {
 
 // Function to handle the fake shell session
 async fn handle_shell_session(
-    mut channel: ChannelReadHalf,
+    mut channel: Channel<Msg>,
     session_data: SessionData,
     db_tx: mpsc::Sender<DbMessage>,
 ) {
@@ -954,11 +961,6 @@ async fn handle_shell_session(
                 break;
             }
             ChannelMsg::OpenFailure(_) => {
-                break;
-            }
-            ChannelMsg::Eof => {
-                // TODO: Handle EOF
-                log::debug!("Eof received from client. Now how do I tell russh that the connection should be closed?");
                 break;
             }
             _ => {}
