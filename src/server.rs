@@ -932,7 +932,7 @@ impl server::Server for SshServerHandler {
                         log::warn!("Client send invalid length packet");
                     }
                     _ => {
-
+                        log::error!("SSH encoding error: {:#?}", err);
                     }
                 }
             }
