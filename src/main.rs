@@ -6,6 +6,7 @@ mod server;
 mod shell;
 mod sftp;
 mod abuseipdb;
+mod ipapi;
 
 use app::App;
 use db::{run_db_handler, initialize_database_pool};
@@ -112,6 +113,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    let ip_api_client = if app.disable_ipapi {
+        None
+    } else {
+        Some(Arc::new(ipapi::Client::new(pool.clone(), None)))
+    };
+
     // Start background cache cleanup task
     let pool_cleanup = pool.clone();
     let cleanup_interval_hours = app.abuse_ip_cache_cleanup_interval_hours;
@@ -199,6 +206,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs2.clone(),
             app.disable_sftp,
             abuse_ip_client.clone(),
+            app.reject_all_auth,
+            ip_api_client.clone()
         );
         tasks.push(tokio::spawn(async move {
             // Start the SSH server

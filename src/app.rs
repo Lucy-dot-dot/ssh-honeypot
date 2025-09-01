@@ -19,6 +19,8 @@ pub struct Config {
     pub disable_sftp: Option<bool>,
     pub abuse_ip_db_api_key: Option<String>,
     pub abuse_ip_cache_cleanup_interval_hours: Option<u32>,
+    pub reject_all_auth: Option<bool>,
+    pub disable_ipapi: Option<bool>,
 }
 
 impl Default for Config {
@@ -36,7 +38,9 @@ impl Default for Config {
             disable_so_reuseaddr: None,
             disable_sftp: None,
             abuse_ip_db_api_key: None,
-            abuse_ip_cache_cleanup_interval_hours: None
+            abuse_ip_cache_cleanup_interval_hours: None,
+            reject_all_auth: None,
+            disable_ipapi: None,
         }
     }
 }
@@ -101,6 +105,14 @@ pub struct CliArgs {
     /// Interval in hours for cleaning up expired AbuseIPDB cache entries (default: 24 hours)
     #[arg(long = "abuse-ip-cache-cleanup-hours", env = "ABUSE_IP_CACHE_CLEANUP_HOURS")]
     pub abuse_ip_cache_cleanup_interval_hours: Option<u32>,
+
+    /// Reject all authentication attempts instead of accepting them
+    #[arg(long = "reject-all-auth", env = "REJECT_ALL_AUTH", action = ArgAction::SetTrue)]
+    pub reject_all_auth: Option<bool>,
+
+    /// Disable IPAPI. The free api endpoint does not support TLS https://members.ip-api.com/
+    #[arg(long = "disable-ipapi", env = "DISABLE_IPAPI", action = ArgAction::SetTrue)]
+    pub disable_ipapi: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -118,7 +130,9 @@ pub struct App {
     pub disable_sftp: bool,
     pub path_manager: PathManager,
     pub abuse_ip_db_api_key: Option<String>,
-    pub abuse_ip_cache_cleanup_interval_hours: u32
+    pub abuse_ip_cache_cleanup_interval_hours: u32,
+    pub reject_all_auth: bool,
+    pub disable_ipapi: bool,
 }
 
 impl App {
@@ -186,15 +200,8 @@ impl App {
         ];
 
         // TODO: Handle clap arguments way cleaner. Maybe with an extra function? Because clap boolean flags with `ArgAction::SetTrue` always return `Some(false)`
-        let disable_base_tar_gz_loading = if let Some(cli_disable_base_tar_gz_loading) = cli.disable_base_tar_gz_loading {
-            if !cli_disable_base_tar_gz_loading && let Some(config_disable_base_tar_gz_loading) = config.disable_base_tar_gz_loading {
-                config_disable_base_tar_gz_loading
-            } else {
-                cli_disable_base_tar_gz_loading
-            }
-        } else {
-            false
-        };
+        let disable_base_tar_gz_loading = Self::merge_clap_boolean_with_config(cli.disable_base_tar_gz_loading, config.disable_base_tar_gz_loading);
+        let disable_ipapi = Self::merge_clap_boolean_with_config(cli.disable_ipapi, config.disable_ipapi);
 
         Self {
             interfaces: cli.interfaces
@@ -246,7 +253,24 @@ impl App {
                 .or(config.abuse_ip_cache_cleanup_interval_hours)
                 .unwrap_or(24),
             
+            reject_all_auth: cli.reject_all_auth
+                .or(config.reject_all_auth)
+                .unwrap_or(false),
+            
             path_manager,
+            disable_ipapi,
+        }
+    }
+
+    fn merge_clap_boolean_with_config(clap_set_true_bool: Option<bool>, config_bool: Option<bool>) -> bool {
+        if let Some(clap_boolean_value) = clap_set_true_bool {
+            if !clap_boolean_value && let Some(config_boolean) = config_bool {
+                config_boolean
+            } else {
+                clap_boolean_value
+            }
+        } else {
+            false
         }
     }
 }

@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
-use russh::{server, Channel, ChannelId, ChannelMsg, ChannelWriteHalf, CryptoVec, Error};
+use russh::{server, Channel, ChannelId, ChannelMsg, CryptoVec, Error};
 use russh::keys::{HashAlg, PublicKey};
 use russh::server::{Auth, Handler, Msg, Session};
 use ssh_encoding::Error as SshEncodingError;
@@ -18,6 +18,7 @@ use crate::shell::filesystem::fs2::{FileContent, FileSystem};
 use crate::shell::commands::handle_ps_command;
 use crate::sftp::HoneypotSftpSession;
 use crate::abuseipdb::{Client as AbuseIpClient, AbuseIpError};
+use crate::ipapi;
 
 #[derive(Clone, Default)]
 // Store session data
@@ -46,6 +47,7 @@ pub struct SshHandler {
     send_task_tx: Option<mpsc::Sender<String>>,*/
     disable_sftp: bool,
     abuse_ip_client: Option<Arc<AbuseIpClient>>,
+    reject_all_auth: bool,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -109,7 +111,7 @@ impl Handler for SshHandler {
                 auth_type: "password".to_string(),
                 password: Some(password.to_string()),
                 public_key: None,
-                successful: true, // We're accepting all auth in honeypot
+                successful: !self.reject_all_auth, // Accept/reject based on flag
                 response_tx,
             }).await {
                 Ok(_) => {
@@ -133,9 +135,13 @@ impl Handler for SshHandler {
             let delay = rng().next_u64() % 501;
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-            log::info!("Accepted new connection");
-            // For honeypot, we accept all auth attempts
-            Ok(Auth::Accept)
+            if self.reject_all_auth {
+                log::info!("Rejected authentication attempt");
+                Ok(Auth::Reject { proceed_with_methods: None, partial_success: false })
+            } else {
+                log::info!("Accepted new connection");
+                Ok(Auth::Accept)
+            }
         }
     }
 
@@ -197,7 +203,7 @@ impl Handler for SshHandler {
                 auth_type: "publickey".to_string(),
                 password: None,
                 public_key: Some(key_str),
-                successful: true, // We're accepting all auth in honeypot
+                successful: !self.reject_all_auth, // Accept/reject based on flag
                 response_tx,
             }).await {
                 Ok(_) => {
@@ -222,9 +228,13 @@ impl Handler for SshHandler {
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
-            log::info!("Accepted new connection");
-            // For honeypot, we accept all auth attempts
-            Ok(Auth::Accept)
+            if self.reject_all_auth {
+                log::info!("Rejected authentication attempt");
+                Ok(Auth::Reject { proceed_with_methods: None, partial_success: false })
+            } else {
+                log::info!("Accepted new connection");
+                Ok(Auth::Accept)
+            }
         }
     }
 
@@ -706,91 +716,6 @@ impl SshHandler {
             }
         }
     }
-
-    /// Asynchronously writes data from a receiver to a channel writer, with optional tarpit-induced delay.
-    ///
-    /// # Parameters
-    ///
-    /// - `channel_writer`: A [`ChannelWriteHalf<Msg>`] instance used to send data to a client over a channel.
-    /// - `recv_task`: An [`Receiver<String>`] that supplies messages (in string format) to be sent asynchronously.
-    /// - `tarpit`: A boolean indicating whether to introduce a "tarpit" behavior, which adds random delays between sending each byte of the data.
-    ///
-    /// # Behavior
-    ///
-    /// This function runs an infinite loop that waits for incoming data from the `recv_task` receiver. When data is available:
-    ///
-    /// - If `tarpit` is `true`, the function introduces random delays (between 10 milliseconds and 700 milliseconds) before sending each byte of the data individually to the client.
-    /// - If `tarpit` is `false`, the full data buffer is sent to the client in one go.
-    ///
-    /// The function uses the `channel_writer` to send data to the client and logs the progress:
-    ///
-    /// - If the data is successfully sent, a debug-level log is recorded.
-    /// - If there is an error while sending data, it logs an error and exits the loop.
-    ///
-    /// If `recv_task.recv()` returns `None`, an error is logged (indicating that the task has been closed) and the loop breaks.
-    ///
-    /// The `tarpit` behavior is particularly useful for simulating delayed or throttled transmission of data.
-    ///
-    /// # Logging
-    ///
-    /// - Uses `log::trace!` to provide detailed trace-level logs for debugging purposes.
-    /// - Uses `log::error!` to record and highlight errors during the execution.
-    ///
-    /// # Errors
-    ///
-    /// - Logs an error if sending data to the client fails.
-    /// - Logs an error if the `recv_task` channel unexpectedly closes.
-    ///
-    /// # Dependencies
-    ///
-    /// - [`tokio`] for asynchronous execution and `sleep` functionality.
-    /// - [`log`] for structured application logging.
-    /// - [`rng()`] to generate random delay durations when `tarpit` is enabled.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let (writer, receiver) = create_channel(); // Hypothetical channel creation
-    /// let recv_task: Receiver<String> = create_recv_task();
-    /// async_data_writer(writer, recv_task, true).await;
-    /// ```
-    async fn async_data_writer(channel_writer: ChannelWriteHalf<Msg>, mut recv_task: mpsc::Receiver<String>, tarpit: bool) {
-        loop {
-            match recv_task.recv().await {
-                Some(data) => {
-                    log::trace!("Sending data to client: {}", data);
-                    let data = data.as_bytes();
-                    if tarpit {
-                        for datum in data.iter() {
-                            let wait_time = std::time::Duration::from_millis(rng().random_range(10..700));
-                            log::trace!("Tarpit delay: {}", wait_time.as_millis());
-                            tokio::time::sleep(wait_time).await;
-                            let data: &[u8] = &[*datum];
-                            match channel_writer.data(data).await {
-                                Ok(_) => { log::trace!("Sent data to client") },
-                                Err(err) => {
-                                    log::error!("Failed to send data to client: {}", err);
-                                    break;
-                                },
-                            };
-                        }
-                    } else {
-                        match channel_writer.data(data).await {
-                            Ok(_) => { log::trace!("Sent data in full to client") },
-                            Err(err) => {
-                                log::error!("Failed to send data to client: {}", err);
-                                break;
-                            },
-                        }
-                    }
-                },
-                None => {
-                    log::debug!("Send task received None from channel");
-                    break;
-                },
-            }
-        }
-    }
 }
 
 // Implementation of Server trait
@@ -802,6 +727,8 @@ pub struct SshServerHandler {
     fs2: Arc<RwLock<FileSystem>>,
     disable_sftp: bool,
     abuse_ip_client: Option<Arc<AbuseIpClient>>,
+    reject_all_auth: bool,
+    ip_api_client: Option<Arc<ipapi::Client>>
 }
 
 impl server::Server for SshServerHandler {
@@ -872,6 +799,24 @@ impl server::Server for SshServerHandler {
                 log::info!("New connection from: {:?}", peer_addr);
             }
 
+            if let Some(ip_api_client) = &self.ip_api_client {
+                let client = ip_api_client.clone();
+                tokio::spawn(async move {
+                    log::trace!("Checking IP API for {}", ip);
+                    let ipinfo = match client.check_ip_with_cache(&ip).await {
+                        Ok(response) => {
+                            log::trace!("IP API lookup completed for {} with response: {:?}", ip, response);
+                            response
+                        },
+                        Err(e) => {
+                            log::warn!("IP API lookup failed for {}: {}", ip, e);
+                            return;
+                        }
+                    };
+                    log::info!("Additional country info for {} - Country: {}, Region: {}, lat/lon: {}/{}, org: {}", ip, ipinfo.country, ipinfo.region, ipinfo.lat, ipinfo.lon, ipinfo.org);
+                });
+            }
+
             let db_tx = self.db_tx.clone();
             tokio::spawn(async move {
                 match db_tx.send(DbMessage::RecordConnect {
@@ -911,6 +856,7 @@ impl server::Server for SshServerHandler {
             send_task_tx: None,*/
             disable_sftp: self.disable_sftp,
             abuse_ip_client: self.abuse_ip_client.clone(),
+            reject_all_auth: self.reject_all_auth,
         }
     }
 
@@ -962,7 +908,7 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, disable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, disable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>) -> SshServerHandler {
         Self {
             disable_cli_interface,
             db_tx,
@@ -971,6 +917,8 @@ impl SshServerHandler {
             fs2,
             disable_sftp,
             abuse_ip_client,
+            reject_all_auth,
+            ip_api_client
         }
     }
 }

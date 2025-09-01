@@ -360,3 +360,108 @@ pub async fn get_abuse_ip_check(
         }
     }
 }
+
+// Record IPAPI check result in database
+pub async fn record_ipapi_check(
+    pool: &PgPool,
+    ip: String,
+    timestamp: DateTime<Utc>,
+    country: Option<String>,
+    country_code: Option<String>,
+    region: Option<String>,
+    region_name: Option<String>,
+    city: Option<String>,
+    zip: Option<String>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    timezone: Option<String>,
+    isp: Option<String>,
+    org: Option<String>,
+    as_info: Option<String>,
+    response_data: String,
+) -> Result<(), sqlx::Error> {
+    let response_json: serde_json::Value = serde_json::from_str(&response_data)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    
+    log::trace!("Recording IPAPI check for IP: {}", ip);
+    
+    query(
+        "INSERT INTO ipapi_cache (ip, timestamp, country, country_code, region, region_name, city, zip, lat, lon, timezone, isp, org, as_info, response_data)
+         VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ON CONFLICT (ip) DO UPDATE SET
+            timestamp = EXCLUDED.timestamp,
+            country = EXCLUDED.country,
+            country_code = EXCLUDED.country_code,
+            region = EXCLUDED.region,
+            region_name = EXCLUDED.region_name,
+            city = EXCLUDED.city,
+            zip = EXCLUDED.zip,
+            lat = EXCLUDED.lat,
+            lon = EXCLUDED.lon,
+            timezone = EXCLUDED.timezone,
+            isp = EXCLUDED.isp,
+            org = EXCLUDED.org,
+            as_info = EXCLUDED.as_info,
+            response_data = EXCLUDED.response_data"
+    )
+    .bind(&ip.to_string())
+    .bind(timestamp)
+    .bind(country)
+    .bind(country_code)
+    .bind(region)
+    .bind(region_name)
+    .bind(city)
+    .bind(zip)
+    .bind(lat)
+    .bind(lon)
+    .bind(timezone)
+    .bind(isp)
+    .bind(org)
+    .bind(as_info)
+    .bind(response_json)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+// Get IPAPI check result from database with automatic expiration
+pub async fn get_ipapi_check(
+    pool: &PgPool,
+    ip: &str,
+    cache_ttl_hours: u8,
+) -> Result<Option<(DateTime<Utc>, crate::ipapi::IpApiResponse)>, sqlx::Error> {
+    
+    let result = query(
+        "SELECT timestamp, response_data 
+         FROM ipapi_cache 
+         WHERE ip = $1::inet
+           AND timestamp > NOW() - INTERVAL '1 hour' * $2"
+    )
+    .bind(&ip.to_string())
+    .bind(cache_ttl_hours as i32)
+    .fetch_optional(pool)
+    .await?;
+    
+    match result {
+        Some(row) => {
+            let timestamp: DateTime<Utc> = row.get("timestamp");
+            let response_data: serde_json::Value = row.get("response_data");
+            
+            match serde_json::from_value::<crate::ipapi::IpApiResponse>(response_data) {
+                Ok(response) => {
+                    log::debug!("IPAPI cache hit from database for IP: {}", ip);
+                    Ok(Some((timestamp, response)))
+                },
+                Err(e) => {
+                    log::error!("Failed to deserialize cached IPAPI data for {}: {}", ip, e);
+                    Ok(None)
+                }
+            }
+        },
+        None => {
+            log::debug!("No valid IPAPI cache entry found for IP: {}", ip);
+            Ok(None)
+        }
+    }
+}
