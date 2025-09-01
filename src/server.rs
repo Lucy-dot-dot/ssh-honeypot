@@ -947,6 +947,13 @@ impl server::Server for SshServerHandler {
                     }
                 }
             }
+            Error::InvalidConfig(err_msg) => {
+                if err_msg.contains("min_group_size") {
+                    log::warn!("Client sent too low min_group_size value. Likely looking for old misconfigured embedded devices");
+                } else {
+                    log::error!("Invalid configuration: {}", err_msg);
+                }
+            }
             _ => {
                 log::error!("Session error: {:#?}", error);
             }
