@@ -664,34 +664,45 @@ impl SshHandler {
     }
 
     async fn check_abuse_ip_db(&mut self) {
-        if let Some(abuse_client) = &self.abuse_ip_client {
-            if let Some(peer_addr) = self.peer {
-                let ip = peer_addr.ip().to_string();
-                match abuse_client.check_ip_with_cache(&ip).await {
-                    Ok(response) => {
-                        let score = response.data.abuse_confidence_score.unwrap_or(0);
-                        let country = response.data.country_code.as_deref().unwrap_or("Unknown");
-                        let is_tor = response.data.is_tor;
-                        log::info!("AbuseIPDB check for {}: Confidence: {}%, Country: {}, Tor: {}, Reports: {}",
-                                     ip, score, country, is_tor, response.data.total_reports);
-                    },
-                    Err(AbuseIpError::RateLimitExceeded(info)) => {
-                        if let Some(retry_after) = info.retry_after_seconds {
-                            log::warn!("AbuseIPDB daily rate limit exceeded for {}. Retry after {} seconds", ip, retry_after);
-                        } else if let Some(reset_timestamp) = info.reset_timestamp {
-                            let now = Utc::now().timestamp() as u64;
-                            let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
-                            log::warn!("AbuseIPDB daily rate limit exceeded for {}. Resets in {} seconds", ip, wait_seconds);
-                        } else {
-                            log::warn!("AbuseIPDB daily rate limit exceeded for {}", ip);
-                        }
-                    },
-                    Err(e) => {
-                        log::warn!("AbuseIPDB check failed for {}: {}", ip, e);
-                    }
+        let Some(abuse_client) = &self.abuse_ip_client else {
+            log::trace!("AbuseIPDB client not configured, skipping IP check");
+            return;
+        };
+
+        let Some(peer_addr) = self.peer else {
+            log::trace!("No peer address available for AbuseIPDB check");
+            return;
+        };
+
+        let ip = peer_addr.ip().to_string();
+        log::trace!("Starting AbuseIPDB lookup for IP: {}", ip);
+
+        match abuse_client.check_ip_with_cache(&ip).await {
+            Ok(response) => {
+                let score = response.data.abuse_confidence_score.unwrap_or(0);
+                let country = response.data.country_code.as_deref().unwrap_or("Unknown");
+                let is_tor = response.data.is_tor;
+                log::trace!("AbuseIPDB response: {:?}", response.data);
+                log::info!("AbuseIPDB check for {}: Confidence: {}%, Country: {}, Tor: {}, Reports: {}",
+                             ip, score, country, is_tor, response.data.total_reports);
+            },
+            Err(AbuseIpError::RateLimitExceeded(info)) => {
+                log::trace!("AbuseIPDB rate limit encountered for {}", ip);
+                if let Some(retry_after) = info.retry_after_seconds {
+                    log::warn!("AbuseIPDB daily rate limit exceeded for {}. Retry after {} seconds", ip, retry_after);
+                } else if let Some(reset_timestamp) = info.reset_timestamp {
+                    let now = Utc::now().timestamp() as u64;
+                    let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
+                    log::warn!("AbuseIPDB daily rate limit exceeded for {}. Resets in {} seconds", ip, wait_seconds);
+                } else {
+                    log::warn!("AbuseIPDB daily rate limit exceeded for {}", ip);
                 }
+            },
+            Err(e) => {
+                log::warn!("AbuseIPDB check failed for {}: {}", ip, e);
             }
         }
+        log::trace!("Completed AbuseIPDB check for {}", ip);
     }
 }
 

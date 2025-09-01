@@ -289,8 +289,16 @@ pub async fn record_abuse_ip_check(
     total_reports: u32,
     response_data: String,
 ) -> Result<(), sqlx::Error> {
-    let response_json: serde_json::Value = serde_json::from_str(&response_data)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let response_json: serde_json::Value = match serde_json::from_str(&response_data) {
+        Ok(val) => {
+            log::trace!("Decoded abuse ipdb json response from string");
+            val
+        },
+        Err(err) => {
+            log::error!("Failed to decode json. We do not save malformed json to db: {}", err);
+            return Ok(())
+        }
+    };
     
     log::trace!("Recording AbuseIPDB check for IP: {}", ip);
     
@@ -380,8 +388,16 @@ pub async fn record_ipapi_check(
     as_info: Option<String>,
     response_data: String,
 ) -> Result<(), sqlx::Error> {
-    let response_json: serde_json::Value = serde_json::from_str(&response_data)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let response_json: serde_json::Value = match serde_json::from_str(&response_data) {
+        Ok(val) => {
+            log::trace!("Decoded abuse ip-api json response from string");
+            val
+        },
+        Err(err) => {
+            log::error!("Failed to decode json. We do not save malformed json to db: {}", err);
+            return Ok(())
+        }
+    };
     
     log::trace!("Recording IPAPI check for IP: {}", ip);
     

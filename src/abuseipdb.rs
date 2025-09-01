@@ -187,9 +187,11 @@ impl Client {
     }
 
     pub async fn check_ip_with_cache(&self, ip_address: &str) -> Result<CheckResponse, AbuseIpError> {
+        log::trace!("Checking IP address: {} in cache", ip_address);
         // First check memory cache
         let cache = self.memory_cache.read().await;
         if let Some(cached) = cache.get(ip_address) {
+            log::trace!("Found cached IP address: {}, result: {}", ip_address, cached.response.data);
             let age = Utc::now() - cached.cached_at;
             if age < Duration::hours(self.cache_ttl_hours as i64) {
                 log::debug!("AbuseIPDB memory cache hit for IP: {}", ip_address);
@@ -197,13 +199,17 @@ impl Client {
             }
         }
         drop(cache); // Release read lock
+        log::trace!("No cached IP address found for in in-memory-cache {}", ip_address);
         
         // Check database cache
+        log::trace!("Checking database cache for IP address: {}", ip_address);
         match get_abuse_ip_check(&self.pool, ip_address, self.cache_ttl_hours).await {
             Ok(Some((timestamp, response_data))) => {
                 log::debug!("AbuseIPDB database cache hit for IP: {}", ip_address);
+                log::trace!("Database cache entry timestamp: {}, result: {:?}", timestamp, response_data);
                 let response = CheckResponse { data: response_data };
-                
+
+                log::trace!("Updating memory cache");
                 // Update memory cache
                 let mut cache = self.memory_cache.write().await;
                 cache.insert(ip_address.to_string(), CachedResult {
@@ -215,6 +221,7 @@ impl Client {
             },
             Ok(None) => {
                 // No cache entry or expired - continue to API call
+                log::trace!("No database cache entry found for IP: {}", ip_address);
             },
             Err(e) => {
                 log::error!("Failed to query AbuseIPDB cache: {}", e);
@@ -225,7 +232,10 @@ impl Client {
         // Cache miss or expired, make API call
         log::debug!("AbuseIPDB cache miss for IP: {}, making API call", ip_address);
         let response = self.check_ip_api(ip_address).await?;
-        
+
+        log::trace!("API call result: {:?}", response);
+        log::trace!("Updating memory cache");
+
         // Update memory cache
         let mut cache = self.memory_cache.write().await;
         let now = Utc::now();
@@ -234,7 +244,9 @@ impl Client {
             cached_at: now,
         });
         drop(cache);
-        
+        log::trace!("Memory cache updated");
+
+        log::trace!("Updating database cache");
         // Store in database cache
         if let Err(e) = record_abuse_ip_check(
             &self.pool,
@@ -249,6 +261,7 @@ impl Client {
         ).await {
             log::error!("Failed to cache AbuseIPDB result in database: {}", e);
         }
+        log::trace!("Database cache updated");
         
         Ok(response)
     }
