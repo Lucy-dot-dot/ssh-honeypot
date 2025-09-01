@@ -42,7 +42,7 @@ impl Default for Config {
 }
 
 #[derive(clap::Parser, Debug)]
-#[command(version, about = "A small ssh server that allows for advanced honeypot usage", long_about = "A small ssh server that allows for advanced honeypot usage. It provides a fake command interface mimicking ubuntu without any fear of malicious code execution, since no commands are actually executed. It also records all commands in a central sqlite database")]
+#[command(version, about = "A small ssh server that allows for advanced honeypot usage", long_about = "A small ssh server that allows for advanced honeypot usage. It provides a fake command interface mimicking ubuntu without any fear of malicious code execution, since no commands are actually executed. It also records all commands in a central database")]
 pub struct CliArgs {
     /// Path to configuration file
     #[arg(short = 'f', long = "config", env = "CONFIG_FILE")]

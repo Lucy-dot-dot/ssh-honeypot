@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Arc::new(config);
 
-    log::info!("Recording authentication attempts and commands in SQLite database");
+    log::info!("Recording authentication attempts and commands in database");
 
     let db_tx_clone = db_tx.clone();
 

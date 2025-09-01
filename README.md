@@ -22,7 +22,6 @@ honeypot-ssh-server [OPTIONS]
 ### Options
 
 - `-i, --interface <ADDRESSES>`: The IP addresses and ports to listen on (default: 0.0.0.0:2222 for IPv4 and [::]:2222 for IPv6)
-- `-d, --db <PATH>`: Path to the database file (default: "honeypot.db")
 
 ### Environment Variables
 

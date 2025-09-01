@@ -74,12 +74,7 @@ impl PathManager {
     pub fn config_file(&self) -> PathBuf {
         self.config_dir.join("config.toml")
     }
-    
-    /// Get the default database file path
-    pub fn database_file(&self) -> PathBuf {
-        self.data_dir.join("honeypot.db")
-    }
-    
+
     /// Get the default base.tar.gz file path
     pub fn base_tar_gz_file(&self) -> PathBuf {
         self.data_dir.join("base.tar.gz")
@@ -92,7 +87,6 @@ impl PathManager {
         log::info!("  Key directory: {}", self.key_dir.display());
         log::info!("  Data directory: {}", self.data_dir.display());
         log::info!("  Config file: {}", self.config_file().display());
-        log::info!("  Database file: {}", self.database_file().display());
     }
 }
 
