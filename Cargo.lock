@@ -3270,6 +3270,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "ssh-encoding",
  "tar",
  "tokio",
  "toml",

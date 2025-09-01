@@ -6,6 +6,7 @@ use chrono::{DateTime, Local, Utc};
 use russh::{server, Channel, ChannelId, ChannelMsg, ChannelWriteHalf, CryptoVec, Error};
 use russh::keys::{HashAlg, PublicKey};
 use russh::server::{Auth, Handler, Msg, Session};
+use ssh_encoding::Error as SshEncodingError;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use rand::{rng, Rng};
@@ -921,6 +922,19 @@ impl server::Server for SshServerHandler {
             },
             Error::Elapsed(_) => {
                 log::warn!("Session timed out");
+            }
+            Error::InactivityTimeout => {
+                log::warn!("Session timed out due to inactivity");
+            }
+            Error::SshEncoding(err) => {
+                match err {
+                    SshEncodingError::Length => {
+                        log::warn!("Client send invalid length packet");
+                    }
+                    _ => {
+
+                    }
+                }
             }
             _ => {
                 log::error!("Session error: {:#?}", error);
