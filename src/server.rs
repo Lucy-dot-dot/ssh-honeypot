@@ -409,56 +409,6 @@ impl Handler for SshHandler {
         }
     }
 
-    fn subsystem_request(
-        &mut self,
-        channel: ChannelId,
-        name: &str,
-        session: &mut Session,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        async move {
-            log::debug!("Subsystem request: {} on channel {}", name, channel);
-            
-            if name == "sftp" {
-                if self.disable_sftp {
-                    log::info!("SFTP subsystem request denied (SFTP disabled): auth_id: {:?}", self.auth_id);
-                    session.channel_failure(channel)?;
-                    return Ok(());
-                }
-
-                log::info!("Starting SFTP subsystem for auth_id: {:?}", self.auth_id);
-                
-                if let Some(auth_id) = &self.auth_id {
-                    // Create SFTP session handler
-                    let _sftp_handler = HoneypotSftpSession::new(
-                        self.db_tx.clone(),
-                        self.fs2.clone(),
-                        auth_id.clone(),
-                    );
-
-                    // Accept the subsystem request
-                    session.channel_success(channel)?;
-                    
-                    // Run the SFTP server on this channel
-                    // Note: The actual channel stream handling would need to be implemented
-                    // based on the specific russh-sftp requirements
-                    log::info!("SFTP subsystem started for channel {}", channel);
-                    
-                    // For now, just log that SFTP was requested
-                    // In a complete implementation, you would need to handle the channel data
-                    // and pass it to the SFTP handler
-                } else {
-                    log::error!("No auth_id available for SFTP session");
-                    session.channel_failure(channel)?;
-                }
-            } else {
-                log::debug!("Unsupported subsystem: {}", name);
-                session.channel_failure(channel)?;
-            }
-            
-            Ok(())
-        }
-    }
-
     /// This is ssh user@host "command", data should be UTf-8
     fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> impl Future<Output=Result<(), Self::Error>> + Send {
         async move {
@@ -478,6 +428,56 @@ impl Handler for SshHandler {
             log::debug!("Answering with: {}", answer);
             self.tarpit_data(session, channel, answer.as_bytes()).await?;
             session.channel_failure(channel)?;
+            Ok(())
+        }
+    }
+
+    fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            log::debug!("Subsystem request: {} on channel {}", name, channel);
+
+            if name == "sftp" {
+                if self.disable_sftp {
+                    log::info!("SFTP subsystem request denied (SFTP disabled): auth_id: {:?}", self.auth_id);
+                    session.channel_failure(channel)?;
+                    return Ok(());
+                }
+
+                log::info!("Starting SFTP subsystem for auth_id: {:?}", self.auth_id);
+
+                if let Some(auth_id) = &self.auth_id {
+                    // Create SFTP session handler
+                    let _sftp_handler = HoneypotSftpSession::new(
+                        self.db_tx.clone(),
+                        self.fs2.clone(),
+                        auth_id.clone(),
+                    );
+
+                    // Accept the subsystem request
+                    session.channel_success(channel)?;
+
+                    // Run the SFTP server on this channel
+                    // Note: The actual channel stream handling would need to be implemented
+                    // based on the specific russh-sftp requirements
+                    log::info!("SFTP subsystem started for channel {}", channel);
+
+                    // For now, just log that SFTP was requested
+                    // In a complete implementation, you would need to handle the channel data
+                    // and pass it to the SFTP handler
+                } else {
+                    log::error!("No auth_id available for SFTP session");
+                    session.channel_failure(channel)?;
+                }
+            } else {
+                log::debug!("Unsupported subsystem: {}", name);
+                session.channel_failure(channel)?;
+            }
+
             Ok(())
         }
     }
