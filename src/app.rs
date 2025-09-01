@@ -59,7 +59,7 @@ pub struct CliArgs {
     #[arg(short = 'd', long = "database-url", env = "DATABASE_URL")]
     pub database_url: Option<String>,
 
-    /// Disable the fake cli interface provided and only save passwords and/or key authentication attempts
+    /// Disable the fake cli interface provided and only save passwords and/or key authentication attempts. Does not reject the authentication, --reject-all-auth can be used to do that
     #[arg(short = 'c', long = "disable-cli-interface", env = "DISABLE_CLI_INTERFACE", action = ArgAction::SetTrue)]
     pub disable_cli_interface: Option<bool>,
     
