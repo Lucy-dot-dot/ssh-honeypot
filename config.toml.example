@@ -57,6 +57,16 @@ abuse_ip_db_api_key = "your_api_key_here"
 # Note: Cache entries expire after 24 hours but cleanup only happens at this interval
 abuse_ip_cache_cleanup_interval_hours = 24
 
+# Reject all authentication attempts instead of accepting them
+# Default: false (honeypot mode - accepts all auth)
+# When true: operates in logging mode - rejects all auth but still logs attempts
+reject_all_auth = false
+
+# Disable IPAPI geolocation service integration
+# Default: false (IPAPI enabled for geographic intelligence)
+# Note: Free IPAPI tier uses HTTP (no HTTPS) - disable if this is a security concern
+disable_ipapi = false
+
 ##############################################################################
 # Environment Variable Equivalents
 ##############################################################################
@@ -75,5 +85,7 @@ abuse_ip_cache_cleanup_interval_hours = 24
 # DISABLE_SFTP=true
 # ABUSE_IP_DB_API_KEY=your_api_key_here
 # ABUSE_IP_CACHE_CLEANUP_HOURS=24
+# REJECT_ALL_AUTH=true
+# DISABLE_IPAPI=true
 #
 # CLI arguments take precedence over config file, which takes precedence over environment variables.
