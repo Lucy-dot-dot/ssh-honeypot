@@ -185,6 +185,7 @@ impl App {
             SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), 2222),
         ];
 
+        // TODO: Handle clap arguments way cleaner. Maybe with an extra function? Because clap boolean flags with `ArgAction::SetTrue` always return `Some(false)`
         let disable_base_tar_gz_loading = if let Some(cli_disable_base_tar_gz_loading) = cli.disable_base_tar_gz_loading {
             if !cli_disable_base_tar_gz_loading && let Some(config_disable_base_tar_gz_loading) = config.disable_base_tar_gz_loading {
                 config_disable_base_tar_gz_loading

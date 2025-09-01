@@ -883,6 +883,14 @@ impl server::Server for SshServerHandler {
                 };
             });
         } else {
+            // EBADF The argument sockfd is not a valid file descriptor.
+            // EFAULT The addr argument points to memory not in a valid part of the process address space.
+            // EINVAL addrlen is invalid (e.g., is negative).
+            // ENOBUFS Insufficient resources were available in the system to perform the operation.
+            // ENOTCONN The socket is not connected.
+            // ENOTSOCK The file descriptor sockfd does not refer to a socket.
+
+            // FIXME: using run_stream to catch the address earlier would be better but we loose a lot of lifecycle management from russh. Otherwise we could submit a patch to catch it earlier
             log::info!("New connection from unknown peer, what is this?");
         }
 
@@ -915,8 +923,11 @@ impl server::Server for SshServerHandler {
                     ErrorKind::UnexpectedEof => {
                         log::warn!("Session did not properly closed. Bad bot.");
                     }
+                    ErrorKind::ConnectionReset => {
+                        log::warn!("Session closed by remote peer. (TCP RST Packet)");
+                    }
                     _ => {
-                        log::error!("Session error: {:#?}", err);
+                        log::error!("I/O Session error: {:#?}", err);
                     }
                 }
             },
