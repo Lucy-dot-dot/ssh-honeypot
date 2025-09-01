@@ -75,11 +75,8 @@ impl Client {
         Self {
             client: reqwest::Client::builder()
                 .min_tls_version(Version::TLS_1_2)
-                .https_only(true)
                 .deflate(true)
                 .brotli(true)
-                .use_rustls_tls()
-                .tls_built_in_root_certs(true)
                 .build()
                 .unwrap(),
             memory_cache: Arc::new(RwLock::new(HashMap::new())),
