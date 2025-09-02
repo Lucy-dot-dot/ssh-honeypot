@@ -59,8 +59,8 @@ pub fn handle_cat_command(cmd: &str, fs: &FileSystem) -> String {
                         FileContent::Directory(_) => {
                             format!("cat: {}: Is a directory\r\n", file_path)
                         }
-                        FileContent::RegularFile(bytes) => unsafe {
-                            String::from_utf8_unchecked(bytes.clone())
+                        FileContent::RegularFile(bytes) => {
+                            String::from_utf8_lossy(bytes).to_string()
                         },
                         FileContent::SymbolicLink(_) => {
                             // unreachable, since we already resolved the symlink
