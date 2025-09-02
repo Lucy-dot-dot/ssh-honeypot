@@ -132,7 +132,16 @@ impl Client {
             cached_at: now,
         });
         drop(cache);
-        
+
+        let json_serialized_response = match serde_json::to_string(&response) {
+            Ok(json) => json,
+            Err(e) => {
+                log::error!("Failed to serialize IPAPI response: {}", e);
+                log::error!("Unable to cache IPAPI result: {:?}", response);
+                return Ok(response)
+            }
+        };
+
         // Store in database cache
         if let Err(e) = record_ipapi_check(
             &self.pool,
@@ -150,7 +159,7 @@ impl Client {
             Some(response.isp.clone()),
             Some(response.org.clone()),
             Some(response.r#as.clone()),
-            serde_json::to_string(&response).unwrap_or_default(),
+            json_serialized_response,
         ).await {
             log::error!("Failed to cache IPAPI result in database: {}", e);
         }
