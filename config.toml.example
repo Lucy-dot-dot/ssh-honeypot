@@ -43,9 +43,9 @@ disable_base_tar_gz_loading = false
 disable_so_reuseport = false
 disable_so_reuseaddr = false
 
-# Disable SFTP subsystem support
-# Default: false (SFTP enabled for file upload capture)
-disable_sftp = false
+# Enable SFTP subsystem support
+# When enabled, SFTP connection attempts will be handled.
+enable_sftp = false
 
 # AbuseIPDB API key for IP reputation checking
 # Get your free API key at: https://www.abuseipdb.com/api
@@ -82,7 +82,7 @@ disable_ipapi = false
 # KEY_FOLDER=/path/to/keys
 # DISABLE_SO_REUSEPORT=true
 # DISABLE_SO_REUSEADDR=true
-# DISABLE_SFTP=true
+# ENABLE_SFTP=true
 # ABUSE_IP_DB_API_KEY=your_api_key_here
 # ABUSE_IP_CACHE_CLEANUP_HOURS=24
 # REJECT_ALL_AUTH=true

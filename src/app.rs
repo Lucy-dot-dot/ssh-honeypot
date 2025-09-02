@@ -16,7 +16,7 @@ pub struct Config {
     pub key_folder: Option<String>,
     pub disable_so_reuseport: Option<bool>,
     pub disable_so_reuseaddr: Option<bool>,
-    pub disable_sftp: Option<bool>,
+    pub enable_sftp: Option<bool>,
     pub abuse_ip_db_api_key: Option<String>,
     pub abuse_ip_cache_cleanup_interval_hours: Option<u32>,
     pub reject_all_auth: Option<bool>,
@@ -36,7 +36,7 @@ impl Default for Config {
             key_folder: None,
             disable_so_reuseport: None,
             disable_so_reuseaddr: None,
-            disable_sftp: None,
+            enable_sftp: None,
             abuse_ip_db_api_key: None,
             abuse_ip_cache_cleanup_interval_hours: None,
             reject_all_auth: None,
@@ -93,10 +93,10 @@ pub struct CliArgs {
     #[arg(short = 's', long = "disable-so-reuseaddr", env = "DISABLE_SO_REUSEADDR", action = ArgAction::SetTrue)]
     pub disable_so_reuseaddr: bool,
 
-    /// Disable SFTP subsystem support
-    /// When disabled, SFTP connection attempts will be logged but not handled
-    #[arg(long = "disable-sftp", env = "DISABLE_SFTP", action = ArgAction::SetTrue)]
-    pub disable_sftp: bool,
+    /// Enable SFTP subsystem support
+    /// When enabled, SFTP connection attempts will be handled. 
+    #[arg(long = "enable-sftp", env = "ENABLE_SFTP", action = ArgAction::SetTrue)]
+    pub enable_sftp: bool,
 
     /// AbuseIPDB API key for checking suspicious IPs
     #[arg(long = "abuse-ip-db-api-key", env = "ABUSE_IP_DB_API_KEY")]
@@ -127,7 +127,7 @@ pub struct App {
     pub key_folder: PathBuf,
     pub disable_so_reuseport: bool,
     pub disable_so_reuseaddr: bool,
-    pub disable_sftp: bool,
+    pub enable_sftp: bool,
     pub path_manager: PathManager,
     pub abuse_ip_db_api_key: Option<String>,
     pub abuse_ip_cache_cleanup_interval_hours: u32,
@@ -230,7 +230,7 @@ impl App {
             
             disable_so_reuseaddr: Self::merge_clap_boolean_with_config(cli.disable_so_reuseaddr, config.disable_so_reuseaddr),
             
-            disable_sftp: Self::merge_clap_boolean_with_config(cli.disable_sftp, config.disable_sftp),
+            enable_sftp: Self::merge_clap_boolean_with_config(cli.enable_sftp, config.enable_sftp),
             
             abuse_ip_db_api_key: cli.abuse_ip_db_api_key
                 .or(config.abuse_ip_db_api_key),

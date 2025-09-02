@@ -204,7 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.authentication_banner.clone(),
             app.tarpit,
             fs2.clone(),
-            app.disable_sftp,
+            app.enable_sftp,
             abuse_ip_client.clone(),
             app.reject_all_auth,
             ip_api_client.clone()

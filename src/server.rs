@@ -45,7 +45,7 @@ pub struct SshHandler {
     fs2: Arc<RwLock<FileSystem>>,
     /*send_task: Option<tokio::task::JoinHandle<()>>,
     send_task_tx: Option<mpsc::Sender<String>>,*/
-    disable_sftp: bool,
+    enable_sftp: bool,
     abuse_ip_client: Option<Arc<AbuseIpClient>>,
     reject_all_auth: bool,
 }
@@ -442,7 +442,7 @@ impl Handler for SshHandler {
             log::debug!("Subsystem request: {} on channel {}", name, channel);
 
             if name == "sftp" {
-                if self.disable_sftp {
+                if !self.enable_sftp {
                     log::info!("SFTP subsystem request denied (SFTP disabled): auth_id: {:?}", self.auth_id);
                     session.channel_failure(channel)?;
                     return Ok(());
@@ -713,7 +713,7 @@ pub struct SshServerHandler {
     authentication_banner: Option<String>,
     tarpit: bool,
     fs2: Arc<RwLock<FileSystem>>,
-    disable_sftp: bool,
+    enable_sftp: bool,
     abuse_ip_client: Option<Arc<AbuseIpClient>>,
     reject_all_auth: bool,
     ip_api_client: Option<Arc<ipapi::Client>>
@@ -842,7 +842,7 @@ impl server::Server for SshServerHandler {
             fs2: self.fs2.clone(),
             /*send_task: None,
             send_task_tx: None,*/
-            disable_sftp: self.disable_sftp,
+            enable_sftp: self.enable_sftp,
             abuse_ip_client: self.abuse_ip_client.clone(),
             reject_all_auth: self.reject_all_auth,
         }
@@ -896,14 +896,14 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, disable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>) -> SshServerHandler {
         Self {
             disable_cli_interface,
             db_tx,
             authentication_banner,
             tarpit,
             fs2,
-            disable_sftp,
+            enable_sftp,
             abuse_ip_client,
             reject_all_auth,
             ip_api_client
