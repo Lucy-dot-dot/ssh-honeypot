@@ -87,7 +87,7 @@ cargo run -- --disable-sftp
 | `-g, --disable-base-tar-gz-loading` | Skip filesystem loading | `DISABLE_BASE_TAR_GZ_LOADING` |
 | `-b, --base-tar-gz-path` | Custom filesystem archive path | `BASE_TAR_GZ_PATH` |
 | `-k, --key-folder` | SSH keys directory | `KEY_FOLDER` |
-| `--disable-sftp` | Disable SFTP subsystem | `DISABLE_SFTP` |
+| `--enable-sftp` | Enable SFTP subsystem (disabled by default) | `ENABLE_SFTP` |
 | `--abuse-ip-db-api-key` | AbuseIPDB API key | `ABUSE_IP_DB_API_KEY` |
 | `--abuse-ip-cache-cleanup-hours` | Cache cleanup interval | `ABUSE_IP_CACHE_CLEANUP_HOURS` |
 | `--reject-all-auth` | Reject all authentication attempts | `REJECT_ALL_AUTH` |
