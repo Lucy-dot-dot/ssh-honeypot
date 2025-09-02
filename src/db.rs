@@ -70,9 +70,11 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
 
     // Process database messages
     while let Some(msg) = rx.recv().await {
-        log::trace!("Processing database message: {:?}", msg);
+        log::trace!("Processing database message: {:?}", std::mem::discriminant(&msg));
         match msg {
             DbMessage::RecordConnect { timestamp, ip } => {
+                log::trace!("Recording connection from {} at {}", ip, timestamp);
+
                 match record_connect(&pool, timestamp, ip).await {
                     Ok(_) => {
                         log::trace!("Connection recorded");
@@ -83,6 +85,8 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 };
             }
             DbMessage::RecordAuth { timestamp, ip, username, auth_type, password, public_key, successful, response_tx } => {
+                log::trace!("Recording {} auth attempt: user='{}' from {} (success={})", auth_type, username, ip, successful);
+
                 let result = record_auth(
                     &pool, timestamp, ip, username, auth_type,
                     password, public_key, successful
