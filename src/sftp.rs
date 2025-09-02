@@ -10,6 +10,10 @@ use tokio::sync::{mpsc, RwLock};
 use crate::db::DbMessage;
 use crate::shell::filesystem::fs2::{FileContent, FileSystem};
 
+/*
+NOTE: This sftp implementation is quite basic and not feature complete. It may not work in many cases. And is subject to potential removal until I decide to or someone wants to have it.
+ */
+
 pub struct HoneypotSftpSession {
     db_tx: mpsc::Sender<DbMessage>,
     fs: Arc<RwLock<FileSystem>>,
