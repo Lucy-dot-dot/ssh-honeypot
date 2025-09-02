@@ -61,7 +61,7 @@ pub struct CliArgs {
 
     /// Disable the fake cli interface provided and only save passwords and/or key authentication attempts. Does not reject the authentication, --reject-all-auth can be used to do that
     #[arg(short = 'c', long = "disable-cli-interface", env = "DISABLE_CLI_INTERFACE", action = ArgAction::SetTrue)]
-    pub disable_cli_interface: Option<bool>,
+    pub disable_cli_interface: bool,
     
     /// Authentication banner to show. Can make the server more realistic
     #[arg(short, long, env = "AUTHENTICATION_BANNER")]
@@ -69,11 +69,11 @@ pub struct CliArgs {
 
     /// Makes the response veryyyyy slooooooooooowww in order to slow down attackers and "tarpit" them
     #[arg(short, long, env = "TARPIT", action = ArgAction::SetTrue)]
-    pub tarpit: Option<bool>,
+    pub tarpit: bool,
 
     /// Disables the base tar.gz loading, which is used to load the base system
     #[arg(short = 'g', long = "disable-base-tar-gz-loading", env = "DISABLE_BASE_TAR_GZ_LOADING", action = ArgAction::SetTrue)]
-    pub disable_base_tar_gz_loading: Option<bool>,
+    pub disable_base_tar_gz_loading: bool,
 
     /// The path to the base tar.gz file to load. Default is a debian 12 deboostrap'ed base system
     #[arg(short = 'b', long = "base-tar-gz-path", env = "BASE_TAR_GZ_PATH")]
@@ -86,17 +86,17 @@ pub struct CliArgs {
     /// Disable SO_REUSEPORT for ssh tcp socket
     /// Disabling this may result in issues with IPv6 Ports. Can be disabled safely if net.ipv6.bindv6only = 1 is set
     #[arg(short = 'r', long = "disable-so-reuseport", env = "DISABLE_SO_REUSEPORT", action = ArgAction::SetTrue)]
-    pub disable_so_reuseport: Option<bool>,
+    pub disable_so_reuseport: bool,
 
     /// Disable SO_REUSEADDR for ssh tcp socket
     /// Disabling this may result in issues with IPv6 Ports. Can be disabled safely if net.ipv6.bindv6only = 1 is set
     #[arg(short = 's', long = "disable-so-reuseaddr", env = "DISABLE_SO_REUSEADDR", action = ArgAction::SetTrue)]
-    pub disable_so_reuseaddr: Option<bool>,
+    pub disable_so_reuseaddr: bool,
 
     /// Disable SFTP subsystem support
     /// When disabled, SFTP connection attempts will be logged but not handled
     #[arg(long = "disable-sftp", env = "DISABLE_SFTP", action = ArgAction::SetTrue)]
-    pub disable_sftp: Option<bool>,
+    pub disable_sftp: bool,
 
     /// AbuseIPDB API key for checking suspicious IPs
     #[arg(long = "abuse-ip-db-api-key", env = "ABUSE_IP_DB_API_KEY")]
@@ -108,11 +108,11 @@ pub struct CliArgs {
 
     /// Reject all authentication attempts instead of accepting them
     #[arg(long = "reject-all-auth", env = "REJECT_ALL_AUTH", action = ArgAction::SetTrue)]
-    pub reject_all_auth: Option<bool>,
+    pub reject_all_auth: bool,
 
     /// Disable IPAPI. The free api endpoint does not support TLS https://members.ip-api.com/
     #[arg(long = "disable-ipapi", env = "DISABLE_IPAPI", action = ArgAction::SetTrue)]
-    pub disable_ipapi: Option<bool>,
+    pub disable_ipapi: bool,
 }
 
 #[derive(Debug)]
@@ -199,10 +199,6 @@ impl App {
             SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), 2222),
         ];
 
-        // TODO: Handle clap arguments way cleaner. Maybe with an extra function? Because clap boolean flags with `ArgAction::SetTrue` always return `Some(false)`
-        let disable_base_tar_gz_loading = Self::merge_clap_boolean_with_config(cli.disable_base_tar_gz_loading, config.disable_base_tar_gz_loading);
-        let disable_ipapi = Self::merge_clap_boolean_with_config(cli.disable_ipapi, config.disable_ipapi);
-
         Self {
             interfaces: cli.interfaces
                 .filter(|v| !v.is_empty())
@@ -213,18 +209,14 @@ impl App {
                 .or(config.database_url)
                 .unwrap_or_else(|| "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot".to_string()),
             
-            disable_cli_interface: cli.disable_cli_interface
-                .or(config.disable_cli_interface)
-                .unwrap_or(false),
+            disable_cli_interface: Self::merge_clap_boolean_with_config(cli.disable_cli_interface, config.disable_cli_interface),
             
             authentication_banner: cli.authentication_banner
                 .or(config.authentication_banner),
             
-            tarpit: cli.tarpit
-                .or(config.tarpit)
-                .unwrap_or(false),
+            tarpit: Self::merge_clap_boolean_with_config(cli.tarpit, config.tarpit),
             
-            disable_base_tar_gz_loading,
+            disable_base_tar_gz_loading: Self::merge_clap_boolean_with_config(cli.disable_base_tar_gz_loading, config.disable_base_tar_gz_loading),
             
             base_tar_gz_path: cli.base_tar_gz_path
                 .or_else(|| config.base_tar_gz_path.map(PathBuf::from))
@@ -234,17 +226,11 @@ impl App {
                 .or_else(|| config.key_folder.map(PathBuf::from))
                 .unwrap_or_else(|| path_manager.key_dir.clone()),
             
-            disable_so_reuseport: cli.disable_so_reuseport
-                .or(config.disable_so_reuseport)
-                .unwrap_or(false),
+            disable_so_reuseport: Self::merge_clap_boolean_with_config(cli.disable_so_reuseport, config.disable_so_reuseport),
             
-            disable_so_reuseaddr: cli.disable_so_reuseaddr
-                .or(config.disable_so_reuseaddr)
-                .unwrap_or(false),
+            disable_so_reuseaddr: Self::merge_clap_boolean_with_config(cli.disable_so_reuseaddr, config.disable_so_reuseaddr),
             
-            disable_sftp: cli.disable_sftp
-                .or(config.disable_sftp)
-                .unwrap_or(false),
+            disable_sftp: Self::merge_clap_boolean_with_config(cli.disable_sftp, config.disable_sftp),
             
             abuse_ip_db_api_key: cli.abuse_ip_db_api_key
                 .or(config.abuse_ip_db_api_key),
@@ -253,24 +239,24 @@ impl App {
                 .or(config.abuse_ip_cache_cleanup_interval_hours)
                 .unwrap_or(24),
             
-            reject_all_auth: cli.reject_all_auth
-                .or(config.reject_all_auth)
-                .unwrap_or(false),
+            reject_all_auth: Self::merge_clap_boolean_with_config(cli.reject_all_auth, config.reject_all_auth),
             
             path_manager,
-            disable_ipapi,
+            disable_ipapi: Self::merge_clap_boolean_with_config(cli.disable_ipapi, config.disable_ipapi),
         }
     }
 
-    fn merge_clap_boolean_with_config(clap_set_true_bool: Option<bool>, config_bool: Option<bool>) -> bool {
-        if let Some(clap_boolean_value) = clap_set_true_bool {
-            if !clap_boolean_value && let Some(config_boolean) = config_bool {
-                config_boolean
-            } else {
-                clap_boolean_value
-            }
+    // Merges a boolean flag from Clap with one from the config file.
+    /// CLI/env (`clap_bool`) takes precedence only if it is `true`.
+    /// If the CLI/env flag is not present (`clap_bool` is `false`), the config value is used.
+    fn merge_clap_boolean_with_config(clap_bool: bool, config_bool: Option<bool>) -> bool {
+        if clap_bool {
+            // Flag was present on CLI or in env, so it's true. Highest precedence.
+            true
         } else {
-            false
+            // Flag was not present, so defer to the config file.
+            // If config has a value, use it. Otherwise, default to false.
+            config_bool.unwrap_or(false)
         }
     }
 }
