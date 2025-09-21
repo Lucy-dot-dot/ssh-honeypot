@@ -12,35 +12,25 @@ pub struct Keys {
 }
 
 pub fn load_or_generate_keys(app: &App) -> Keys {
-    if app.key_folder.is_dir() {
-        let ed_path = app.key_folder.join("ed25519");
-        let rsa_path = app.key_folder.join("rsa");
-        let ecdsa_path = app.key_folder.join("ecdsa");
-        log::debug!("Loading keys from: {},{},{}", ed_path.display(), rsa_path.display(), ecdsa_path.display());
+    let key_dir = app.effective_key_dir();
+    let ed_path = key_dir.join("ed25519");
+    let rsa_path = key_dir.join("rsa");
+    let ecdsa_path = key_dir.join("ecdsa");
+    
+    log::debug!("Loading keys from: {}, {}, {}", 
+        ed_path.display(), 
+        rsa_path.display(), 
+        ecdsa_path.display()
+    );
 
-        let ed_key = load_or_create_key(ed_path, Algorithm::Ed25519);
-        let rsa_key = load_or_create_key(rsa_path, Algorithm::Rsa { hash: Some(HashAlg::Sha512) });
-        let ecdsa_key = load_or_create_key(ecdsa_path, Algorithm::Ecdsa { curve: EcdsaCurve::NistP521 });
-        Keys {
-            ed25519: ed_key,
-            rsa: rsa_key,
-            ecdsa: ecdsa_key,
-        }
-    } else {
-        log::warn!("Key folder does not exist");
-        log::warn!("Generating keys");
-        let ed = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
-        log::debug!("Generated ed25519 key");
-        let rsa = PrivateKey::random(&mut OsRng, Algorithm::Rsa { hash: Some(HashAlg::Sha512) }).unwrap();
-        log::debug!("Generated rsa key");
-        let ecdsa = PrivateKey::random(&mut OsRng, Algorithm::Ecdsa { curve: EcdsaCurve::NistP521 }).unwrap();
-        log::debug!("Generated ecdsa key");
-
-        Keys {
-            ed25519: ed,
-            rsa,
-            ecdsa
-        }
+    let ed_key = load_or_create_key(ed_path, Algorithm::Ed25519);
+    let rsa_key = load_or_create_key(rsa_path, Algorithm::Rsa { hash: Some(HashAlg::Sha512) });
+    let ecdsa_key = load_or_create_key(ecdsa_path, Algorithm::Ecdsa { curve: EcdsaCurve::NistP521 });
+    
+    Keys {
+        ed25519: ed_key,
+        rsa: rsa_key,
+        ecdsa: ecdsa_key,
     }
 }
 

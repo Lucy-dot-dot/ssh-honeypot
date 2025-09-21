@@ -1,22 +1,25 @@
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
-use russh::{server, Channel, ChannelId, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, CryptoVec, Error};
+use russh::{server, Channel, ChannelId, ChannelMsg, CryptoVec, Error};
 use russh::keys::{HashAlg, PublicKey};
 use russh::server::{Auth, Handler, Msg, Session};
+use ssh_encoding::Error as SshEncodingError;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 use rand::{rng, Rng};
 use rand_core::RngCore;
 use crate::db::DbMessage;
 use crate::shell::commands::{
-    CommandDispatcher, CommandContext,
-    EchoCommand, CatCommand, DateCommand, FreeCommand, PsCommand, UnameCommand, LsCommand,
-    PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand
-};
-use crate::shell::filesystem::fs2::FileSystem;
+	CommandDispatcher, CommandContext,
+	EchoCommand, CatCommand, DateCommand, FreeCommand, PsCommand, UnameCommand, LsCommand,
+	PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand
+};use crate::shell::filesystem::fs2::{FileContent, FileSystem};
+use crate::sftp::HoneypotSftpSession;
+use crate::abuseipdb::{Client as AbuseIpClient, AbuseIpError};
+use crate::ipapi;
 
 #[derive(Clone, Default)]
 // Store session data
@@ -41,9 +44,12 @@ pub struct SshHandler {
     authentication_banner: Option<String>,
     tarpit: bool,
     fs2: Arc<RwLock<FileSystem>>,
-    send_task: Option<tokio::task::JoinHandle<()>>,
-    send_task_tx: Option<mpsc::Sender<String>>,
-    command_dispatcher: CommandDispatcher,
+    /*send_task: Option<tokio::task::JoinHandle<()>>,
+    send_task_tx: Option<mpsc::Sender<String>>,*/
+    enable_sftp: bool,
+    abuse_ip_client: Option<Arc<AbuseIpClient>>,
+    reject_all_auth: bool,
+	command_dispatcher: CommandDispatcher,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -59,27 +65,44 @@ impl Handler for SshHandler {
         async move {
             self.user = Some(user.to_string());
             self.cwd = format!("/home/{}", user);
-            self.ensure_user_home_exists().await;
-            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
+            if !self.disable_cli_interface {
+                self.ensure_user_home_exists().await;
+            }
+            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))).ip());
 
-            // Generate a UUID for this auth attempt
-            let auth_id = Uuid::new_v4().to_string();
-            self.auth_id = Some(auth_id.clone());
+            // We'll get the actual UUID back from the database
 
             log::info!("Password auth attempt - Username: {}, Password: {}, IP: {}", user, password, peer_str);
 
-            // Record authentication attempt in database
+            // Check IP with AbuseIPDB if client is available
+            self.check_abuse_ip_db().await;
+
+            // Record authentication attempt in database and get the UUID back
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             match self.db_tx.send(DbMessage::RecordAuth {
-                id: auth_id,
                 timestamp: Utc::now(),
                 ip: peer_str,
                 username: user.to_string(),
                 auth_type: "password".to_string(),
                 password: Some(password.to_string()),
                 public_key: None,
-                successful: true, // We're accepting all auth in honeypot
+                successful: !self.reject_all_auth, // Accept/reject based on flag
+                response_tx,
             }).await {
-                Ok(_) => { log::trace!("Send RecordAuth to db task") },
+                Ok(_) => {
+                    match response_rx.await {
+                        Ok(Ok(auth_id)) => {
+                            log::trace!("Recorded auth with UUID: {}", auth_id);
+                            self.auth_id = Some(auth_id);
+                        },
+                        Ok(Err(e)) => {
+                            log::error!("Database error recording auth: {}", e);
+                        },
+                        Err(e) => {
+                            log::error!("Failed to receive auth response: {}", e);
+                        }
+                    }
+                },
                 Err(err) => { log::error!("Failed to send RecordAuth to db task: {}", err) },
             };
 
@@ -87,14 +110,13 @@ impl Handler for SshHandler {
             let delay = rng().next_u64() % 501;
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-
-            if self.disable_cli_interface {
-                log::info!("Cli interface is disabled");
-                return Ok(Auth::reject())
+            if self.reject_all_auth {
+                log::info!("Rejected authentication attempt");
+                Ok(Auth::Reject { proceed_with_methods: None, partial_success: false })
+            } else {
+                log::info!("Accepted new connection");
+                Ok(Auth::Accept)
             }
-            log::info!("Accepted new connection");
-            // For honeypot, we accept all auth attempts
-            Ok(Auth::Accept)
         }
     }
 
@@ -107,28 +129,45 @@ impl Handler for SshHandler {
         async move {
             self.user = Some(user.to_string());
             self.cwd = format!("/home/{}", user);
-            self.ensure_user_home_exists().await;
+            if !self.disable_cli_interface {
+                self.ensure_user_home_exists().await;
+            }
             let key_str = format!("{}", public_key.key_data().fingerprint(HashAlg::Sha512));
-            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))));
+            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))).ip());
 
-            // Generate a UUID for this auth attempt
-            let auth_id = Uuid::new_v4().to_string();
-            self.auth_id = Some(auth_id.clone());
+            // We'll get the actual UUID back from the database
 
             log::info!("Public key auth attempt - Username: {}, Key: {}, IP: {}", user, key_str, peer_str);
 
-            // Record authentication attempt in database
+            // Check IP with AbuseIPDB if client is available
+            self.check_abuse_ip_db().await;
+
+            // Record authentication attempt in database and get the UUID back
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             match self.db_tx.send(DbMessage::RecordAuth {
-                id: auth_id,
                 timestamp: Utc::now(),
                 ip: peer_str,
                 username: user.to_string(),
                 auth_type: "publickey".to_string(),
                 password: None,
                 public_key: Some(key_str),
-                successful: true, // We're accepting all auth in honeypot
+                successful: !self.reject_all_auth, // Accept/reject based on flag
+                response_tx,
             }).await {
-                Ok(_) => { log::trace!("Send RecordAuth to db task") },
+                Ok(_) => {
+                    match response_rx.await {
+                        Ok(Ok(auth_id)) => {
+                            log::trace!("Recorded auth with UUID: {}", auth_id);
+                            self.auth_id = Some(auth_id);
+                        },
+                        Ok(Err(e)) => {
+                            log::error!("Database error recording auth: {}", e);
+                        },
+                        Err(e) => {
+                            log::error!("Failed to receive auth response: {}", e);
+                        }
+                    }
+                },
                 Err(err) => { log::error!("Failed to send RecordAuth to db task: {}", err) },
             };
 
@@ -137,13 +176,13 @@ impl Handler for SshHandler {
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
-            if self.disable_cli_interface {
-                log::debug!("Cli interface is disabled");
-                return Ok(Auth::reject())
+            if self.reject_all_auth {
+                log::info!("Rejected authentication attempt");
+                Ok(Auth::Reject { proceed_with_methods: None, partial_success: false })
+            } else {
+                log::info!("Accepted new connection");
+                Ok(Auth::Accept)
             }
-            log::info!("Accepted new connection");
-            // For honeypot, we accept all auth attempts
-            Ok(Auth::Accept)
         }
     }
 
@@ -156,13 +195,25 @@ impl Handler for SshHandler {
         }
     }
 
+    fn channel_eof(&mut self, channel: ChannelId, session: &mut Session) -> impl Future<Output=Result<(), Self::Error>> + Send {
+        async move {
+            log::debug!("Channel EOF on channel: {}, closing channel", channel);
+            session.close(channel)?;
+            Ok(())
+        }
+    }
+
     fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
         _session: &mut Session,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         async move {
-            log::debug!("Open session on channel: {}", channel.id());
+            if let Some(peer) = self.peer {
+                log::debug!("Open session on channel: {} for ip {}", channel.id(), peer);
+            } else {
+                log::debug!("Open session on channel: {}", channel.id());
+            }
             if let (Some(user), Some(auth_id)) = (&self.user, &self.auth_id) {
                 // Initialize session data once we have a channel session
                 let data = SessionData {
@@ -175,21 +226,20 @@ impl Handler for SshHandler {
 
                 // Start the fake shell for the attacker
                 let db_tx = self.db_tx.clone();
-                let (channel_reader, channel_writer) = channel.split();
+                //let (channel_reader, channel_writer) = channel.split();
 
                 // Handle the shell session within this future
                 log::trace!("Starting tokio task for shell session saving");
                 tokio::spawn(async move {
-                    handle_shell_session(channel_reader, data, db_tx).await;
+                    handle_shell_session(channel, data, db_tx).await;
                 });
 
-                let (sender_task, recv_task) = mpsc::channel::<String>(1000);
-                let tarpit = self.tarpit;
-                self.send_task = Some(tokio::spawn(async move {
+                //let (sender_task, recv_task) = mpsc::channel::<String>(1000);
+                /*self.send_task = Some(tokio::spawn(async move {
                     // TODO: Implement sending data to client from other thread
                     Self::async_data_writer(channel_writer, recv_task, tarpit).await;
                 }));
-                self.send_task_tx = Some(sender_task);
+                self.send_task_tx = Some(sender_task);*/
 
             }
 
@@ -204,6 +254,12 @@ impl Handler for SshHandler {
         session: &mut Session,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
+            if self.disable_cli_interface {
+                log::debug!("Cli interface is disabled");
+                session.channel_failure(channel)?;
+                return Ok(())
+            }
+
             if data[0] == 4 {
                 log::debug!("Client requested closing of connection");
                 match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
@@ -254,7 +310,6 @@ impl Handler for SshHandler {
 
                     // Record command in database
                     match self.db_tx.send(DbMessage::RecordCommand {
-                        id: Uuid::new_v4().to_string(),
                         auth_id: self.session_data.auth_id.clone(),
                         timestamp: Utc::now(),
                         command: self.current_cmd.clone(),
@@ -327,6 +382,12 @@ impl Handler for SshHandler {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
             log::debug!("Getting shell command request for channel: {}", channel);
+            if self.disable_cli_interface {
+                log::debug!("Cli interface is disabled");
+                session.channel_failure(channel)?;
+                return Ok(())
+            }
+
             // Send a welcome message
             let welcome = format!(
                 "\n\nWelcome to Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n * Support:        https://ubuntu.com/advantage\r\n\r\n  System information as of {}\r\n\r\n  System load:  0.08              Users logged in:        1\r\n  Usage of /:   42.6% of 30.88GB  IP address for eth0:    10.0.2.15\r\n  Memory usage: 38%               IP address for docker0:  172.17.0.1\r\n  Swap usage:   0%                \r\n  Processes:    116\r\n\r\nLast login: {} from 192.168.1.5\r\n",
@@ -350,15 +411,88 @@ impl Handler for SshHandler {
         }
     }
 
+    /// This is ssh user@host "command", data should be UTf-8
+    fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> impl Future<Output=Result<(), Self::Error>> + Send {
+        async move {
+            let command = String::from_utf8_lossy(data);
+            // Record command in database
+            match self.db_tx.send(DbMessage::RecordCommand {
+                auth_id: self.session_data.auth_id.clone(),
+                timestamp: Utc::now(),
+                command: command.to_string(),
+            }).await {
+                Ok(_) => { log::trace!("Send record command to db task") },
+                Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+            };
+
+            let answer = format!("You thought I'm going to execute '{}'. But jokes on you. You are now my slave.", command);
+            log::debug!("Exec request received: {}", command);
+            log::debug!("Answering with: {}", answer);
+            self.tarpit_data(session, channel, answer.as_bytes()).await?;
+            session.channel_failure(channel)?;
+            Ok(())
+        }
+    }
+
+    fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async move {
+            log::debug!("Subsystem request: {} on channel {}", name, channel);
+
+            if name == "sftp" {
+                if !self.enable_sftp {
+                    log::info!("SFTP subsystem request denied (SFTP disabled): auth_id: {:?}", self.auth_id);
+                    session.channel_failure(channel)?;
+                    return Ok(());
+                }
+
+                log::info!("Starting SFTP subsystem for auth_id: {:?}", self.auth_id);
+
+                if let Some(auth_id) = &self.auth_id {
+                    // Create SFTP session handler
+                    let _sftp_handler = HoneypotSftpSession::new(
+                        self.db_tx.clone(),
+                        self.fs2.clone(),
+                        auth_id.clone(),
+                    );
+
+                    // Accept the subsystem request
+                    session.channel_success(channel)?;
+
+                    // Run the SFTP server on this channel
+                    // Note: The actual channel stream handling would need to be implemented
+                    // based on the specific russh-sftp requirements
+                    log::info!("SFTP subsystem started for channel {}", channel);
+
+                    // For now, just log that SFTP was requested
+                    // In a complete implementation, you would need to handle the channel data
+                    // and pass it to the SFTP handler
+                } else {
+                    log::error!("No auth_id available for SFTP session");
+                    session.channel_failure(channel)?;
+                }
+            } else {
+                log::debug!("Unsupported subsystem: {}", name);
+                session.channel_failure(channel)?;
+            }
+
+            Ok(())
+        }
+    }
+
 }
 
-impl Drop for SshHandler {
+/*impl Drop for SshHandler {
     fn drop(&mut self) {
         if let Some(send_task) = self.send_task.take() {
             send_task.abort();
         }
     }
-}
+}*/
 
 impl SshHandler {
     // Process commands and return fake responses
@@ -379,13 +513,13 @@ impl SshHandler {
             self.fs2.clone(),
             self.session_data.auth_id.clone(),
         );
-        
+
         // Use the new dispatcher for all commands
         let mut output = self.command_dispatcher.execute(primary_cmd, &mut context).await;
-        
+
         // Update cwd from context in case it changed (e.g., from cd command)
         self.cwd = context.cwd.clone();
-        
+
         // Handle special exit commands
         if primary_cmd == "exit" || primary_cmd == "logout" {
             return "".to_string();
@@ -466,89 +600,46 @@ impl SshHandler {
         }
     }
 
-    /// Asynchronously writes data from a receiver to a channel writer, with optional tarpit-induced delay.
-    ///
-    /// # Parameters
-    ///
-    /// - `channel_writer`: A [`ChannelWriteHalf<Msg>`] instance used to send data to a client over a channel.
-    /// - `recv_task`: An [`Receiver<String>`] that supplies messages (in string format) to be sent asynchronously.
-    /// - `tarpit`: A boolean indicating whether to introduce a "tarpit" behavior, which adds random delays between sending each byte of the data.
-    ///
-    /// # Behavior
-    ///
-    /// This function runs an infinite loop that waits for incoming data from the `recv_task` receiver. When data is available:
-    ///
-    /// - If `tarpit` is `true`, the function introduces random delays (between 10 milliseconds and 700 milliseconds) before sending each byte of the data individually to the client.
-    /// - If `tarpit` is `false`, the full data buffer is sent to the client in one go.
-    ///
-    /// The function uses the `channel_writer` to send data to the client and logs the progress:
-    ///
-    /// - If the data is successfully sent, a debug-level log is recorded.
-    /// - If there is an error while sending data, it logs an error and exits the loop.
-    ///
-    /// If `recv_task.recv()` returns `None`, an error is logged (indicating that the task has been closed) and the loop breaks.
-    ///
-    /// The `tarpit` behavior is particularly useful for simulating delayed or throttled transmission of data.
-    ///
-    /// # Logging
-    ///
-    /// - Uses `log::trace!` to provide detailed trace-level logs for debugging purposes.
-    /// - Uses `log::error!` to record and highlight errors during the execution.
-    ///
-    /// # Errors
-    ///
-    /// - Logs an error if sending data to the client fails.
-    /// - Logs an error if the `recv_task` channel unexpectedly closes.
-    ///
-    /// # Dependencies
-    ///
-    /// - [`tokio`] for asynchronous execution and `sleep` functionality.
-    /// - [`log`] for structured application logging.
-    /// - [`rng()`] to generate random delay durations when `tarpit` is enabled.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let (writer, receiver) = create_channel(); // Hypothetical channel creation
-    /// let recv_task: Receiver<String> = create_recv_task();
-    /// async_data_writer(writer, recv_task, true).await;
-    /// ```
-    async fn async_data_writer(channel_writer: ChannelWriteHalf<Msg>, mut recv_task: mpsc::Receiver<String>, tarpit: bool) {
-        loop {
-            match recv_task.recv().await {
-                Some(data) => {
-                    log::trace!("Sending data to client: {}", data);
-                    let data = data.as_bytes();
-                    if tarpit {
-                        for datum in data.iter() {
-                            let wait_time = std::time::Duration::from_millis(rng().random_range(10..700));
-                            log::trace!("Tarpit delay: {}", wait_time.as_millis());
-                            tokio::time::sleep(wait_time).await;
-                            let data: &[u8] = &[*datum];
-                            match channel_writer.data(data).await {
-                                Ok(_) => { log::trace!("Sent data to client") },
-                                Err(err) => {
-                                    log::error!("Failed to send data to client: {}", err);
-                                    break;
-                                },
-                            };
-                        }
-                    } else {
-                        match channel_writer.data(data).await {
-                            Ok(_) => { log::trace!("Sent data in full to client") },
-                            Err(err) => {
-                                log::error!("Failed to send data to client: {}", err);
-                                break;
-                            },
-                        }
-                    }
-                },
-                None => {
-                    log::error!("Send task received None from channel");
-                    break;
-                },
+    async fn check_abuse_ip_db(&mut self) {
+        let Some(abuse_client) = &self.abuse_ip_client else {
+            log::trace!("AbuseIPDB client not configured, skipping IP check");
+            return;
+        };
+
+        let Some(peer_addr) = self.peer else {
+            log::trace!("No peer address available for AbuseIPDB check");
+            return;
+        };
+
+        let ip = peer_addr.ip().to_string();
+        log::trace!("Starting AbuseIPDB lookup for IP: {}", ip);
+
+        match abuse_client.check_ip_with_cache(&ip).await {
+            Ok(response) => {
+                let score = response.data.abuse_confidence_score.unwrap_or(0);
+                let country = response.data.country_code.as_deref().unwrap_or("Unknown");
+                let is_tor = response.data.is_tor;
+                log::trace!("AbuseIPDB response: {:?}", response.data);
+                log::info!("AbuseIPDB check for {}: Confidence: {}%, Country: {}, Tor: {}, Reports: {}",
+                             ip, score, country, is_tor, response.data.total_reports);
+            },
+            Err(AbuseIpError::RateLimitExceeded(info)) => {
+                log::trace!("AbuseIPDB rate limit encountered for {}", ip);
+                if let Some(retry_after) = info.retry_after_seconds {
+                    log::warn!("AbuseIPDB daily rate limit exceeded for {}. Retry after {} seconds", ip, retry_after);
+                } else if let Some(reset_timestamp) = info.reset_timestamp {
+                    let now = Utc::now().timestamp() as u64;
+                    let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
+                    log::warn!("AbuseIPDB daily rate limit exceeded for {}. Resets in {} seconds", ip, wait_seconds);
+                } else {
+                    log::warn!("AbuseIPDB daily rate limit exceeded for {}", ip);
+                }
+            },
+            Err(e) => {
+                log::warn!("AbuseIPDB check failed for {}: {}", ip, e);
             }
         }
+        log::trace!("Completed AbuseIPDB check for {}", ip);
     }
 }
 
@@ -559,6 +650,10 @@ pub struct SshServerHandler {
     authentication_banner: Option<String>,
     tarpit: bool,
     fs2: Arc<RwLock<FileSystem>>,
+    enable_sftp: bool,
+    abuse_ip_client: Option<Arc<AbuseIpClient>>,
+    reject_all_auth: bool,
+    ip_api_client: Option<Arc<ipapi::Client>>
 }
 
 impl server::Server for SshServerHandler {
@@ -566,7 +661,108 @@ impl server::Server for SshServerHandler {
 
     // Create a new handler for each connection
     fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> Self::Handler {
-        log::info!("New connection from: {:?}", peer_addr);
+        if let Some(peer_addr) = peer_addr {
+            let ip = peer_addr.ip().to_string();
+
+            // Fire-and-forget IP lookup to populate cache
+            if let Some(abuse_client) = &self.abuse_ip_client {
+                let client_clone = abuse_client.clone();
+                let ip_clone = ip.clone();
+                tokio::spawn(async move {
+                    match client_clone.check_ip_with_cache(&ip_clone).await {
+                        Ok(response) => {
+                            log::debug!("Background AbuseIPDB lookup completed for {}", ip_clone);
+                            log::debug!("{}", response.data);
+                        },
+                        Err(AbuseIpError::RateLimitExceeded(info)) => {
+                            if let Some(retry_after) = info.retry_after_seconds {
+                                log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Retry after {} seconds", ip_clone, retry_after);
+                            } else if let Some(reset_timestamp) = info.reset_timestamp {
+                                let now = Utc::now().timestamp() as u64;
+                                let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
+                                log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Resets in {} seconds", ip_clone, wait_seconds);
+                            } else {
+                                log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}", ip_clone);
+                            }
+                        },
+                        Err(e) => {
+                            log::debug!("Background AbuseIPDB lookup failed for {}: {}", ip_clone, e);
+                        }
+                    }
+                });
+            }
+
+            // Check cache for additional connection info
+            if let Some(abuse_client) = &self.abuse_ip_client {
+                let cache = abuse_client.memory_cache.clone();
+                let cache_ttl_hours = abuse_client.cache_ttl_hours;
+                let ip_for_cache = ip.clone();
+                let peer_for_log = peer_addr;
+
+                tokio::spawn(async move {
+                    let cache_read = cache.read().await;
+                    if let Some(cached) = cache_read.get(&ip_for_cache) {
+                        let age = Utc::now() - cached.cached_at;
+                        if age < chrono::Duration::hours(cache_ttl_hours as i64) {
+                            let data = &cached.response.data;
+                            let country = data.country_code.as_deref().unwrap_or("Unknown");
+                            let isp = data.isp.as_deref().unwrap_or("Unknown");
+                            let usage_type = data.usage_type.as_deref().unwrap_or("Unknown");
+                            let confidence = data.abuse_confidence_score.unwrap_or(0);
+                            let is_tor = data.is_tor;
+
+                            log::info!("New connection from: {} [Country: {}, ISP: {}, Usage: {}, Confidence: {}%, Tor: {}]",
+                                     peer_for_log, country, isp, usage_type, confidence, is_tor);
+                        } else {
+                            log::info!("New connection from: {} (cache expired)", peer_for_log);
+                        }
+                    } else {
+                        log::info!("New connection from: {} (no cache data)", peer_for_log);
+                    }
+                });
+            } else {
+                log::info!("New connection from: {:?}", peer_addr);
+            }
+
+            if let Some(ip_api_client) = &self.ip_api_client {
+                let client = ip_api_client.clone();
+                tokio::spawn(async move {
+                    log::trace!("Checking IP API for {}", ip);
+                    let ipinfo = match client.check_ip_with_cache(&ip).await {
+                        Ok(response) => {
+                            log::trace!("IP API lookup completed for {} with response: {:?}", ip, response);
+                            response
+                        },
+                        Err(e) => {
+                            log::warn!("IP API lookup failed for {}: {}", ip, e);
+                            return;
+                        }
+                    };
+                    log::info!("Additional country info for {} - Country: {}, Region: {}, lat/lon: {}/{}, org: {}", ip, ipinfo.country, ipinfo.region, ipinfo.lat, ipinfo.lon, ipinfo.org);
+                });
+            }
+
+            let db_tx = self.db_tx.clone();
+            tokio::spawn(async move {
+                match db_tx.send(DbMessage::RecordConnect {
+                    ip: peer_addr.ip().to_string(),
+                    timestamp: Utc::now(),
+                }).await {
+                    Ok(_) => { log::trace!("Send record command to db task") },
+                    Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+                };
+            });
+        } else {
+            // EBADF The argument sockfd is not a valid file descriptor.
+            // EFAULT The addr argument points to memory not in a valid part of the process address space.
+            // EINVAL addrlen is invalid (e.g., is negative).
+            // ENOBUFS Insufficient resources were available in the system to perform the operation.
+            // ENOTCONN The socket is not connected.
+            // ENOTSOCK The file descriptor sockfd does not refer to a socket.
+
+            // FIXME: using run_stream to catch the address earlier would be better but we loose a lot of lifecycle management from russh. Otherwise we could submit a patch to catch it earlier
+            log::info!("New connection from unknown peer, what is this?");
+        }
 
         SshHandler {
             peer: peer_addr,
@@ -581,15 +777,55 @@ impl server::Server for SshServerHandler {
             authentication_banner: self.authentication_banner.clone(),
             tarpit: self.tarpit,
             fs2: self.fs2.clone(),
-            send_task: None,
-            send_task_tx: None,
-            command_dispatcher: Self::create_command_dispatcher(),
-        }
+            /*send_task: None,
+            send_task_tx: None,*/
+            enable_sftp: self.enable_sftp,
+            abuse_ip_client: self.abuse_ip_client.clone(),
+            reject_all_auth: self.reject_all_auth,
+			command_dispatcher: Self::create_command_dispatcher(),
+		}
     }
 
     fn handle_session_error(&mut self, error: <Self::Handler as Handler>::Error) {
+
         match error {
-            <Self::Handler as Handler>::Error::Disconnect => {}
+            Error::Disconnect => {},
+            Error::IO(err) => {
+                match err.kind() {
+                    ErrorKind::UnexpectedEof => {
+                        log::warn!("Session did not properly closed. Bad bot.");
+                    }
+                    ErrorKind::ConnectionReset => {
+                        log::warn!("Session closed by remote peer. (TCP RST Packet)");
+                    }
+                    _ => {
+                        log::error!("I/O Session error: {:#?}", err);
+                    }
+                }
+            },
+            Error::Elapsed(_) => {
+                log::warn!("Session timed out");
+            }
+            Error::InactivityTimeout => {
+                log::warn!("Session timed out due to inactivity");
+            }
+            Error::SshEncoding(err) => {
+                match err {
+                    SshEncodingError::Length => {
+                        log::warn!("Client send invalid length packet");
+                    }
+                    _ => {
+                        log::error!("SSH encoding error: {:#?}", err);
+                    }
+                }
+            }
+            Error::InvalidConfig(err_msg) => {
+                if err_msg.contains("min_group_size") {
+                    log::warn!("Client sent too low min_group_size value. Likely looking for old misconfigured embedded devices");
+                } else {
+                    log::error!("Invalid configuration: {}", err_msg);
+                }
+            }
             _ => {
                 log::error!("Session error: {:#?}", error);
             }
@@ -598,20 +834,24 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>) -> SshServerHandler {
         Self {
             disable_cli_interface,
             db_tx,
             authentication_banner,
             tarpit,
             fs2,
+            enable_sftp,
+            abuse_ip_client,
+            reject_all_auth,
+            ip_api_client
         }
     }
-    
+
     /// Create and initialize the command dispatcher with available commands
     fn create_command_dispatcher() -> CommandDispatcher {
         let mut dispatcher = CommandDispatcher::new();
-        
+
         // Register regular commands
         dispatcher.registry_mut().register_command(Arc::new(EchoCommand));
         dispatcher.registry_mut().register_command(Arc::new(CatCommand));
@@ -627,17 +867,17 @@ impl SshServerHandler {
         dispatcher.registry_mut().register_command(Arc::new(CurlCommand));
         dispatcher.registry_mut().register_command(Arc::new(SudoCommand));
         dispatcher.registry_mut().register_command(Arc::new(ExitCommand));
-        
+
         // Register stateful commands
         dispatcher.registry_mut().register_stateful_command(Arc::new(CdCommand));
-        
+
         dispatcher
     }
 }
 
 // Function to handle the fake shell session
 async fn handle_shell_session(
-    mut channel: ChannelReadHalf,
+    mut channel: Channel<Msg>,
     session_data: SessionData,
     db_tx: mpsc::Sender<DbMessage>,
 ) {
@@ -647,6 +887,7 @@ async fn handle_shell_session(
     log::trace!("Waiting for channel to close before saving metadata");
     // Just wait for the channel to close
     while let Some(msg) = channel.wait().await {
+        log::trace!("Received channel message: {:?}", msg);
         match msg {
             ChannelMsg::Close => {
                 break;
@@ -667,14 +908,26 @@ async fn handle_shell_session(
 
     log::info!("Session closed for {}. Session start {}, Session end: {}, Duration: {}", session_data.auth_id, session_data.start_time, end_time, duration);
     // Log session end to database
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
     match db_tx.send(DbMessage::RecordSession {
         auth_id: session_data.auth_id,
         start_time: session_data.start_time,
         end_time,
         duration_seconds: duration.num_seconds(),
+        response_tx,
     }).await {
         Ok(_) => {
-            log::trace!("Successfully recorded session");
+            match response_rx.await {
+                Ok(Ok(session_id)) => {
+                    log::trace!("Successfully recorded session with ID: {}", session_id);
+                },
+                Ok(Err(e)) => {
+                    log::error!("Database error recording session: {}", e);
+                },
+                Err(e) => {
+                    log::error!("Failed to receive session response: {}", e);
+                }
+            }
         },
         Err(e) => {
             log::error!("Error sending session record: {}", e);
