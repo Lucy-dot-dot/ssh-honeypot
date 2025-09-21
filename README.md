@@ -105,7 +105,6 @@ cargo run -- --disable-sftp
     └── ecdsa
 
 ~/.local/share/ssh-honeypot/     # Data directory
-├── honeypot.db                  # PostgreSQL database
 └── base.tar.gz                  # Filesystem archive
 ```
 
