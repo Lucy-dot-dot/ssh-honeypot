@@ -132,7 +132,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
     log::trace!("Database handler stopped");
 }
 
-pub async fn connect_to_db_with_retry(database_url: &str, retry_interval_secs: u64) -> Result<PgPool, sqlx::Error> {
+pub async fn connect_to_db_with_retry(database_url: &str, retry_interval_secs: u64) -> Result<PgPool, Error> {
     const MAX_RETRIES: u8 = 100;
     let mut retry_count = 0;
 
@@ -156,7 +156,7 @@ pub async fn connect_to_db_with_retry(database_url: &str, retry_interval_secs: u
 }
 
 // Initialize database connection pool and run migrations
-pub async fn initialize_database_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
+pub async fn initialize_database_pool(database_url: &str) -> Result<PgPool, Error> {
     log::trace!("Connecting to PostgreSQL database");
     
     let pool = connect_to_db_with_retry(database_url, 5).await?;
@@ -205,7 +205,7 @@ async fn record_connect(
     pool: &PgPool,
     timestamp: DateTime<Utc>,
     ip: String
-) -> Result<(), sqlx::Error> {
+) -> Result<(), Error> {
     log::trace!("Recording connection attempt from {}", ip);
 
     query("INSERT INTO conn_track (timestamp, ip) VALUES ($1, $2::inet)")
@@ -223,7 +223,7 @@ async fn record_command(
     auth_id: String,
     timestamp: DateTime<Utc>,
     command: String,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), Error> {
     log::trace!("Recording command: {}", command);
     
     query(
@@ -246,7 +246,7 @@ async fn record_session(
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
     duration_seconds: i64,
-) -> Result<String, sqlx::Error> {
+) -> Result<String, Error> {
     log::trace!("Recording session: {} duration {} seconds", auth_id, duration_seconds);
     
     let row = query(
@@ -279,7 +279,7 @@ async fn record_file_upload(
     format_mismatch: bool,
     file_entropy: Option<f64>,
     binary_data: Vec<u8>,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), Error> {
     log::trace!("Recording file upload: {} ({} bytes)", filename, binary_data.len());
     
     query(
@@ -315,7 +315,7 @@ pub async fn record_abuse_ip_check(
     is_whitelisted: Option<bool>,
     total_reports: u32,
     response_data: String,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), Error> {
     let response_json: serde_json::Value = match serde_json::from_str(&response_data) {
         Ok(val) => {
             log::trace!("Decoded abuse ipdb json response from string");
@@ -360,7 +360,7 @@ pub async fn get_abuse_ip_check(
     pool: &PgPool,
     ip: &str,
     cache_ttl_hours: u8,
-) -> Result<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>, sqlx::Error> {
+) -> Result<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>, Error> {
     
     let result = query(
         "SELECT timestamp, response_data 
@@ -414,7 +414,7 @@ pub async fn record_ipapi_check(
     org: Option<String>,
     as_info: Option<String>,
     response_data: String,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), Error> {
     let response_json: serde_json::Value = match serde_json::from_str(&response_data) {
         Ok(val) => {
             log::trace!("Decoded abuse ip-api json response from string");
@@ -473,7 +473,7 @@ pub async fn get_ipapi_check(
     pool: &PgPool,
     ip: &str,
     cache_ttl_hours: u8,
-) -> Result<Option<(DateTime<Utc>, crate::ipapi::IpApiResponse)>, sqlx::Error> {
+) -> Result<Option<(DateTime<Utc>, crate::ipapi::IpApiResponse)>, Error> {
     
     let result = query(
         "SELECT timestamp, response_data 
