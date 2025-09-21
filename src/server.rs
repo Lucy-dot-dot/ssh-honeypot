@@ -502,6 +502,11 @@ impl SshHandler {
         let primary_cmd = cmd_parts.next().unwrap_or("").trim();
         log::debug!("Identified primary cmd: {}", primary_cmd);
 
+        // Handle special exit commands
+        if primary_cmd == "exit" || primary_cmd == "logout" {
+            return "".to_string();
+        }
+
         // Create command context
         let mut context = CommandContext::new(
             self.cwd.clone(),
@@ -512,26 +517,10 @@ impl SshHandler {
         );
 
         // Use the new dispatcher for all commands
-        let mut output = self.command_dispatcher.execute(primary_cmd, &mut context).await;
+        let output = self.command_dispatcher.execute(primary_cmd, &mut context).await;
 
         // Update cwd from context in case it changed (e.g., from cd command)
         self.cwd = context.cwd.clone();
-
-        // Handle special exit commands
-        if primary_cmd == "exit" || primary_cmd == "logout" {
-            return "".to_string();
-        }
-
-        for piped_cmd in cmd_parts {
-            if piped_cmd.trim().starts_with("grep ") {
-                let grep_term = piped_cmd.trim()[5..].trim();
-                // Very simple grep implementation
-                output = output.lines()
-                    .filter(|line| line.contains(grep_term))
-                    .collect::<Vec<&str>>()
-                    .join("\n") + "\n";
-            }
-        }
 
         output
     }
