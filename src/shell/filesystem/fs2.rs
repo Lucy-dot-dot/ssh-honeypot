@@ -464,6 +464,119 @@ impl FileSystem {
         Err(Error::new(ErrorKind::NotFound, "Target not found"))
     }
 
+    pub fn copy_file(&mut self, source_path: &str, dest_path: &str) -> std::io::Result<()> {
+        let sanitized_source = self.resolve_absolute_path(source_path);
+        let sanitized_dest = self.resolve_absolute_path(dest_path);
+
+        // Can't copy to itself
+        if sanitized_source == sanitized_dest {
+            return Err(Error::new(ErrorKind::InvalidInput, "Source and destination are the same"));
+        }
+
+        // Get source file/directory
+        let source_entry = self.get_file(&sanitized_source)?;
+        
+        // Clone the source entry for copying
+        let source_clone = source_entry.clone();
+
+        // Get destination parent directory and new name
+        let (dest_parent_path, dest_name) = match sanitized_dest.rsplit_once('/') {
+            Some((parent, name)) => {
+                let parent_path = if parent.is_empty() { "/" } else { parent };
+                (parent_path, name)
+            },
+            None => return Err(Error::new(ErrorKind::InvalidInput, "Invalid destination path")),
+        };
+
+        // Check if destination already exists
+        if self.get_file(&sanitized_dest).is_ok() {
+            return Err(Error::new(ErrorKind::AlreadyExists, "Destination already exists"));
+        }
+
+        // Get destination parent directory
+        let dest_parent = self.get_file_mut(dest_parent_path)?;
+
+        // Make sure destination parent is a directory
+        match &mut dest_parent.file_content {
+            Some(FileContent::Directory(entries)) => {
+                // Create new entry with copied content
+                let mut new_entry = source_clone;
+                new_entry.name = dest_name.to_string();
+                
+                // For directories, we need to recursively copy the content
+                if let Some(FileContent::Directory(source_entries)) = &new_entry.file_content {
+                    let copied_entries = source_entries.clone();
+                    new_entry.file_content = Some(FileContent::Directory(copied_entries));
+                }
+
+                entries.push(new_entry);
+                Ok(())
+            },
+            _ => Err(Error::new(ErrorKind::Other, "Destination parent is not a directory")),
+        }
+    }
+
+    pub fn move_file(&mut self, source_path: &str, dest_path: &str) -> std::io::Result<()> {
+        let sanitized_source = self.resolve_absolute_path(source_path);
+        let sanitized_dest = self.resolve_absolute_path(dest_path);
+
+        // Can't move to itself
+        if sanitized_source == sanitized_dest {
+            return Err(Error::new(ErrorKind::InvalidInput, "Source and destination are the same"));
+        }
+
+        // Can't move root directory
+        if sanitized_source == "/" {
+            return Err(Error::new(ErrorKind::InvalidInput, "Cannot move root directory"));
+        }
+
+        // First copy the file/directory
+        self.copy_file(&sanitized_source, &sanitized_dest)?;
+
+        // Then remove the source
+        self.remove_file(&sanitized_source)?;
+
+        Ok(())
+    }
+
+    pub fn remove_file(&mut self, path: &str) -> std::io::Result<()> {
+        let sanitized_path = self.resolve_absolute_path(path);
+
+        // Can't remove root directory
+        if sanitized_path == "/" {
+            return Err(Error::new(ErrorKind::InvalidInput, "Cannot remove root directory"));
+        }
+
+        // Get parent directory path and file name
+        let (parent_path, file_name) = match sanitized_path.rsplit_once('/') {
+            Some((parent, name)) => {
+                let parent_path = if parent.is_empty() { "/" } else { parent };
+                (parent_path, name)
+            },
+            None => return Err(Error::new(ErrorKind::InvalidInput, "Invalid path")),
+        };
+
+        // Get parent directory
+        let parent_dir = self.get_file_mut(parent_path)?;
+
+        // Make sure parent is a directory
+        match &mut parent_dir.file_content {
+            Some(FileContent::Directory(entries)) => {
+                // Find and remove the entry
+                let entry_index = entries
+                    .iter()
+                    .position(|entry| entry.name == file_name)
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::NotFound, format!("File '{}' not found", file_name))
+                    })?;
+
+                entries.remove(entry_index);
+                Ok(())
+            },
+            _ => Err(Error::new(ErrorKind::Other, "Parent is not a directory")),
+        }
+    }
+
     pub fn process_targz<R: Read>(&mut self, reader: R) -> std::io::Result<()> {
         let gz_decoder = GzDecoder::new(reader);
         let mut archive = Archive::new(gz_decoder);
@@ -695,7 +808,8 @@ mod tests {
         let mut fs = FileSystem::default();
 
         let result = fs.create_directory("/");
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -920,5 +1034,202 @@ mod tests {
         let result = fs.create_symlink("/existing.txt", "/target.txt");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn test_copy_file_simple() {
+        let mut fs = FileSystem::default();
+
+        // Create a test file
+        let file = fs.create_file("/test.txt").unwrap();
+        if let Some(FileContent::RegularFile(ref mut data)) = file.file_content {
+            *data = b"Hello, World!".to_vec();
+        }
+
+        // Copy the file
+        let result = fs.copy_file("/test.txt", "/copy.txt");
+        assert!(result.is_ok());
+
+        // Verify both files exist and have same content
+        let original = fs.get_file("/test.txt").unwrap();
+        let copy = fs.get_file("/copy.txt").unwrap();
+
+        match (&original.file_content, &copy.file_content) {
+            (Some(FileContent::RegularFile(orig_data)), Some(FileContent::RegularFile(copy_data))) => {
+                assert_eq!(orig_data, copy_data);
+                assert_eq!(copy.name, "copy.txt");
+            },
+            _ => panic!("Files should be regular files"),
+        }
+    }
+
+    #[test]
+    fn test_copy_directory() {
+        let mut fs = FileSystem::default();
+
+        // Create directory structure
+        fs.create_directory("/source").unwrap();
+        fs.create_file("/source/file1.txt").unwrap();
+        fs.create_file("/source/file2.txt").unwrap();
+
+        // Copy the directory
+        let result = fs.copy_file("/source", "/dest");
+        assert!(result.is_ok());
+
+        // Verify directory was copied
+        let copy = fs.get_file("/dest").unwrap();
+        assert_eq!(copy.name, "dest");
+        match &copy.file_content {
+            Some(FileContent::Directory(entries)) => {
+                assert_eq!(entries.len(), 2);
+                assert!(entries.iter().any(|e| e.name == "file1.txt"));
+                assert!(entries.iter().any(|e| e.name == "file2.txt"));
+            },
+            _ => panic!("Should be a directory"),
+        }
+    }
+
+    #[test]
+    fn test_copy_file_already_exists() {
+        let mut fs = FileSystem::default();
+
+        fs.create_file("/source.txt").unwrap();
+        fs.create_file("/dest.txt").unwrap();
+
+        let result = fs.copy_file("/source.txt", "/dest.txt");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn test_copy_file_to_itself() {
+        let mut fs = FileSystem::default();
+
+        fs.create_file("/test.txt").unwrap();
+
+        let result = fs.copy_file("/test.txt", "/test.txt");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_move_file_simple() {
+        let mut fs = FileSystem::default();
+
+        // Create a test file
+        fs.create_file("/source.txt").unwrap();
+
+        // Move the file
+        let result = fs.move_file("/source.txt", "/dest.txt");
+        assert!(result.is_ok());
+
+        // Verify source no longer exists
+        let source_result = fs.get_file("/source.txt");
+        assert!(source_result.is_err());
+        assert_eq!(source_result.unwrap_err().kind(), ErrorKind::NotFound);
+
+        // Verify destination exists
+        let dest = fs.get_file("/dest.txt").unwrap();
+        assert_eq!(dest.name, "dest.txt");
+    }
+
+    #[test]
+    fn test_move_directory() {
+        let mut fs = FileSystem::default();
+
+        // Create directory with content
+        fs.create_directory("/olddir").unwrap();
+        fs.create_file("/olddir/file.txt").unwrap();
+
+        // Move the directory
+        let result = fs.move_file("/olddir", "/newdir");
+        assert!(result.is_ok());
+
+        // Verify source no longer exists
+        assert!(fs.get_file("/olddir").is_err());
+
+        // Verify destination exists with content
+        let new_dir = fs.get_file("/newdir").unwrap();
+        assert_eq!(new_dir.name, "newdir");
+        match &new_dir.file_content {
+            Some(FileContent::Directory(entries)) => {
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].name, "file.txt");
+            },
+            _ => panic!("Should be a directory"),
+        }
+    }
+
+    #[test]
+    fn test_move_file_to_itself() {
+        let mut fs = FileSystem::default();
+
+        fs.create_file("/test.txt").unwrap();
+
+        let result = fs.move_file("/test.txt", "/test.txt");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_move_root_directory() {
+        let mut fs = FileSystem::default();
+
+        let result = fs.move_file("/", "/newroot");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_remove_file_simple() {
+        let mut fs = FileSystem::default();
+
+        // Create a test file
+        fs.create_file("/test.txt").unwrap();
+
+        // Verify it exists
+        assert!(fs.get_file("/test.txt").is_ok());
+
+        // Remove the file
+        let result = fs.remove_file("/test.txt");
+        assert!(result.is_ok());
+
+        // Verify it no longer exists
+        let get_result = fs.get_file("/test.txt");
+        assert!(get_result.is_err());
+        assert_eq!(get_result.unwrap_err().kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_remove_directory() {
+        let mut fs = FileSystem::default();
+
+        // Create directory
+        fs.create_directory("/testdir").unwrap();
+
+        // Remove the directory
+        let result = fs.remove_file("/testdir");
+        assert!(result.is_ok());
+
+        // Verify it no longer exists
+        assert!(fs.get_file("/testdir").is_err());
+    }
+
+    #[test]
+    fn test_remove_nonexistent_file() {
+        let mut fs = FileSystem::default();
+
+        let result = fs.remove_file("/nonexistent.txt");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_remove_root_directory() {
+        let mut fs = FileSystem::default();
+
+        let result = fs.remove_file("/");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
     }
 }
