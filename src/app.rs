@@ -21,6 +21,9 @@ pub struct Config {
     pub abuse_ip_cache_cleanup_interval_hours: Option<u32>,
     pub reject_all_auth: Option<bool>,
     pub disable_ipapi: Option<bool>,
+    pub server_id: Option<String>,
+    pub welcome_message: Option<String>,
+    pub hostname: Option<String>,
 }
 
 impl Default for Config {
@@ -41,6 +44,9 @@ impl Default for Config {
             abuse_ip_cache_cleanup_interval_hours: None,
             reject_all_auth: None,
             disable_ipapi: None,
+            server_id: None,
+            welcome_message: None,
+            hostname: None,
         }
     }
 }
@@ -113,6 +119,19 @@ pub struct CliArgs {
     /// Disable IPAPI. The free api endpoint does not support TLS https://members.ip-api.com/
     #[arg(long = "disable-ipapi", env = "DISABLE_IPAPI", action = ArgAction::SetTrue)]
     pub disable_ipapi: bool,
+
+    // No default in the macro because it is set further down and needs to be optional to distinguish between CLI and config file precedence
+    /// SSH server identification string (default: "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4")
+    #[arg(long = "server-id", env = "SERVER_ID")]
+    pub server_id: Option<String>,
+
+    /// Welcome message system description (default: "Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)")
+    #[arg(long = "welcome-message", env = "WELCOME_MESSAGE")]
+    pub welcome_message: Option<String>,
+
+    /// Hostname displayed in shell prompt and commands (default: "server01")
+    #[arg(long = "hostname", env = "HOSTNAME")]
+    pub hostname: Option<String>,
 }
 
 #[derive(Debug)]
@@ -133,6 +152,9 @@ pub struct App {
     pub abuse_ip_cache_cleanup_interval_hours: u32,
     pub reject_all_auth: bool,
     pub disable_ipapi: bool,
+    pub server_id: String,
+    pub welcome_message: String,
+    pub hostname: String,
 }
 
 impl App {
@@ -243,6 +265,18 @@ impl App {
             
             path_manager,
             disable_ipapi: Self::merge_clap_boolean_with_config(cli.disable_ipapi, config.disable_ipapi),
+            
+            server_id: cli.server_id
+                .or(config.server_id)
+                .unwrap_or_else(|| "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4".to_string()),
+            
+            welcome_message: cli.welcome_message
+                .or(config.welcome_message)
+                .unwrap_or_else(|| "Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)".to_string()),
+            
+            hostname: cli.hostname
+                .or(config.hostname)
+                .unwrap_or_else(|| "server01".to_string()),
         }
     }
 

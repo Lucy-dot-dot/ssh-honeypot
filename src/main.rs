@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         inactivity_timeout: Some(std::time::Duration::from_secs(30)),
         auth_rejection_time: std::time::Duration::from_secs(3),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
-        server_id: SshId::Standard(String::from("SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4")), // Mimic a real SSH server
+        server_id: SshId::Standard(app.server_id.clone()),
         keys: vec![keys.ed25519, keys.rsa, keys.ecdsa],
         methods: (&[MethodKind::PublicKey, MethodKind::Password, MethodKind::KeyboardInteractive]).as_slice().into(),
         ..Default::default()
@@ -207,7 +207,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.enable_sftp,
             abuse_ip_client.clone(),
             app.reject_all_auth,
-            ip_api_client.clone()
+            ip_api_client.clone(),
+            app.welcome_message.clone(),
+            app.hostname.clone()
         );
         tasks.push(tokio::spawn(async move {
             // Start the SSH server

@@ -23,6 +23,18 @@ disable_cli_interface = false
 # Default: none
 authentication_banner = "Ubuntu 22.04.3 LTS"
 
+# SSH server identification string (what clients see during connection)
+# Default: "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4"
+server_id = "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4"
+
+# Welcome message system description (displayed in login banner)
+# Default: "Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)"
+welcome_message = "Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)"
+
+# Hostname displayed in shell prompt and commands
+# Default: "server01"
+hostname = "server01"
+
 # Enable tarpit mode (slow responses to waste attacker time)
 # Default: false
 tarpit = false
@@ -75,7 +87,10 @@ disable_ipapi = false
 # DATABASE_URL=postgresql://user:pass@host:port/db
 # INTERFACE=0.0.0.0:2222
 # DISABLE_CLI_INTERFACE=true
-# AUTHENTICATION_BANNER="Ubuntu 22.04.3 LTS"  
+# AUTHENTICATION_BANNER="Ubuntu 22.04.3 LTS"
+# SERVER_ID="SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4"
+# WELCOME_MESSAGE="Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)"
+# HOSTNAME="server01"
 # TARPIT=true
 # DISABLE_BASE_TAR_GZ_LOADING=true
 # BASE_TAR_GZ_PATH=/path/to/base.tar.gz

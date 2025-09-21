@@ -50,6 +50,7 @@ pub struct SshHandler {
     abuse_ip_client: Option<Arc<AbuseIpClient>>,
     reject_all_auth: bool,
 	command_dispatcher: CommandDispatcher,
+    welcome_message: String,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -389,11 +390,7 @@ impl Handler for SshHandler {
             }
 
             // Send a welcome message
-            let welcome = format!(
-                "\n\nWelcome to Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n * Support:        https://ubuntu.com/advantage\r\n\r\n  System information as of {}\r\n\r\n  System load:  0.08              Users logged in:        1\r\n  Usage of /:   42.6% of 30.88GB  IP address for eth0:    10.0.2.15\r\n  Memory usage: 38%               IP address for docker0:  172.17.0.1\r\n  Swap usage:   0%                \r\n  Processes:    116\r\n\r\nLast login: {} from 192.168.1.5\r\n",
-                Local::now().format("%a %b %e %H:%M:%S %Y"),
-                Local::now().format("%a %b %e %H:%M:%S %Y")
-            );
+            let welcome = Self::generate_welcome_message(&self.welcome_message);
 
             match self.tarpit_data(session, channel, welcome.as_bytes()).await {
                 Ok(_) => { log::trace!("Send welcome message to client") },
@@ -641,6 +638,50 @@ impl SshHandler {
         }
         log::trace!("Completed AbuseIPDB check for {}", ip);
     }
+
+    /// Generate a welcome message with randomized system statistics
+    fn generate_welcome_message(system_description: &str) -> String {
+        let mut rng = rand::rng();
+        
+        // Randomize system load (0.01 to 2.50)
+        let system_load = rng.random_range(0.01..2.50);
+        
+        // Randomize usage of / (15% to 95%)
+        let disk_usage = rng.random_range(15.0..95.0);
+        let disk_size = rng.random_range(25.0..120.0);
+        
+        // Randomize memory usage (20% to 85%)
+        let memory_usage = rng.random_range(20..85);
+        
+        // Randomize swap usage (0% to 25%)
+        let swap_usage = rng.random_range(0..25);
+        
+        // Randomize number of processes (80 to 250)
+        let processes = rng.random_range(80..250);
+        
+        // Randomize users logged in (1 to 5)
+        let users_logged_in = rng.random_range(1..6);
+        
+        // Generate random IP addresses
+        let eth0_ip = format!("10.0.{}.{}", rng.random_range(1..255), rng.random_range(1..255));
+        let docker_ip = format!("172.17.{}.{}", rng.random_range(0..255), rng.random_range(1..255));
+        
+        format!(
+            "\n\nWelcome to {}\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n * Support:        https://ubuntu.com/advantage\r\n\r\n  System information as of {}\r\n\r\n  System load:  {:.2}              Users logged in:        {}\r\n  Usage of /:   {:.1}% of {:.2}GB  IP address for eth0:    {}\r\n  Memory usage: {}%               IP address for docker0:  {}\r\n  Swap usage:   {}%                \r\n  Processes:    {}\r\n\r\nLast login: {} from 192.168.1.5\r\n",
+            system_description,
+            Local::now().format("%a %b %e %H:%M:%S %Y"),
+            system_load,
+            users_logged_in,
+            disk_usage,
+            disk_size,
+            eth0_ip,
+            memory_usage,
+            docker_ip,
+            swap_usage,
+            processes,
+            Local::now().format("%a %b %e %H:%M:%S %Y")
+        )
+    }
 }
 
 // Implementation of Server trait
@@ -653,7 +694,9 @@ pub struct SshServerHandler {
     enable_sftp: bool,
     abuse_ip_client: Option<Arc<AbuseIpClient>>,
     reject_all_auth: bool,
-    ip_api_client: Option<Arc<ipapi::Client>>
+    ip_api_client: Option<Arc<ipapi::Client>>,
+    welcome_message: String,
+    hostname: String,
 }
 
 impl server::Server for SshServerHandler {
@@ -772,7 +815,7 @@ impl server::Server for SshServerHandler {
             db_tx: self.db_tx.clone(),
             current_cmd: String::new(),
             cwd: String::from("/home/user"),
-            hostname: "server01".to_string(),
+            hostname: self.hostname.clone(),
             disable_cli_interface: self.disable_cli_interface,
             authentication_banner: self.authentication_banner.clone(),
             tarpit: self.tarpit,
@@ -783,6 +826,7 @@ impl server::Server for SshServerHandler {
             abuse_ip_client: self.abuse_ip_client.clone(),
             reject_all_auth: self.reject_all_auth,
 			command_dispatcher: Self::create_command_dispatcher(),
+            welcome_message: self.welcome_message.clone(),
 		}
     }
 
@@ -834,7 +878,7 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>, welcome_message: String, hostname: String) -> SshServerHandler {
         Self {
             disable_cli_interface,
             db_tx,
@@ -844,7 +888,9 @@ impl SshServerHandler {
             enable_sftp,
             abuse_ip_client,
             reject_all_auth,
-            ip_api_client
+            ip_api_client,
+            welcome_message,
+            hostname,
         }
     }
 
