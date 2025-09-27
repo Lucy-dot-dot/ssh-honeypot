@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, query, Row, Pool, Postgres, Error};
+use sqlx::{PgPool, query, Row, Error};
 use sqlx::types::uuid::Uuid;
 use tokio::sync::mpsc;
 

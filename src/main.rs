@@ -7,6 +7,7 @@ mod shell;
 mod sftp;
 mod abuseipdb;
 mod ipapi;
+mod report;
 
 use app::App;
 use db::{run_db_handler, initialize_database_pool};

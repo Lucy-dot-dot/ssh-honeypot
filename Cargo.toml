@@ -6,6 +6,14 @@ repository = "https://github.com/Lucy-dot-dot/ssh-honeypot.git"
 license = "MIT"
 readme = "README.md"
 
+[[bin]]
+name = "ssh-honeypot"
+path = "src/main.rs"
+
+[[bin]]
+name = "report-generator"
+path = "src/bin/report_generator.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 russh = "0.54.3"
