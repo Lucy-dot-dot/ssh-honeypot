@@ -16,8 +16,10 @@ pub mod builtin_commands;
 
 
 // New trait-based exports
+#[allow(unused)]
 pub use command_trait::{Command, StatefulCommand, CommandResult, CommandError};
 pub use context::CommandContext;
+#[allow(unused)]
 pub use registry::CommandRegistry;
 pub use dispatcher::CommandDispatcher;
 pub use echo_command::EchoCommand;

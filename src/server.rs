@@ -210,11 +210,7 @@ impl Handler for SshHandler {
         _session: &mut Session,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         async move {
-            if let Some(peer) = self.peer {
-                log::debug!("Open session on channel: {} for ip {}", channel.id(), peer);
-            } else {
-                log::debug!("Open session on channel: {}", channel.id());
-            }
+            log::debug!("Open session on channel: {} for ip {}", channel.id(), self.peer.ip());
             if let (Some(user), Some(auth_id)) = (&self.user, &self.auth_id) {
                 // Initialize session data once we have a channel session
                 let data = SessionData {
@@ -592,12 +588,7 @@ impl SshHandler {
             return;
         };
 
-        let Some(peer_addr) = self.peer else {
-            log::trace!("No peer address available for AbuseIPDB check");
-            return;
-        };
-
-        let ip = peer_addr.ip().to_string();
+        let ip = self.peer.ip().to_string();
         log::trace!("Starting AbuseIPDB lookup for IP: {}", ip);
 
         match abuse_client.check_ip_with_cache(&ip).await {
