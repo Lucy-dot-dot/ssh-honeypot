@@ -32,7 +32,7 @@ struct SessionData {
 
 // Define our SSH server handler
 pub struct SshHandler {
-    peer: Option<SocketAddr>,
+    peer: SocketAddr,
     user: Option<String>,
     auth_id: Option<String>,
     session_data: SessionData,
@@ -69,7 +69,7 @@ impl Handler for SshHandler {
             if !self.disable_cli_interface {
                 self.ensure_user_home_exists().await;
             }
-            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))).ip());
+            let peer_str = self.peer.ip().to_string();
 
             // We'll get the actual UUID back from the database
 
@@ -134,7 +134,7 @@ impl Handler for SshHandler {
                 self.ensure_user_home_exists().await;
             }
             let key_str = format!("{}", public_key.key_data().fingerprint(HashAlg::Sha512));
-            let peer_str = format!("{}", self.peer.unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0))).ip());
+            let peer_str = self.peer.ip().to_string();
 
             // We'll get the actual UUID back from the database
 
@@ -210,11 +210,7 @@ impl Handler for SshHandler {
         _session: &mut Session,
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         async move {
-            if let Some(peer) = self.peer {
-                log::debug!("Open session on channel: {} for ip {}", channel.id(), peer);
-            } else {
-                log::debug!("Open session on channel: {}", channel.id());
-            }
+            log::debug!("Open session on channel: {} for ip {}", channel.id(), self.peer.ip());
             if let (Some(user), Some(auth_id)) = (&self.user, &self.auth_id) {
                 // Initialize session data once we have a channel session
                 let data = SessionData {
@@ -592,12 +588,7 @@ impl SshHandler {
             return;
         };
 
-        let Some(peer_addr) = self.peer else {
-            log::trace!("No peer address available for AbuseIPDB check");
-            return;
-        };
-
-        let ip = peer_addr.ip().to_string();
+        let ip = self.peer.ip().to_string();
         log::trace!("Starting AbuseIPDB lookup for IP: {}", ip);
 
         match abuse_client.check_ip_with_cache(&ip).await {
@@ -693,108 +684,98 @@ impl server::Server for SshServerHandler {
 
     // Create a new handler for each connection
     fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> Self::Handler {
-        if let Some(peer_addr) = peer_addr {
-            let ip = peer_addr.ip().to_string();
+        // Guaranteed to be safe as peer_addr is simply wrapped in Some() by russh for backwards compatibility
+        let peer_addr = peer_addr.unwrap();
+        let ip = peer_addr.ip().to_string();
 
-            // Fire-and-forget IP lookup to populate cache
-            if let Some(abuse_client) = &self.abuse_ip_client {
-                let client_clone = abuse_client.clone();
-                let ip_clone = ip.clone();
-                tokio::spawn(async move {
-                    match client_clone.check_ip_with_cache(&ip_clone).await {
-                        Ok(response) => {
-                            log::debug!("Background AbuseIPDB lookup completed for {}", ip_clone);
-                            log::debug!("{}", response.data);
-                        },
-                        Err(AbuseIpError::RateLimitExceeded(info)) => {
-                            if let Some(retry_after) = info.retry_after_seconds {
-                                log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Retry after {} seconds", ip_clone, retry_after);
-                            } else if let Some(reset_timestamp) = info.reset_timestamp {
-                                let now = Utc::now().timestamp() as u64;
-                                let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
-                                log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Resets in {} seconds", ip_clone, wait_seconds);
-                            } else {
-                                log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}", ip_clone);
-                            }
-                        },
-                        Err(e) => {
-                            log::debug!("Background AbuseIPDB lookup failed for {}: {}", ip_clone, e);
-                        }
-                    }
-                });
-            }
-
-            // Check cache for additional connection info
-            if let Some(abuse_client) = &self.abuse_ip_client {
-                let cache = abuse_client.memory_cache.clone();
-                let cache_ttl_hours = abuse_client.cache_ttl_hours;
-                let ip_for_cache = ip.clone();
-                let peer_for_log = peer_addr;
-
-                tokio::spawn(async move {
-                    let cache_read = cache.read().await;
-                    if let Some(cached) = cache_read.get(&ip_for_cache) {
-                        let age = Utc::now() - cached.cached_at;
-                        if age < chrono::Duration::hours(cache_ttl_hours as i64) {
-                            let data = &cached.response.data;
-                            let country = data.country_code.as_deref().unwrap_or("Unknown");
-                            let isp = data.isp.as_deref().unwrap_or("Unknown");
-                            let usage_type = data.usage_type.as_deref().unwrap_or("Unknown");
-                            let confidence = data.abuse_confidence_score.unwrap_or(0);
-                            let is_tor = data.is_tor;
-
-                            log::info!("New connection from: {} [Country: {}, ISP: {}, Usage: {}, Confidence: {}%, Tor: {}]",
-                                     peer_for_log, country, isp, usage_type, confidence, is_tor);
-                        } else {
-                            log::info!("New connection from: {} (cache expired)", peer_for_log);
-                        }
-                    } else {
-                        log::info!("New connection from: {} (no cache data)", peer_for_log);
-                    }
-                });
-            } else {
-                log::info!("New connection from: {:?}", peer_addr);
-            }
-
-            if let Some(ip_api_client) = &self.ip_api_client {
-                let client = ip_api_client.clone();
-                tokio::spawn(async move {
-                    log::trace!("Checking IP API for {}", ip);
-                    let ipinfo = match client.check_ip_with_cache(&ip).await {
-                        Ok(response) => {
-                            log::trace!("IP API lookup completed for {} with response: {:?}", ip, response);
-                            response
-                        },
-                        Err(e) => {
-                            log::warn!("IP API lookup failed for {}: {}", ip, e);
-                            return;
-                        }
-                    };
-                    log::info!("Additional country info for {} - Country: {}, Region: {}, lat/lon: {}/{}, org: {}", ip, ipinfo.country, ipinfo.region, ipinfo.lat, ipinfo.lon, ipinfo.org);
-                });
-            }
-
-            let db_tx = self.db_tx.clone();
+        // Fire-and-forget IP lookup to populate cache
+        if let Some(abuse_client) = &self.abuse_ip_client {
+            let client_clone = abuse_client.clone();
+            let ip_clone = ip.clone();
             tokio::spawn(async move {
-                match db_tx.send(DbMessage::RecordConnect {
-                    ip: peer_addr.ip().to_string(),
-                    timestamp: Utc::now(),
-                }).await {
-                    Ok(_) => { log::trace!("Send record command to db task") },
-                    Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
-                };
+                match client_clone.check_ip_with_cache(&ip_clone).await {
+                    Ok(response) => {
+                        log::debug!("Background AbuseIPDB lookup completed for {}", ip_clone);
+                        log::debug!("{}", response.data);
+                    },
+                    Err(AbuseIpError::RateLimitExceeded(info)) => {
+                        if let Some(retry_after) = info.retry_after_seconds {
+                            log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Retry after {} seconds", ip_clone, retry_after);
+                        } else if let Some(reset_timestamp) = info.reset_timestamp {
+                            let now = Utc::now().timestamp() as u64;
+                            let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
+                            log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Resets in {} seconds", ip_clone, wait_seconds);
+                        } else {
+                            log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}", ip_clone);
+                        }
+                    },
+                    Err(e) => {
+                        log::debug!("Background AbuseIPDB lookup failed for {}: {}", ip_clone, e);
+                    }
+                }
+            });
+        }
+
+        // Check cache for additional connection info
+        if let Some(abuse_client) = &self.abuse_ip_client {
+            let cache = abuse_client.memory_cache.clone();
+            let cache_ttl_hours = abuse_client.cache_ttl_hours;
+            let ip_for_cache = ip.clone();
+            let peer_for_log = peer_addr;
+
+            tokio::spawn(async move {
+                let cache_read = cache.read().await;
+                if let Some(cached) = cache_read.get(&ip_for_cache) {
+                    let age = Utc::now() - cached.cached_at;
+                    if age < chrono::Duration::hours(cache_ttl_hours as i64) {
+                        let data = &cached.response.data;
+                        let country = data.country_code.as_deref().unwrap_or("Unknown");
+                        let isp = data.isp.as_deref().unwrap_or("Unknown");
+                        let usage_type = data.usage_type.as_deref().unwrap_or("Unknown");
+                        let confidence = data.abuse_confidence_score.unwrap_or(0);
+                        let is_tor = data.is_tor;
+
+                        log::info!("New connection from: {} [Country: {}, ISP: {}, Usage: {}, Confidence: {}%, Tor: {}]",
+                                 peer_for_log, country, isp, usage_type, confidence, is_tor);
+                    } else {
+                        log::info!("New connection from: {} (cache expired)", peer_for_log);
+                    }
+                } else {
+                    log::info!("New connection from: {} (no cache data)", peer_for_log);
+                }
             });
         } else {
-            // EBADF The argument sockfd is not a valid file descriptor.
-            // EFAULT The addr argument points to memory not in a valid part of the process address space.
-            // EINVAL addrlen is invalid (e.g., is negative).
-            // ENOBUFS Insufficient resources were available in the system to perform the operation.
-            // ENOTCONN The socket is not connected.
-            // ENOTSOCK The file descriptor sockfd does not refer to a socket.
-
-            // FIXME: using run_stream to catch the address earlier would be better but we loose a lot of lifecycle management from russh. Otherwise we could submit a patch to catch it earlier
-            log::info!("New connection from unknown peer, what is this?");
+            log::info!("New connection from: {:?}", peer_addr);
         }
+
+        if let Some(ip_api_client) = &self.ip_api_client {
+            let client = ip_api_client.clone();
+            tokio::spawn(async move {
+                log::trace!("Checking IP API for {}", ip);
+                let ipinfo = match client.check_ip_with_cache(&ip).await {
+                    Ok(response) => {
+                        log::trace!("IP API lookup completed for {} with response: {:?}", ip, response);
+                        response
+                    },
+                    Err(e) => {
+                        log::warn!("IP API lookup failed for {}: {}", ip, e);
+                        return;
+                    }
+                };
+                log::info!("Additional country info for {} - Country: {}, Region: {}, lat/lon: {}/{}, org: {}", ip, ipinfo.country, ipinfo.region, ipinfo.lat, ipinfo.lon, ipinfo.org);
+            });
+        }
+
+        let db_tx = self.db_tx.clone();
+        tokio::spawn(async move {
+            match db_tx.send(DbMessage::RecordConnect {
+                ip: peer_addr.ip().to_string(),
+                timestamp: Utc::now(),
+            }).await {
+                Ok(_) => { log::trace!("Send record command to db task") },
+                Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+            };
+        });
 
         SshHandler {
             peer: peer_addr,
