@@ -4,6 +4,12 @@ use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 use crate::paths::PathManager;
 
+// Default interfaces
+const DEFAULT_INTERFACES: [SocketAddr; 2] = [
+    SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 2222),
+    SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), 2222),
+];
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Config {
     pub interfaces: Option<Vec<String>>, // Store as strings for TOML compatibility
@@ -213,19 +219,13 @@ impl App {
                 .collect()
         } else {
             Vec::new()
-        };
-        
-        // Default interfaces
-        let default_interfaces = vec![
-            SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 2222),
-            SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), 2222),
-        ];
+    };
 
         Self {
             interfaces: cli.interfaces
                 .filter(|v| !v.is_empty())
                 .or_else(|| if config_interfaces.is_empty() { None } else { Some(config_interfaces) })
-                .unwrap_or(default_interfaces),
+                .unwrap_or(DEFAULT_INTERFACES.to_vec()),
             
             database_url: cli.database_url
                 .or(config.database_url)
@@ -280,8 +280,10 @@ impl App {
         }
     }
 
-    // Merges a boolean flag from Clap with one from the config file.
+    /// Merges a boolean flag from Clap with one from the config file.
+    ///
     /// CLI/env (`clap_bool`) takes precedence only if it is `true`.
+    ///
     /// If the CLI/env flag is not present (`clap_bool` is `false`), the config value is used.
     fn merge_clap_boolean_with_config(clap_bool: bool, config_bool: Option<bool>) -> bool {
         if clap_bool {

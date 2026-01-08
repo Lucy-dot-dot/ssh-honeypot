@@ -156,14 +156,16 @@ pub async fn connect_to_db_with_retry(database_url: &str, retry_interval_secs: u
 }
 
 // Initialize database connection pool and run migrations
-pub async fn initialize_database_pool(database_url: &str) -> Result<PgPool, Error> {
+pub async fn initialize_database_pool(database_url: &str, skip_migrations: bool) -> Result<PgPool, Error> {
     log::trace!("Connecting to PostgreSQL database");
     
     let pool = connect_to_db_with_retry(database_url, 5).await?;
     
     log::trace!("Running database migrations");
-    sqlx::migrate!("./migrations").run(&pool).await?;
-    
+    if !skip_migrations {
+        sqlx::migrate!("./migrations").run(&pool).await?;
+    }
+
     log::info!("Database initialized successfully");
     Ok(pool)
 }

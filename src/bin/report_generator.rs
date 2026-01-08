@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Initialize database connection
-    let pool = initialize_database_pool(&args.database_url).await?;
+    let pool = initialize_database_pool(&args.database_url, true).await?;
 
     // Create report generator
     let generator = ReportGenerator::new(pool);

@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let keys = keys::load_or_generate_keys(&app);
 
     // Initialize PostgreSQL connection pool
-    let pool = match initialize_database_pool(&app.database_url).await {
+    let pool = match initialize_database_pool(&app.database_url, false).await {
         Ok(pool) => pool,
         Err(e) => {
             log::error!("Failed to initialize database pool: {}", e);
