@@ -205,7 +205,7 @@ impl Handler for HoneypotSftpSession {
             {
                 let mut fs_guard = fs.write().await;
                 if let Ok(entry) = fs_guard.create_file(&filepath) {
-                    if let Some(FileContent::RegularFile(file_data)) = &mut entry.file_content {
+                    if let Some(FileContent::RegularFile(file_data)) = &mut entry.content {
                         let required_size = (offset + data.len() as u64) as usize;
                         if file_data.len() < required_size {
                             file_data.resize(required_size, 0);
@@ -213,7 +213,7 @@ impl Handler for HoneypotSftpSession {
                         let start = offset as usize;
                         let end = start + data.len();
                         file_data[start..end].copy_from_slice(&data);
-                        
+
                         // Update file size
                         entry.inode.i_size_lo = file_data.len() as u32;
                     }

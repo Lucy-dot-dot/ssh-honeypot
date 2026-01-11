@@ -86,6 +86,7 @@ println!("Retrieved File: {:?}", file);
 This module creates a lightweight simulation of a file system, enabling basic operations such as navigation, file creation, and directory management.
 */
 use std::io::{Error, ErrorKind, Read, Write};
+use std::collections::HashMap;
 use flate2::read::GzDecoder;
 use tar::Archive;
 
@@ -99,9 +100,9 @@ pub struct Inode {
     // Lower 32 bits of size in bytes
     pub(crate) i_size_lo: u32,
     // Last access time in seconds since epoch
-    i_atime: u32,
+    i_atime: u64,
     // Last inode change time
-    i_ctime: u32,
+    i_ctime: u64,
     // Last data modification time
     pub(crate) i_mtime: u32,
     // Deletion time
@@ -124,18 +125,40 @@ pub struct Inode {
     i_crtime_extra: u32,
 }
 
-#[derive(Default, Clone, Debug)]
-pub struct DirEntry {
-    /// Inode number of the file
-    #[allow(dead_code)]
+/// InodeData combines the inode metadata with the actual file content
+#[derive(Clone, Debug)]
+pub struct InodeData {
     pub inode: Inode,
+    pub content: Option<FileContent>,
+}
 
-    /// I will store it right here for constant access times without searching
-    pub file_content: Option<FileContent>,
+#[derive(Clone, Debug)]
+pub struct DirEntry {
+    /// Inode number that this directory entry points to
+    pub inode_number: u64,
 
     /// Filename (variable length, not null-terminated, up to 255 bytes)
     /// Only the first name_len bytes are valid
-    pub name: String, // In reality, this is variable length based on name_len
+    pub name: String,
+}
+
+/// A view of a file that combines directory entry info with inode data
+/// This maintains API compatibility with the old DirEntry structure
+#[derive(Clone, Debug)]
+pub struct FileEntryView {
+    pub name: String,
+    pub inode: Inode,
+    pub file_content: Option<FileContent>,
+}
+
+impl FileEntryView {
+    fn from_parts(name: String, inode_data: &InodeData) -> Self {
+        Self {
+            name,
+            inode: inode_data.inode,
+            file_content: inode_data.content.clone(),
+        }
+    }
 }
 
 
@@ -148,7 +171,14 @@ pub enum FileContent {
 
 #[derive(Debug)]
 pub struct FileSystem {
-    root: DirEntry,
+    /// Inode number of the root directory
+    root_inode: u64,
+
+    /// Inode table: maps inode numbers to inode data
+    inodes: HashMap<u64, InodeData>,
+
+    /// Next available inode number
+    next_inode: u64,
 
     // Device info
     #[allow(dead_code)]
@@ -157,20 +187,46 @@ pub struct FileSystem {
 
 impl Default for FileSystem {
     fn default() -> Self {
-        let fs = FileSystem {
-            root: DirEntry {
-                name: "/".to_string(),
-                file_content: Some(FileContent::Directory(Vec::with_capacity(20))),
-                inode: Inode::default(),
-            },
-            device: "/dev/sda1".to_string(),
+        let mut inodes = HashMap::new();
+        let root_inode_num = 1; // Root inode is always 1
+
+        // Create root inode
+        let root_inode_data = InodeData {
+            inode: Inode::default(),
+            content: Some(FileContent::Directory(Vec::with_capacity(20))),
         };
 
-        fs
+        inodes.insert(root_inode_num, root_inode_data);
+
+        FileSystem {
+            root_inode: root_inode_num,
+            inodes,
+            next_inode: 2, // Start allocating from inode 2
+            device: "/dev/sda1".to_string(),
+        }
     }
 }
 
 impl FileSystem {
+    /// Allocate a new inode number
+    fn allocate_inode(&mut self) -> u64 {
+        let inode_num = self.next_inode;
+        self.next_inode += 1;
+        inode_num
+    }
+
+    /// Get a reference to inode data
+    fn get_inode(&self, inode_number: u64) -> std::io::Result<&InodeData> {
+        self.inodes.get(&inode_number)
+            .ok_or_else(|| Error::new(ErrorKind::Other, "Inode not found"))
+    }
+
+    /// Get a mutable reference to inode data
+    fn get_inode_mut(&mut self, inode_number: u64) -> std::io::Result<&mut InodeData> {
+        self.inodes.get_mut(&inode_number)
+            .ok_or_else(|| Error::new(ErrorKind::Other, "Inode not found"))
+    }
+
     pub fn resolve_absolute_path(&self, path: &str) -> String {
         // Ensure we have an absolute path
         if !path.starts_with('/') {
@@ -210,12 +266,13 @@ impl FileSystem {
         }
     }
 
-    pub fn get_file(&self, path: &str) -> std::io::Result<&DirEntry> {
+    pub fn get_file(&self, path: &str) -> std::io::Result<FileEntryView> {
         let sanitized_path = self.resolve_absolute_path(path);
+
         // Handle root path special case
         if sanitized_path == "/" {
-            // Find the root directory entry using the root_inode
-            return Ok(&self.root);
+            let root_data = self.get_inode(self.root_inode)?;
+            return Ok(FileEntryView::from_parts("/".to_string(), root_data));
         }
 
         // Get path components
@@ -225,35 +282,42 @@ impl FileSystem {
             .collect();
 
         // Start with root directory
-        let mut current_dir = &self.root;
+        let mut current_inode = self.root_inode;
 
         // Traverse the path
-        for component in components {
-            if let Some(FileContent::Directory(entries)) = &current_dir.file_content {
+        for component in &components {
+            let inode_data = self.get_inode(current_inode)?;
+
+            if let Some(FileContent::Directory(entries)) = &inode_data.content {
                 // Find the matching entry in the current directory
-                current_dir = entries
+                let entry = entries
                     .iter()
-                    .find(|entry| entry.name == component)
+                    .find(|entry| entry.name == *component)
                     .ok_or_else(|| {
                         Error::new(
                             ErrorKind::NotFound,
                             format!("Path component '{}' not found", component),
                         )
                     })?;
+
+                current_inode = entry.inode_number;
             } else {
                 return Err(Error::new(ErrorKind::Other, "Not a directory"));
             }
         }
 
-        Ok(current_dir)
+        // Get the final inode data and return view
+        let final_inode_data = self.get_inode(current_inode)?;
+        let name = components.last().unwrap_or(&"/").to_string();
+        Ok(FileEntryView::from_parts(name, final_inode_data))
     }
 
-    pub fn get_file_mut(&mut self, path: &str) -> std::io::Result<&mut DirEntry> {
+    pub fn get_file_mut(&mut self, path: &str) -> std::io::Result<&mut InodeData> {
         let sanitized_path = self.resolve_absolute_path(path);
 
         // Handle root path
         if sanitized_path == "/" {
-            return Ok(&mut self.root);
+            return self.get_inode_mut(self.root_inode);
         }
 
         let components: Vec<String> = sanitized_path
@@ -262,34 +326,39 @@ impl FileSystem {
             .map(|s| s.to_string())
             .collect();
 
-        let mut current = &mut self.root;
+        let mut current_inode = self.root_inode;
 
+        // Traverse to find the target inode
         for component in components {
-            // We need to find the child with name matching component
-            match &mut current.file_content {
-                Some(FileContent::Directory(entries)) => {
-                    let entry_index = entries
-                        .iter()
-                        .position(|entry| entry.name == component)
-                        .ok_or_else(|| {
-                            Error::new(
-                                ErrorKind::NotFound,
-                                format!("Path component '{}' not found", component),
-                            )
-                        })?;
+            // We need to look up the directory without holding a borrow
+            let next_inode = {
+                let inode_data = self.inodes.get(&current_inode)
+                    .ok_or_else(|| Error::new(ErrorKind::Other, "Inode not found"))?;
 
-                    // This is the tricky part - we need to get a mutable reference to
-                    // the specific child from entries
-                    current = &mut entries[entry_index];
+                match &inode_data.content {
+                    Some(FileContent::Directory(entries)) => {
+                        entries
+                            .iter()
+                            .find(|entry| entry.name == component)
+                            .map(|entry| entry.inode_number)
+                            .ok_or_else(|| {
+                                Error::new(
+                                    ErrorKind::NotFound,
+                                    format!("Path component '{}' not found", component),
+                                )
+                            })?
+                    }
+                    _ => return Err(Error::new(ErrorKind::Other, "Not a directory")),
                 }
-                _ => return Err(Error::new(ErrorKind::Other, "Not a directory")),
-            }
+            };
+
+            current_inode = next_inode;
         }
 
-        Ok(current)
+        self.get_inode_mut(current_inode)
     }
 
-    pub fn create_directory(&mut self, path: &str) -> std::io::Result<&mut DirEntry> {
+    pub fn create_directory(&mut self, path: &str) -> std::io::Result<&mut InodeData> {
         let sanitized_path = self.resolve_absolute_path(path);
 
         // Root directory always exists
@@ -311,11 +380,25 @@ impl FileSystem {
             return Err(Error::new(ErrorKind::InvalidInput, "File exists"))
         }
 
-        // Find the parent directory
+        // Allocate new inode for the directory
+        let new_inode_num = self.allocate_inode();
+
+        // Create the inode data for the new directory
+        let mut inode = Inode::default();
+        inode.i_links_count = 1;
+        let new_inode_data = InodeData {
+            inode,
+            content: Some(FileContent::Directory(Vec::new())),
+        };
+
+        // Insert the new inode into the inode table
+        self.inodes.insert(new_inode_num, new_inode_data);
+
+        // Find the parent directory and add entry
         let parent_dir = self.get_file_mut(parent_path)?;
 
         // Make sure the parent is a directory
-        match &mut parent_dir.file_content {
+        match &mut parent_dir.content {
             Some(FileContent::Directory(entries)) => {
                 // Check if directory already exists
                 if entries.iter().any(|e| e.name == dir_name) {
@@ -323,21 +406,20 @@ impl FileSystem {
                                           format!("Directory '{}' already exists", dir_name)));
                 }
 
-                let ent = DirEntry {
-                    name: dir_name.to_string(),
-                    file_content: Some(FileContent::Directory(Vec::new())),
-                    ..Default::default()
-                };
                 // Create the new directory entry
-                entries.push(ent);
+                entries.push(DirEntry {
+                    name: dir_name.to_string(),
+                    inode_number: new_inode_num,
+                });
 
-                Ok(entries.last_mut().unwrap())
+                // Return reference to the newly created inode data
+                Ok(self.inodes.get_mut(&new_inode_num).unwrap())
             },
             _ => Err(Error::new(ErrorKind::Other, "Parent is not a directory")),
         }
     }
 
-    pub fn create_file(&mut self, path: &str) -> std::io::Result<&mut DirEntry> {
+    pub fn create_file(&mut self, path: &str) -> std::io::Result<&mut InodeData> {
         let sanitized_path = self.resolve_absolute_path(path);
 
         // Get the parent directory path and file name
@@ -354,11 +436,25 @@ impl FileSystem {
             return Err(Error::new(ErrorKind::InvalidInput, "File name cannot be empty"));
         }
 
-        // Find the parent directory
+        // Allocate new inode for the file
+        let new_inode_num = self.allocate_inode();
+
+        // Create the inode data for the new file
+        let mut inode = Inode::default();
+        inode.i_links_count = 1;
+        let new_inode_data = InodeData {
+            inode,
+            content: Some(FileContent::RegularFile(Vec::new())),
+        };
+
+        // Insert the new inode into the inode table
+        self.inodes.insert(new_inode_num, new_inode_data);
+
+        // Find the parent directory and add entry
         let parent_dir = self.get_file_mut(parent_path)?;
 
         // Make sure the parent is a directory
-        match &mut parent_dir.file_content {
+        match &mut parent_dir.content {
             Some(FileContent::Directory(entries)) => {
                 // Check if file already exists
                 if entries.iter().any(|e| e.name == file_name) {
@@ -369,24 +465,17 @@ impl FileSystem {
                 // Create the new file entry
                 entries.push(DirEntry {
                     name: file_name.to_string(),
-                    file_content: Some(FileContent::RegularFile(Vec::new())),
-                    ..Default::default()
+                    inode_number: new_inode_num,
                 });
 
-                // Return a mutable reference to the newly created file
-                // Note: this is tricky because we need to find it after adding it
-                if let Some(index) = entries.iter().position(|e| e.name == file_name) {
-                    Ok(&mut entries[index])
-                } else {
-                    // This should never happen, but just in case
-                    Err(Error::new(ErrorKind::Other, "Failed to retrieve created file"))
-                }
+                // Return reference to the newly created inode data
+                Ok(self.inodes.get_mut(&new_inode_num).unwrap())
             },
             _ => Err(Error::new(ErrorKind::Other, "Parent is not a directory")),
         }
     }
 
-    pub fn create_symlink(&mut self, link_path: &str, target_path: &str) -> std::io::Result<&mut DirEntry> {
+    pub fn create_symlink(&mut self, link_path: &str, target_path: &str) -> std::io::Result<&mut InodeData> {
         let sanitized_link_path = self.resolve_absolute_path(link_path);
 
         // Get the parent directory path and symlink name
@@ -403,11 +492,25 @@ impl FileSystem {
             return Err(Error::new(ErrorKind::InvalidInput, "Symlink name cannot be empty"));
         }
 
-        // Find the parent directory
+        // Allocate new inode for the symlink
+        let new_inode_num = self.allocate_inode();
+
+        // Create the inode data for the new symlink
+        let mut inode = Inode::default();
+        inode.i_links_count = 1;
+        let new_inode_data = InodeData {
+            inode,
+            content: Some(FileContent::SymbolicLink(target_path.to_string())),
+        };
+
+        // Insert the new inode into the inode table
+        self.inodes.insert(new_inode_num, new_inode_data);
+
+        // Find the parent directory and add entry
         let parent_dir = self.get_file_mut(parent_path)?;
 
         // Make sure the parent is a directory
-        match &mut parent_dir.file_content {
+        match &mut parent_dir.content {
             Some(FileContent::Directory(entries)) => {
                 // Check if symlink already exists
                 if entries.iter().any(|e| e.name == symlink_name) {
@@ -418,27 +521,44 @@ impl FileSystem {
                 // Create the new symlink entry
                 entries.push(DirEntry {
                     name: symlink_name.to_string(),
-                    file_content: Some(FileContent::SymbolicLink(target_path.to_string())),
-                    ..Default::default()
+                    inode_number: new_inode_num,
                 });
 
-                // Return a mutable reference to the newly created symlink
-                if let Some(index) = entries.iter().position(|e| e.name == symlink_name) {
-                    Ok(&mut entries[index])
-                } else {
-                    // This should never happen, but just in case
-                    Err(Error::new(ErrorKind::Other, "Failed to retrieve created symlink"))
-                }
+                // Return reference to the newly created inode data
+                Ok(self.inodes.get_mut(&new_inode_num).unwrap())
             },
             _ => Err(Error::new(ErrorKind::Other, "Parent is not a directory")),
         }
     }
 
-    pub fn follow_symlink(&self, path: &str) -> std::io::Result<&DirEntry> {
+    /// List directory contents as FileEntryView objects
+    pub fn list_directory(&self, path: &str) -> std::io::Result<Vec<FileEntryView>> {
+        let entry = self.follow_symlink(path)?;
+
+        match &entry.file_content {
+            Some(FileContent::Directory(entries)) => {
+                let mut result = Vec::new();
+                for dir_entry in entries {
+                    if let Ok(inode_data) = self.get_inode(dir_entry.inode_number) {
+                        result.push(FileEntryView::from_parts(
+                            dir_entry.name.clone(),
+                            inode_data,
+                        ));
+                    }
+                }
+                Ok(result)
+            }
+            _ => Err(Error::new(ErrorKind::Other, "Not a directory")),
+        }
+    }
+
+    pub fn follow_symlink(&self, path: &str) -> std::io::Result<FileEntryView> {
         let mut current_path = self.resolve_absolute_path(path);
         let mut visited_paths = std::collections::HashSet::new();
 
-        while let Ok(entry) = self.get_file(&current_path) {
+        loop {
+            let entry = self.get_file(&current_path)?;
+
             match &entry.file_content {
                 Some(FileContent::SymbolicLink(target)) => {
                     // Detect cycles in symlinks
@@ -460,10 +580,9 @@ impl FileSystem {
                 _ => return Ok(entry), // Found non-symlink entry
             }
         }
-
-        Err(Error::new(ErrorKind::NotFound, "Target not found"))
     }
 
+    #[allow(dead_code)]
     pub fn copy_file(&mut self, source_path: &str, dest_path: &str) -> std::io::Result<()> {
         let sanitized_source = self.resolve_absolute_path(source_path);
         let sanitized_dest = self.resolve_absolute_path(dest_path);
@@ -475,9 +594,10 @@ impl FileSystem {
 
         // Get source file/directory
         let source_entry = self.get_file(&sanitized_source)?;
-        
-        // Clone the source entry for copying
-        let source_clone = source_entry.clone();
+
+        // Clone the source inode data for copying
+        let source_inode = source_entry.inode;
+        let source_content = source_entry.file_content.clone();
 
         // Get destination parent directory and new name
         let (dest_parent_path, dest_name) = match sanitized_dest.rsplit_once('/') {
@@ -493,29 +613,37 @@ impl FileSystem {
             return Err(Error::new(ErrorKind::AlreadyExists, "Destination already exists"));
         }
 
+        // Allocate new inode for the copy
+        let new_inode_num = self.allocate_inode();
+
+        // Create new inode data with copied content
+        let new_inode_data = InodeData {
+            inode: source_inode,
+            content: source_content,
+        };
+
+        // Insert the new inode
+        self.inodes.insert(new_inode_num, new_inode_data);
+
         // Get destination parent directory
         let dest_parent = self.get_file_mut(dest_parent_path)?;
 
         // Make sure destination parent is a directory
-        match &mut dest_parent.file_content {
+        match &mut dest_parent.content {
             Some(FileContent::Directory(entries)) => {
-                // Create new entry with copied content
-                let mut new_entry = source_clone;
-                new_entry.name = dest_name.to_string();
-                
-                // For directories, we need to recursively copy the content
-                if let Some(FileContent::Directory(source_entries)) = &new_entry.file_content {
-                    let copied_entries = source_entries.clone();
-                    new_entry.file_content = Some(FileContent::Directory(copied_entries));
-                }
+                // Create new entry pointing to the new inode
+                entries.push(DirEntry {
+                    name: dest_name.to_string(),
+                    inode_number: new_inode_num,
+                });
 
-                entries.push(new_entry);
                 Ok(())
             },
             _ => Err(Error::new(ErrorKind::Other, "Destination parent is not a directory")),
         }
     }
 
+    #[allow(dead_code)]
     pub fn move_file(&mut self, source_path: &str, dest_path: &str) -> std::io::Result<()> {
         let sanitized_source = self.resolve_absolute_path(source_path);
         let sanitized_dest = self.resolve_absolute_path(dest_path);
@@ -539,6 +667,98 @@ impl FileSystem {
         Ok(())
     }
 
+    /// Create a hard link to an existing file
+    pub fn create_hard_link(&mut self, target_path: &str, link_path: &str) -> std::io::Result<()> {
+        let sanitized_target = self.resolve_absolute_path(target_path);
+        let sanitized_link = self.resolve_absolute_path(link_path);
+
+        // Can't link to itself
+        if sanitized_target == sanitized_link {
+            return Err(Error::new(ErrorKind::InvalidInput, "Target and link are the same"));
+        }
+
+        // Check if link already exists
+        if self.get_file(&sanitized_link).is_ok() {
+            return Err(Error::new(ErrorKind::AlreadyExists, "Link path already exists"));
+        }
+
+        // Get the target's inode number
+        let target_inode_num = {
+            // First, resolve the path to get the inode number
+            let components: Vec<&str> = sanitized_target
+                .split('/')
+                .filter(|&segment| !segment.is_empty())
+                .collect();
+
+            if components.is_empty() {
+                // Target is root
+                self.root_inode
+            } else {
+                let mut current_inode = self.root_inode;
+
+                for component in components {
+                    let inode_data = self.get_inode(current_inode)?;
+
+                    if let Some(FileContent::Directory(entries)) = &inode_data.content {
+                        let entry = entries
+                            .iter()
+                            .find(|entry| entry.name == component)
+                            .ok_or_else(|| {
+                                Error::new(
+                                    ErrorKind::NotFound,
+                                    format!("Target path component '{}' not found", component),
+                                )
+                            })?;
+
+                        current_inode = entry.inode_number;
+                    } else {
+                        return Err(Error::new(ErrorKind::Other, "Not a directory"));
+                    }
+                }
+
+                current_inode
+            }
+        };
+
+        // Can't hard link to a directory (most filesystems don't allow this)
+        {
+            let target_inode_data = self.get_inode(target_inode_num)?;
+            if matches!(target_inode_data.content, Some(FileContent::Directory(_))) {
+                return Err(Error::new(ErrorKind::InvalidInput, "Cannot create hard link to directory"));
+            }
+        }
+
+        // Get link parent directory and name
+        let (link_parent_path, link_name) = match sanitized_link.rsplit_once('/') {
+            Some((parent, name)) => {
+                let parent_path = if parent.is_empty() { "/" } else { parent };
+                (parent_path, name)
+            },
+            None => return Err(Error::new(ErrorKind::InvalidInput, "Invalid link path")),
+        };
+
+        // Add entry to parent directory
+        let parent_dir = self.get_file_mut(link_parent_path)?;
+
+        match &mut parent_dir.content {
+            Some(FileContent::Directory(entries)) => {
+                // Create new directory entry pointing to the same inode
+                entries.push(DirEntry {
+                    name: link_name.to_string(),
+                    inode_number: target_inode_num,
+                });
+
+                // Increment link count
+                if let Some(inode_data) = self.inodes.get_mut(&target_inode_num) {
+                    inode_data.inode.i_links_count += 1;
+                }
+
+                Ok(())
+            },
+            _ => Err(Error::new(ErrorKind::Other, "Parent is not a directory")),
+        }
+    }
+
     pub fn remove_file(&mut self, path: &str) -> std::io::Result<()> {
         let sanitized_path = self.resolve_absolute_path(path);
 
@@ -560,9 +780,9 @@ impl FileSystem {
         let parent_dir = self.get_file_mut(parent_path)?;
 
         // Make sure parent is a directory
-        match &mut parent_dir.file_content {
+        match &mut parent_dir.content {
             Some(FileContent::Directory(entries)) => {
-                // Find and remove the entry
+                // Find the entry to remove
                 let entry_index = entries
                     .iter()
                     .position(|entry| entry.name == file_name)
@@ -570,7 +790,27 @@ impl FileSystem {
                         Error::new(ErrorKind::NotFound, format!("File '{}' not found", file_name))
                     })?;
 
+                // Get the inode number before removing the entry
+                let inode_num = entries[entry_index].inode_number;
+
+                // Remove the directory entry
                 entries.remove(entry_index);
+
+                // Decrement link count and check if we should remove the inode
+                let should_remove = if let Some(inode_data) = self.inodes.get_mut(&inode_num) {
+                    if inode_data.inode.i_links_count > 0 {
+                        inode_data.inode.i_links_count -= 1;
+                    }
+                    inode_data.inode.i_links_count == 0
+                } else {
+                    false
+                };
+
+                // Remove the inode if link count reached 0
+                if should_remove {
+                    self.inodes.remove(&inode_num);
+                }
+
                 Ok(())
             },
             _ => Err(Error::new(ErrorKind::Other, "Parent is not a directory")),
@@ -611,13 +851,18 @@ impl FileSystem {
                 inode.i_mtime = mtime as u32;
             }
 
-            // FIXME: Maybe check if it's gnu and not assume?
-            if let Ok(atime) = header.as_gnu().unwrap().atime() {
-                inode.i_atime = atime as u32;
-            }
+            match header.as_gnu() {
+                None => {
+                }
+                Some(header) => {
+                    if let Ok(atime) = header.atime() {
+                        inode.i_atime = atime;
+                    }
 
-            if let Ok(ctime) = header.as_gnu().unwrap().ctime() {
-                inode.i_ctime = ctime as u32;
+                    if let Ok(ctime) = header.ctime() {
+                        inode.i_ctime = ctime;
+                    }
+                }
             }
 
             // Set file size
@@ -629,8 +874,8 @@ impl FileSystem {
             if header.entry_type().is_dir() {
                 // Create directory
                 match self.create_directory(&path_str) {
-                    Ok(value) => {
-                        value.inode = inode;
+                    Ok(inode_data) => {
+                        inode_data.inode = inode;
                     }
                     Err(err) => {
                         match err.kind() {
@@ -645,20 +890,20 @@ impl FileSystem {
                 }
             } else if header.entry_type().is_file() {
                 // Create file
-                let file_entry = self.create_file(&path_str)?;
+                let file_inode_data = self.create_file(&path_str)?;
 
                 // Update file metadata
-                file_entry.inode = inode;
+                file_inode_data.inode = inode;
 
                 // Read and set file content
                 let mut content = Vec::new();
                 entry.read_to_end(&mut content)?;
 
-                if let Some(FileContent::RegularFile(ref mut data)) = file_entry.file_content {
+                if let Some(FileContent::RegularFile(ref mut data)) = file_inode_data.content {
                     *data = content;
 
                     // Update file size to match actual content size
-                    file_entry.inode.i_size_lo = data.len() as u32;
+                    file_inode_data.inode.i_size_lo = data.len() as u32;
                 }
             } else if header.entry_type().is_symlink() {
                 // Handle symbolic links
@@ -667,17 +912,29 @@ impl FileSystem {
                     Error::new(ErrorKind::Other, "Symbolic link target is missing")
                 })?.to_string_lossy().to_string();
 
-                let symlink_entry = self.create_symlink(&link_name, &target)?;
+                let symlink_inode_data = self.create_symlink(&link_name, &target)?;
 
                 // Update symlink metadata
-                symlink_entry.inode = inode;
+                symlink_inode_data.inode = inode;
 
                 // Update symlink size to match target length
-                symlink_entry.inode.i_size_lo = target.len() as u32;
+                symlink_inode_data.inode.i_size_lo = target.len() as u32;
             } else if header.entry_type().is_hard_link() {
-                // For hard links, we could create a new entry pointing to the same inode
-                // This would require more extensive changes to the file system implementation
-                log::warn!("Hard links are not fully supported: {}", path_str);
+                // Handle hard links by creating a new directory entry pointing to the same inode
+                let link_name = path_str;
+                let target = entry.link_name()?.ok_or_else(|| {
+                    Error::new(ErrorKind::Other, "Hard link target is missing")
+                })?.to_string_lossy().to_string();
+
+                // Try to create the hard link
+                match self.create_hard_link(&target, &link_name) {
+                    Ok(_) => {
+                        log::trace!("Created hard link: {} -> {}", link_name, target);
+                    }
+                    Err(err) => {
+                        log::warn!("Failed to create hard link {} -> {}: {}", link_name, target, err);
+                    }
+                }
             } else {
                 // Log but skip other entry types
                 log::warn!("Skipping unsupported entry type: {}", path_str);
@@ -746,8 +1003,7 @@ mod tests {
 
         // Check that we got the root directory
         let root = result.unwrap();
-        assert_eq!(root.name, "/");
-        match root.file_content.as_ref().unwrap() {
+        match root.content.as_ref().unwrap() {
             FileContent::Directory(_) => {}
             FileContent::RegularFile(_) => {
                 assert!(false, "Root should be a directory");
@@ -774,28 +1030,18 @@ mod tests {
     fn test_get_file_mut_nested_path() {
         let mut fs = FileSystem::default();
 
-        // Set up a directory structure
-        if let Some(FileContent::Directory(ref mut entries)) = fs.root.file_content {
-            entries.push(DirEntry {
-                name: String::from("home"),
-                file_content: Some(FileContent::Directory(vec![DirEntry {
-                    name: String::from("user"),
-                    file_content: Some(FileContent::Directory(Vec::new())),
-                    ..Default::default()
-                }])),
-                ..Default::default()
-            });
-        }
+        // Set up a directory structure using the API
+        fs.create_directory("/home").unwrap();
+        fs.create_directory("/home/user").unwrap();
 
         let result = fs.get_file_mut("/home/user");
         assert!(result.is_ok());
 
         // Check that we got the correct directory
         let dir = result.unwrap();
-        assert_eq!(dir.name, "user");
-        match dir.file_content.as_ref() {
+        match dir.content.as_ref() {
             None => {
-                assert!(false, "Root should be a directory");
+                assert!(false, "Should be a directory");
             }
             Some(content) => {
                 assert!(matches!(content, FileContent::Directory(_)));
@@ -820,7 +1066,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify the directory was created
-        let dir = fs.get_file_mut("/documents");
+        let dir = fs.get_file("/documents");
         assert!(dir.is_ok());
         assert_eq!(dir.unwrap().name, "documents");
     }
@@ -838,7 +1084,7 @@ mod tests {
         assert!(result2.is_ok());
 
         // Verify the nested directory was created
-        let dir = fs.get_file_mut("/home/user");
+        let dir = fs.get_file("/home/user");
         assert!(dir.is_ok());
         assert_eq!(dir.unwrap().name, "user");
     }
@@ -881,7 +1127,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify the file was created
-        let file = result.unwrap();
+        let file = fs.get_file("/hello.txt").unwrap();
         assert_eq!(file.name, "hello.txt");
         match file.file_content.as_ref() {
             None => {
@@ -906,7 +1152,7 @@ mod tests {
         assert!(result2.is_ok());
 
         // Verify the file was created
-        let file = result2.unwrap();
+        let file = fs.get_file("/home/config.txt").unwrap();
         assert_eq!(file.name, "config.txt");
         match file.file_content.as_ref() {
             None => {
@@ -978,7 +1224,7 @@ mod tests {
         assert!(symlink_result.is_ok());
 
         // Verify the symlink was created correctly
-        let link = symlink_result.unwrap();
+        let link = fs.get_file("/link.txt").unwrap();
         assert_eq!(link.name, "link.txt");
         match &link.file_content {
             Some(FileContent::SymbolicLink(target)) => {
@@ -1041,8 +1287,9 @@ mod tests {
         let mut fs = FileSystem::default();
 
         // Create a test file
-        let file = fs.create_file("/test.txt").unwrap();
-        if let Some(FileContent::RegularFile(ref mut data)) = file.file_content {
+        fs.create_file("/test.txt").unwrap();
+        let file = fs.get_file_mut("/test.txt").unwrap();
+        if let Some(FileContent::RegularFile(ref mut data)) = file.content {
             *data = b"Hello, World!".to_vec();
         }
 
@@ -1229,6 +1476,101 @@ mod tests {
         let mut fs = FileSystem::default();
 
         let result = fs.remove_file("/");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_create_hard_link() {
+        let mut fs = FileSystem::default();
+
+        // Create a file with content
+        fs.create_file("/original.txt").unwrap();
+        let file = fs.get_file_mut("/original.txt").unwrap();
+        if let Some(FileContent::RegularFile(ref mut data)) = file.content {
+            *data = b"Hello, Hard Links!".to_vec();
+        }
+
+        // Create a hard link
+        let result = fs.create_hard_link("/original.txt", "/link.txt");
+        assert!(result.is_ok());
+
+        // Verify both paths point to the same content
+        let original = fs.get_file("/original.txt").unwrap();
+        let link = fs.get_file("/link.txt").unwrap();
+
+        match (&original.file_content, &link.file_content) {
+            (Some(FileContent::RegularFile(orig_data)), Some(FileContent::RegularFile(link_data))) => {
+                assert_eq!(orig_data, link_data);
+                assert_eq!(orig_data.as_slice(), b"Hello, Hard Links!");
+            },
+            _ => panic!("Both should be regular files"),
+        }
+
+        // Verify link count
+        assert_eq!(original.inode.i_links_count, 2);
+        assert_eq!(link.inode.i_links_count, 2);
+    }
+
+    #[test]
+    fn test_hard_link_modify_one_affects_both() {
+        let mut fs = FileSystem::default();
+
+        // Create file and hard link
+        fs.create_file("/file1.txt").unwrap();
+        fs.create_hard_link("/file1.txt", "/file2.txt").unwrap();
+
+        // Modify via first path
+        let file1 = fs.get_file_mut("/file1.txt").unwrap();
+        if let Some(FileContent::RegularFile(ref mut data)) = file1.content {
+            *data = b"Modified content".to_vec();
+        }
+
+        // Verify change visible through second path
+        let file2 = fs.get_file("/file2.txt").unwrap();
+        match &file2.file_content {
+            Some(FileContent::RegularFile(data)) => {
+                assert_eq!(data.as_slice(), b"Modified content");
+            },
+            _ => panic!("Should be a regular file"),
+        }
+    }
+
+    #[test]
+    fn test_hard_link_remove_one_keeps_other() {
+        let mut fs = FileSystem::default();
+
+        // Create file and hard link
+        fs.create_file("/file1.txt").unwrap();
+        let file = fs.get_file_mut("/file1.txt").unwrap();
+        if let Some(FileContent::RegularFile(ref mut data)) = file.content {
+            *data = b"Test data".to_vec();
+        }
+        fs.create_hard_link("/file1.txt", "/file2.txt").unwrap();
+
+        // Remove first path
+        fs.remove_file("/file1.txt").unwrap();
+
+        // Verify second path still works
+        let file2 = fs.get_file("/file2.txt").unwrap();
+        match &file2.file_content {
+            Some(FileContent::RegularFile(data)) => {
+                assert_eq!(data.as_slice(), b"Test data");
+            },
+            _ => panic!("Should be a regular file"),
+        }
+
+        // Verify link count decreased
+        assert_eq!(file2.inode.i_links_count, 1);
+    }
+
+    #[test]
+    fn test_hard_link_cannot_link_directory() {
+        let mut fs = FileSystem::default();
+
+        fs.create_directory("/dir").unwrap();
+
+        let result = fs.create_hard_link("/dir", "/dirlink");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
     }

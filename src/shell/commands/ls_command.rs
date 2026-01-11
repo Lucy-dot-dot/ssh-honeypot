@@ -89,69 +89,74 @@ impl Command for LsCommand {
             path.to_string()
         };
         
-        match fs.follow_symlink(&list_path) {
-            Ok(entry) => {
-                match &entry.file_content {
-                    Some(FileContent::Directory(entries)) => {
-                        let mut result = String::new();
-                        
-                        // Filter entries based on show_all flag
-                        let filtered_entries: Vec<_> = entries.iter()
-                            .filter(|entry| show_all || !entry.name.starts_with('.'))
-                            .collect();
-                        
-                        if long_format {
-                            // Long format listing
-                            if show_all || !filtered_entries.is_empty() {
-                                result.push_str(&format!("total {}\r\n", filtered_entries.len()));
-                            }
-                            
-                            for entry in filtered_entries {
-                                let (permissions, size, _file_type) = match &entry.file_content {
-                                    Some(FileContent::Directory(_)) => ("drwxr-xr-x", 4096, "dir"),
-                                    Some(FileContent::RegularFile(data)) => ("-rw-r--r--", data.len(), "file"),
-                                    Some(FileContent::SymbolicLink(_)) => ("lrwxrwxrwx", 0, "link"),
-                                    None => ("?---------", 0, "unknown"),
-                                };
-                                
-                                result.push_str(&format!(
-                                    "{} 1 user user {:>8} Jan 01 12:00 {}\r\n",
-                                    permissions, size, entry.name
-                                ));
-                            }
-                        } else if one_per_line {
-                            // One file per line
-                            for entry in filtered_entries {
-                                result.push_str(&format!("{}\r\n", entry.name));
-                            }
-                        } else {
-                            // Default format (multiple columns)
-                            let names: Vec<&str> = filtered_entries.iter().map(|entry| entry.name.as_str()).collect();
-                            if names.is_empty() {
-                                // Empty directory
-                            } else {
-                                result.push_str(&names.join("  "));
-                                result.push_str("\r\n");
+        match fs.list_directory(&list_path) {
+            Ok(entries) => {
+                let mut result = String::new();
+
+                // Filter entries based on show_all flag
+                let filtered_entries: Vec<_> = entries.iter()
+                    .filter(|entry| show_all || !entry.name.starts_with('.'))
+                    .collect();
+
+                if long_format {
+                    // Long format listing
+                    if show_all || !filtered_entries.is_empty() {
+                        result.push_str(&format!("total {}\r\n", filtered_entries.len()));
+                    }
+
+                    for entry in filtered_entries {
+                        let (permissions, size, _file_type) = match &entry.file_content {
+                            Some(FileContent::Directory(_)) => ("drwxr-xr-x", 4096, "dir"),
+                            Some(FileContent::RegularFile(data)) => ("-rw-r--r--", data.len(), "file"),
+                            Some(FileContent::SymbolicLink(_)) => ("lrwxrwxrwx", 0, "link"),
+                            None => ("?---------", 0, "unknown"),
+                        };
+
+                        result.push_str(&format!(
+                            "{} 1 user user {:>8} Jan 01 12:00 {}\r\n",
+                            permissions, size, entry.name
+                        ));
+                    }
+                } else if one_per_line {
+                    // One file per line
+                    for entry in filtered_entries {
+                        result.push_str(&format!("{}\r\n", entry.name));
+                    }
+                } else {
+                    // Default format (multiple columns)
+                    let names: Vec<&str> = filtered_entries.iter().map(|entry| entry.name.as_str()).collect();
+                    if names.is_empty() {
+                        // Empty directory
+                    } else {
+                        result.push_str(&names.join("  "));
+                        result.push_str("\r\n");
+                    }
+                }
+
+                Ok(result)
+            },
+            Err(_) => {
+                // Try to check if it's a file instead
+                match fs.follow_symlink(&list_path) {
+                    Ok(entry) => {
+                        match &entry.file_content {
+                            Some(FileContent::RegularFile(_)) => {
+                                // If it's a file, just show the filename
+                                let filename = list_path.split('/').last().unwrap_or(&list_path);
+                                Ok(format!("{}\r\n", filename))
+                            },
+                            Some(FileContent::SymbolicLink(_)) => {
+                                Ok(format!("ls: cannot access '{}': symbolic link\r\n", list_path))
+                            },
+                            _ => {
+                                Ok(format!("ls: cannot access '{}': No such file or directory\r\n", list_path))
                             }
                         }
-                        
-                        Ok(result)
                     },
-                    Some(FileContent::RegularFile(_)) => {
-                        // If it's a file, just show the filename
-                        let filename = list_path.split('/').last().unwrap_or(&list_path);
-                        Ok(format!("{}\r\n", filename))
-                    },
-                    Some(FileContent::SymbolicLink(_)) => {
-                        Ok(format!("ls: cannot access '{}': symbolic link\r\n", list_path))
-                    },
-                    None => {
+                    Err(_) => {
                         Ok(format!("ls: cannot access '{}': No such file or directory\r\n", list_path))
                     }
                 }
-            },
-            Err(_) => {
-                Ok(format!("ls: cannot access '{}': No such file or directory\r\n", list_path))
             }
         }
     }
