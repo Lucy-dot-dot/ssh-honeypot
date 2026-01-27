@@ -176,7 +176,6 @@ impl Client {
                 .deflate(true)
                 .brotli(true)
                 .use_rustls_tls()
-                .tls_built_in_root_certs(true)
                 .build()
                 .unwrap(),
             api_key,
