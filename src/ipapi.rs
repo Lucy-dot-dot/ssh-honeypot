@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use chrono::{DateTime, Utc, Duration};
-use reqwest::{Method, StatusCode};
+use reqwest::{Certificate, Method, StatusCode};
 use reqwest::tls::Version;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use webpki_root_certs::TLS_SERVER_ROOT_CERTS;
 use crate::db::{record_ipapi_check, get_ipapi_check};
 
 const DEFAULT_CACHE_TTL_HOURS: u8 = 24;
@@ -72,11 +73,14 @@ pub struct IpApiResponse {
 
 impl Client {
     pub fn new(pool: PgPool, cache_ttl_hours: Option<u8>) -> Self {
+        let certs = TLS_SERVER_ROOT_CERTS.iter().map(|cert| Certificate::from_der(cert).unwrap()).collect::<Vec<Certificate>>();
         Self {
+
             client: reqwest::Client::builder()
                 .min_tls_version(Version::TLS_1_2)
                 .deflate(true)
                 .brotli(true)
+                .tls_certs_only(certs)
                 .build()
                 .unwrap(),
             memory_cache: Arc::new(RwLock::new(HashMap::new())),
