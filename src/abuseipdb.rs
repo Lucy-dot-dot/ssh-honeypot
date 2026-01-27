@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use chrono::{DateTime, Utc, Duration};
-use reqwest::{Method, StatusCode};
+use reqwest::{Certificate, Method, StatusCode};
 use reqwest::tls::Version;
-use webpki_roots::TLS_SERVER_ROOTS;
+use webpki_root_certs::TLS_SERVER_ROOT_CERTS;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use crate::db::{record_abuse_ip_check, get_abuse_ip_check};
@@ -170,13 +170,15 @@ pub struct Client {
 
 impl Client {
     pub fn new(api_key: String, pool: PgPool, cache_ttl_hours: Option<u8>) -> Self {
+        let certs = TLS_SERVER_ROOT_CERTS.iter().map(|cert| Certificate::from_der(cert).unwrap()).collect::<Vec<Certificate>>();
+
         Self {
             client: reqwest::Client::builder()
                 .min_tls_version(Version::TLS_1_2)
                 .https_only(true)
                 .deflate(true)
                 .brotli(true)
-                .tls_certs_only(TLS_SERVER_ROOTS)
+                .tls_certs_only(certs)
                 .build()
                 .unwrap(),
             api_key,

@@ -34,7 +34,7 @@ russh-sftp = "2.1"
 sha2 = "0.10"
 infer = "0.19.0"
 reqwest = { version = "0.13.1", features = ["brotli", "deflate", "json", "query"] }
-webpki-roots = "1.0.5"
+webpki-root-certs = "1.0.5"
 serde_json = "1.0.149"
 ssh-encoding = "0.2.0"
 
