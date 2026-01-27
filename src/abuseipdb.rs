@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 use chrono::{DateTime, Utc, Duration};
 use reqwest::{Method, StatusCode};
 use reqwest::tls::Version;
+use webpki_roots::TLS_SERVER_ROOTS;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use crate::db::{record_abuse_ip_check, get_abuse_ip_check};
@@ -175,7 +176,7 @@ impl Client {
                 .https_only(true)
                 .deflate(true)
                 .brotli(true)
-                .use_rustls_tls()
+                .tls_certs_only(TLS_SERVER_ROOTS)
                 .build()
                 .unwrap(),
             api_key,
