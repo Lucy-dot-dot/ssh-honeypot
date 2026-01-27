@@ -31,6 +31,20 @@ pub struct AuthPasswordEnrichedRecord {
     pub ipapi_check_timestamp: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PasswordReportData {
+    pub password: String,
+    pub total_attempts: i64,
+    pub unique_ips: i64,
+    pub unique_usernames: i64,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    pub top_usernames: Vec<(String, i64)>,
+    pub top_ips: Vec<(String, i64)>,
+    pub all_usernames: Vec<(String, i64)>,
+    pub all_ips: Vec<(String, i64)>,
+}
+
 pub struct ReportGenerator {
     pool: PgPool,
 }
@@ -1055,6 +1069,511 @@ impl ReportGenerator {
 
         Ok(report)
     }
+
+    pub async fn generate_password_report(&self, password: &str, format: &ReportFormat) -> Result<String, Box<dyn std::error::Error>> {
+        let data = self.get_password_data(password).await?;
+
+        if data.total_attempts == 0 {
+            return Ok(format!("No data found for password: {}", password));
+        }
+
+        match format {
+            ReportFormat::Text => self.generate_password_text_report(password, &data),
+            ReportFormat::Html => self.generate_password_html_report(password, &data),
+            ReportFormat::Markdown => self.generate_password_markdown_report(password, &data),
+        }
+    }
+
+    async fn get_password_data(&self, password: &str) -> Result<PasswordReportData, sqlx::Error> {
+        // Get basic statistics
+        let stats_query = "SELECT
+            COUNT(*) as total_attempts,
+            COUNT(DISTINCT ip) as unique_ips,
+            COUNT(DISTINCT username) as unique_usernames,
+            MIN(timestamp) as first_seen,
+            MAX(timestamp) as last_seen
+            FROM auth_password_enriched
+            WHERE password = $1";
+
+        let stats_row = sqlx::query(stats_query)
+            .bind(password)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let total_attempts: i64 = stats_row.get("total_attempts");
+        let unique_ips: i64 = stats_row.get("unique_ips");
+        let unique_usernames: i64 = stats_row.get("unique_usernames");
+        let first_seen: DateTime<Utc> = stats_row.get("first_seen");
+        let last_seen: DateTime<Utc> = stats_row.get("last_seen");
+
+        // Get top usernames
+        let username_query = "SELECT username, COUNT(*) as count
+            FROM auth_password_enriched
+            WHERE password = $1
+            GROUP BY username
+            ORDER BY count DESC
+            LIMIT 10";
+
+        let username_rows = sqlx::query(username_query)
+            .bind(password)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let top_usernames: Vec<(String, i64)> = username_rows
+            .iter()
+            .map(|row| (row.get::<String, _>("username"), row.get::<i64, _>("count")))
+            .collect();
+
+        // Get top IPs
+        let ip_query = "SELECT ip::text as ip_text, COUNT(*) as count
+            FROM auth_password_enriched
+            WHERE password = $1
+            GROUP BY ip
+            ORDER BY count DESC
+            LIMIT 10";
+
+        let ip_rows = sqlx::query(ip_query)
+            .bind(password)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let top_ips: Vec<(String, i64)> = ip_rows
+            .iter()
+            .map(|row| (row.get::<String, _>("ip_text"), row.get::<i64, _>("count")))
+            // Formatter doing weird things with ip here. Appends /32 everywhere
+            .map(|(ip, count)| (ip.replace("/32", ""), count))
+            .collect();
+
+        // Get ALL usernames (no limit)
+        let all_username_query = "SELECT username, COUNT(*) as count
+            FROM auth_password_enriched
+            WHERE password = $1
+            GROUP BY username
+            ORDER BY count DESC";
+
+        let all_username_rows = sqlx::query(all_username_query)
+            .bind(password)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let all_usernames: Vec<(String, i64)> = all_username_rows
+            .iter()
+            .map(|row| (row.get::<String, _>("username"), row.get::<i64, _>("count")))
+            .collect();
+
+        // Get ALL IPs (no limit)
+        let all_ip_query = "SELECT ip::text as ip_text, COUNT(*) as count
+            FROM auth_password_enriched
+            WHERE password = $1
+            GROUP BY ip
+            ORDER BY count DESC";
+
+        let all_ip_rows = sqlx::query(all_ip_query)
+            .bind(password)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let all_ips: Vec<(String, i64)> = all_ip_rows
+            .iter()
+            .map(|row| (row.get::<String, _>("ip_text"), row.get::<i64, _>("count")))
+            // Formatter doing weird things with ip here. Appends /32 everywhere
+            .map(|(ip, count)| (ip.replace("/32", ""), count))
+            .collect();
+
+        Ok(PasswordReportData {
+            password: password.to_string(),
+            total_attempts,
+            unique_ips,
+            unique_usernames,
+            first_seen,
+            last_seen,
+            top_usernames,
+            top_ips,
+            all_usernames,
+            all_ips,
+        })
+    }
+
+    fn generate_password_text_report(&self, password: &str, data: &PasswordReportData) -> Result<String, Box<dyn std::error::Error>> {
+        let mut report = String::new();
+
+        writeln!(report, "==========================================")?;
+        writeln!(report, "SSH HONEYPOT PASSWORD REPORT")?;
+        writeln!(report, "==========================================")?;
+        writeln!(report)?;
+        writeln!(report, "Password: {}", password)?;
+        writeln!(report)?;
+
+        writeln!(report, "USAGE STATISTICS:")?;
+        writeln!(report, "  Total Attempts: {}", data.total_attempts)?;
+        writeln!(report, "  Unique IP Addresses: {}", data.unique_ips)?;
+        writeln!(report, "  Unique Usernames: {}", data.unique_usernames)?;
+        writeln!(report, "  First Seen: {}", data.first_seen.format("%Y-%m-%d %H:%M:%S UTC"))?;
+        writeln!(report, "  Last Seen: {}", data.last_seen.format("%Y-%m-%d %H:%M:%S UTC"))?;
+        writeln!(report)?;
+
+        writeln!(report, "TOP USERNAMES:")?;
+        for (username, count) in &data.top_usernames {
+            writeln!(report, "  {} ({}x)", username, count)?;
+        }
+        writeln!(report)?;
+
+        writeln!(report, "TOP IP ADDRESSES:")?;
+        for (ip, count) in &data.top_ips {
+            writeln!(report, "  {} ({}x)", ip, count)?;
+        }
+        writeln!(report)?;
+
+        writeln!(report, "ALL USERNAMES ({}):", data.all_usernames.len())?;
+        for (username, count) in &data.all_usernames {
+            writeln!(report, "  {} ({}x)", username, count)?;
+        }
+        writeln!(report)?;
+
+        writeln!(report, "ALL IP ADDRESSES ({}):", data.all_ips.len())?;
+        for (ip, count) in &data.all_ips {
+            writeln!(report, "  {} ({}x)", ip, count)?;
+        }
+        writeln!(report)?;
+
+        writeln!(report, "==========================================")?;
+
+        Ok(report)
+    }
+
+    fn generate_password_html_report(&self, password: &str, data: &PasswordReportData) -> Result<String, Box<dyn std::error::Error>> {
+        let mut html = String::new();
+
+        writeln!(html, "<!DOCTYPE html>")?;
+        writeln!(html, "<html lang=\"en\">")?;
+        writeln!(html, "<head>")?;
+        writeln!(html, "    <meta charset=\"UTF-8\">")?;
+        writeln!(html, "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">")?;
+        writeln!(html, "    <title>SSH Honeypot Password Report - {}</title>", password)?;
+        writeln!(html, "    <style>")?;
+
+        // Minimal, accessible CSS
+        writeln!(html, r#"
+        * {{
+            box-sizing: border-box;
+        }}
+
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+            max-width: 900px;
+            margin: 0 auto;
+        }}
+
+        .container {{
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 2rem;
+        }}
+
+        h1 {{
+            color: #2c3e50;
+            border-bottom: 2px solid #333;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1.5rem;
+            font-size: 1.75rem;
+        }}
+
+        h2 {{
+            color: #34495e;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 0.3rem;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            font-size: 1.25rem;
+        }}
+
+        .password {{
+            font-family: 'Courier New', monospace;
+            background: #f8f8f8;
+            padding: 0.25rem 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            font-weight: bold;
+        }}
+
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }}
+
+        .stat-box {{
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 1rem;
+            border-radius: 4px;
+        }}
+
+        .stat-label {{
+            font-size: 0.875rem;
+            color: #666;
+            margin-bottom: 0.25rem;
+        }}
+
+        .stat-value {{
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #2c3e50;
+        }}
+
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            border: 1px solid #ddd;
+        }}
+
+        th {{
+            background: #f0f0f0;
+            color: #333;
+            font-weight: 600;
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 2px solid #ddd;
+        }}
+
+        td {{
+            padding: 0.75rem;
+            border-bottom: 1px solid #eee;
+        }}
+
+        tbody tr:hover {{
+            background: #f5f5f5;
+        }}
+
+        .code {{
+            font-family: 'Courier New', monospace;
+            background: #f8f8f8;
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+        }}
+
+        footer {{
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #666;
+            font-size: 0.875rem;
+        }}
+
+        @media print {{
+            body {{
+                background: white;
+            }}
+            .container {{
+                border: none;
+                box-shadow: none;
+            }}
+        }}
+
+        @media (max-width: 600px) {{
+            body {{
+                padding: 10px;
+            }}
+            .container {{
+                padding: 1rem;
+            }}
+            h1 {{
+                font-size: 1.5rem;
+            }}
+        }}
+        "#)?;
+
+        writeln!(html, "    </style>")?;
+        writeln!(html, "</head>")?;
+        writeln!(html, "<body>")?;
+        writeln!(html, "    <div class=\"container\">")?;
+
+        writeln!(html, "        <h1>SSH Honeypot Password Report</h1>")?;
+        writeln!(html, "        <p>Analysis for password: <span class=\"password\">{}</span></p>", password)?;
+
+        writeln!(html, "        <h2>Usage Statistics</h2>")?;
+        writeln!(html, "        <div class=\"stats-grid\">")?;
+        writeln!(html, "            <div class=\"stat-box\">")?;
+        writeln!(html, "                <div class=\"stat-label\">Total Attempts</div>")?;
+        writeln!(html, "                <div class=\"stat-value\">{}</div>", data.total_attempts)?;
+        writeln!(html, "            </div>")?;
+        writeln!(html, "            <div class=\"stat-box\">")?;
+        writeln!(html, "                <div class=\"stat-label\">Unique IPs</div>")?;
+        writeln!(html, "                <div class=\"stat-value\">{}</div>", data.unique_ips)?;
+        writeln!(html, "            </div>")?;
+        writeln!(html, "            <div class=\"stat-box\">")?;
+        writeln!(html, "                <div class=\"stat-label\">Unique Usernames</div>")?;
+        writeln!(html, "                <div class=\"stat-value\">{}</div>", data.unique_usernames)?;
+        writeln!(html, "            </div>")?;
+        writeln!(html, "        </div>")?;
+
+        writeln!(html, "        <div class=\"stats-grid\">")?;
+        writeln!(html, "            <div class=\"stat-box\">")?;
+        writeln!(html, "                <div class=\"stat-label\">First Seen</div>")?;
+        writeln!(html, "                <div class=\"stat-value\" style=\"font-size: 1rem;\">{}</div>", data.first_seen.format("%Y-%m-%d %H:%M UTC"))?;
+        writeln!(html, "            </div>")?;
+        writeln!(html, "            <div class=\"stat-box\">")?;
+        writeln!(html, "                <div class=\"stat-label\">Last Seen</div>")?;
+        writeln!(html, "                <div class=\"stat-value\" style=\"font-size: 1rem;\">{}</div>", data.last_seen.format("%Y-%m-%d %H:%M UTC"))?;
+        writeln!(html, "            </div>")?;
+        writeln!(html, "        </div>")?;
+
+        writeln!(html, "        <h2>Top Usernames</h2>")?;
+        writeln!(html, "        <table>")?;
+        writeln!(html, "            <thead>")?;
+        writeln!(html, "                <tr>")?;
+        writeln!(html, "                    <th>Rank</th>")?;
+        writeln!(html, "                    <th>Username</th>")?;
+        writeln!(html, "                    <th>Attempts</th>")?;
+        writeln!(html, "                </tr>")?;
+        writeln!(html, "            </thead>")?;
+        writeln!(html, "            <tbody>")?;
+        for (i, (username, count)) in data.top_usernames.iter().enumerate() {
+            writeln!(html, "                <tr>")?;
+            writeln!(html, "                    <td>{}</td>", i + 1)?;
+            writeln!(html, "                    <td><span class=\"code\">{}</span></td>", username)?;
+            writeln!(html, "                    <td>{}</td>", count)?;
+            writeln!(html, "                </tr>")?;
+        }
+        writeln!(html, "            </tbody>")?;
+        writeln!(html, "        </table>")?;
+
+        writeln!(html, "        <h2>Top IP Addresses</h2>")?;
+        writeln!(html, "        <table>")?;
+        writeln!(html, "            <thead>")?;
+        writeln!(html, "                <tr>")?;
+        writeln!(html, "                    <th>Rank</th>")?;
+        writeln!(html, "                    <th>IP Address</th>")?;
+        writeln!(html, "                    <th>Attempts</th>")?;
+        writeln!(html, "                </tr>")?;
+        writeln!(html, "            </thead>")?;
+        writeln!(html, "            <tbody>")?;
+        for (i, (ip, count)) in data.top_ips.iter().enumerate() {
+            writeln!(html, "                <tr>")?;
+            writeln!(html, "                    <td>{}</td>", i + 1)?;
+            writeln!(html, "                    <td><span class=\"code\">{}</span></td>", ip)?;
+            writeln!(html, "                    <td>{}</td>", count)?;
+            writeln!(html, "                </tr>")?;
+        }
+        writeln!(html, "            </tbody>")?;
+        writeln!(html, "        </table>")?;
+
+        writeln!(html, "        <h2>All Usernames ({})</h2>", data.all_usernames.len())?;
+        writeln!(html, "        <table>")?;
+        writeln!(html, "            <thead>")?;
+        writeln!(html, "                <tr>")?;
+        writeln!(html, "                    <th>Username</th>")?;
+        writeln!(html, "                    <th>Attempts</th>")?;
+        writeln!(html, "                </tr>")?;
+        writeln!(html, "            </thead>")?;
+        writeln!(html, "            <tbody>")?;
+        for (username, count) in &data.all_usernames {
+            writeln!(html, "                <tr>")?;
+            writeln!(html, "                    <td><span class=\"code\">{}</span></td>", username)?;
+            writeln!(html, "                    <td>{}</td>", count)?;
+            writeln!(html, "                </tr>")?;
+        }
+        writeln!(html, "            </tbody>")?;
+        writeln!(html, "        </table>")?;
+
+        writeln!(html, "        <h2>All IP Addresses ({})</h2>", data.all_ips.len())?;
+        writeln!(html, "        <table>")?;
+        writeln!(html, "            <thead>")?;
+        writeln!(html, "                <tr>")?;
+        writeln!(html, "                    <th>IP Address</th>")?;
+        writeln!(html, "                    <th>Attempts</th>")?;
+        writeln!(html, "                </tr>")?;
+        writeln!(html, "            </thead>")?;
+        writeln!(html, "            <tbody>")?;
+        for (ip, count) in &data.all_ips {
+            writeln!(html, "                <tr>")?;
+            writeln!(html, "                    <td><span class=\"code\">{}</span></td>", ip)?;
+            writeln!(html, "                    <td>{}</td>", count)?;
+            writeln!(html, "                </tr>")?;
+        }
+        writeln!(html, "            </tbody>")?;
+        writeln!(html, "        </table>")?;
+
+        writeln!(html, "        <footer>")?;
+        writeln!(html, "            <p>Report generated by SSH Honeypot Report Generator on {}</p>", Utc::now().format("%Y-%m-%d %H:%M:%S UTC"))?;
+        writeln!(html, "        </footer>")?;
+
+        writeln!(html, "    </div>")?;
+        writeln!(html, "</body>")?;
+        writeln!(html, "</html>")?;
+
+        Ok(html)
+    }
+
+    fn generate_password_markdown_report(&self, password: &str, data: &PasswordReportData) -> Result<String, Box<dyn std::error::Error>> {
+        let mut report = String::new();
+
+        writeln!(report, "# SSH Honeypot Password Report")?;
+        writeln!(report)?;
+        writeln!(report, "**Password:** `{}`", password)?;
+        writeln!(report)?;
+
+        writeln!(report, "## Usage Statistics")?;
+        writeln!(report)?;
+        writeln!(report, "| Metric | Value |")?;
+        writeln!(report, "|--------|-------|")?;
+        writeln!(report, "| Total Attempts | **{}** |", data.total_attempts)?;
+        writeln!(report, "| Unique IP Addresses | {} |", data.unique_ips)?;
+        writeln!(report, "| Unique Usernames | {} |", data.unique_usernames)?;
+        writeln!(report, "| First Seen | {} |", data.first_seen.format("%Y-%m-%d %H:%M:%S UTC"))?;
+        writeln!(report, "| Last Seen | {} |", data.last_seen.format("%Y-%m-%d %H:%M:%S UTC"))?;
+        writeln!(report)?;
+
+        writeln!(report, "## Top Usernames")?;
+        writeln!(report)?;
+        writeln!(report, "| Rank | Username | Attempts |")?;
+        writeln!(report, "|------|----------|----------|")?;
+        for (i, (username, count)) in data.top_usernames.iter().enumerate() {
+            writeln!(report, "| {} | `{}` | {} |", i + 1, username, count)?;
+        }
+        writeln!(report)?;
+
+        writeln!(report, "## Top IP Addresses")?;
+        writeln!(report)?;
+        writeln!(report, "| Rank | IP Address | Attempts |")?;
+        writeln!(report, "|------|------------|----------|")?;
+        for (i, (ip, count)) in data.top_ips.iter().enumerate() {
+            writeln!(report, "| {} | `{}` | {} |", i + 1, ip, count)?;
+        }
+        writeln!(report)?;
+
+        writeln!(report, "## All Usernames ({})", data.all_usernames.len())?;
+        writeln!(report)?;
+        writeln!(report, "| Username | Attempts |")?;
+        writeln!(report, "|----------|----------|")?;
+        for (username, count) in &data.all_usernames {
+            writeln!(report, "| `{}` | {} |", username, count)?;
+        }
+        writeln!(report)?;
+
+        writeln!(report, "## All IP Addresses ({})", data.all_ips.len())?;
+        writeln!(report)?;
+        writeln!(report, "| IP Address | Attempts |")?;
+        writeln!(report, "|------------|----------|")?;
+        for (ip, count) in &data.all_ips {
+            writeln!(report, "| `{}` | {} |", ip, count)?;
+        }
+        writeln!(report)?;
+
+        writeln!(report, "---")?;
+        writeln!(report, "*Report generated by SSH Honeypot Report Generator*")?;
+
+        Ok(report)
+    }
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -1063,3 +1582,4 @@ pub enum ReportFormat {
     Html,
     Markdown,
 }
+

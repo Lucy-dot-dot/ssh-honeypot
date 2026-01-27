@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use super::command_trait::{Command, StatefulCommand, CommandResult, CommandError};
+use super::command_trait::{Command, StatefulCommand, CommandResult};
 use super::context::CommandContext;
 use crate::shell::filesystem::fs2::FileContent;
 

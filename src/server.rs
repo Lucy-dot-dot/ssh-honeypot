@@ -16,7 +16,7 @@ use crate::shell::commands::{
 	CommandDispatcher, CommandContext,
 	EchoCommand, CatCommand, DateCommand, FreeCommand, PsCommand, UnameCommand, LsCommand,
 	PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand
-};use crate::shell::filesystem::fs2::{FileContent, FileSystem};
+};use crate::shell::filesystem::fs2::FileSystem;
 use crate::sftp::HoneypotSftpSession;
 use crate::abuseipdb::{Client as AbuseIpClient, AbuseIpError};
 use crate::ipapi;
