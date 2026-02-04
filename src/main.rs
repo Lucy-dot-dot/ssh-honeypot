@@ -9,6 +9,7 @@ mod abuseipdb;
 mod ipapi;
 mod report;
 
+use std::borrow::Cow;
 use app::App;
 use db::{run_db_handler, initialize_database_pool};
 use std::fs::OpenOptions;
@@ -90,6 +91,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_id: SshId::Standard(app.server_id.clone()),
         keys: vec![keys.ed25519, keys.rsa, keys.ecdsa],
         methods: (&[MethodKind::PublicKey, MethodKind::Password, MethodKind::KeyboardInteractive]).as_slice().into(),
+        preferred: Preferred {
+            kex: Cow::Borrowed(&[
+                // russh::negotiation::SAFE_KEX_ORDER
+                kex::MLKEM768X25519_SHA256,
+                kex::CURVE25519,
+                kex::CURVE25519_PRE_RFC_8731,
+                kex::DH_GEX_SHA256,
+                kex::DH_G18_SHA512,
+                kex::DH_G17_SHA512,
+                kex::DH_G16_SHA512,
+                kex::DH_G15_SHA512,
+                kex::DH_G14_SHA256,
+                kex::EXTENSION_SUPPORT_AS_CLIENT,
+                kex::EXTENSION_SUPPORT_AS_SERVER,
+                kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
+                kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
+                // Old bad insecure cipher
+                kex::DH_G1_SHA1,
+                kex::DH_G14_SHA1,
+                kex::DH_GEX_SHA1,
+            ]),
+            key: Default::default(),
+            cipher: Default::default(),
+            mac: Default::default(),
+            compression: Default::default(),
+        },
         ..Default::default()
     };
     log::trace!("Finished generating keys");
