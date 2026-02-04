@@ -49,6 +49,7 @@ pub struct ReportGenerator {
     pool: PgPool,
 }
 
+#[allow(unused)]
 impl ReportGenerator {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
