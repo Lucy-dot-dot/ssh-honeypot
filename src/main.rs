@@ -147,33 +147,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Arc::new(ipapi::Client::new(pool.clone(), None)))
     };
 
-    // Start background cache cleanup task
-    let pool_cleanup = pool.clone();
-    let cleanup_interval_hours = app.abuse_ip_cache_cleanup_interval_hours;
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(cleanup_interval_hours as u64 * 3600));
-        log::info!("Starting AbuseIPDB cache cleanup task (interval: {} hours)", cleanup_interval_hours);
-        
-        loop {
-            interval.tick().await;
-            
-            match sqlx::query(
-                "DELETE FROM abuse_ip_cache WHERE timestamp < NOW() - INTERVAL '24 hours'"
-            ).execute(&pool_cleanup).await {
-                Ok(result) => {
-                    let rows_deleted = result.rows_affected();
-                    if rows_deleted > 0 {
-                        log::info!("Cleaned up {} expired AbuseIPDB cache entries", rows_deleted);
-                    } else {
-                        log::debug!("No expired AbuseIPDB cache entries to clean up");
+    // Start background cache cleanup task (only if AbuseIPDB client is enabled)
+    if let Some(client) = abuse_ip_client.clone() {
+        let cleanup_interval_hours = app.abuse_ip_cache_cleanup_interval_hours;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(cleanup_interval_hours as u64 * 3600));
+            log::info!("Starting AbuseIPDB cache cleanup task (interval: {} hours)", cleanup_interval_hours);
+
+            loop {
+                interval.tick().await;
+
+                match client.cleanup_expired_cache().await {
+                    Ok(rows_deleted) => {
+                        if rows_deleted > 0 {
+                            log::info!("Cleaned up {} expired AbuseIPDB database cache entries", rows_deleted);
+                        } else {
+                            log::debug!("No expired AbuseIPDB cache entries to clean up");
+                        }
+                    },
+                    Err(e) => {
+                        log::error!("Failed to cleanup expired AbuseIPDB cache entries: {}", e);
                     }
-                },
-                Err(e) => {
-                    log::error!("Failed to cleanup expired AbuseIPDB cache entries: {}", e);
                 }
             }
-        }
-    });
+        });
+    }
 
     if !app.disable_base_tar_gz_loading {
         if app.disable_cli_interface {

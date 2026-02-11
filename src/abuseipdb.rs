@@ -314,6 +314,34 @@ impl Client {
         }
     }
 
+    /// Cleans up expired entries from both the database cache and the in-memory cache.
+    /// Returns the number of database entries deleted.
+    pub async fn cleanup_expired_cache(&self) -> Result<u64, sqlx::Error> {
+        // Clean up database cache
+        let result = sqlx::query(&format!(
+            "DELETE FROM abuse_ip_cache WHERE timestamp < NOW() - INTERVAL '{} hours'",
+            self.cache_ttl_hours
+        ))
+        .execute(&self.pool)
+        .await?;
+
+        let rows_deleted = result.rows_affected();
+
+        // Clean up in-memory cache
+        let now = Utc::now();
+        let ttl = Duration::hours(self.cache_ttl_hours as i64);
+        let mut cache = self.memory_cache.write().await;
+        let initial_size = cache.len();
+        cache.retain(|_, cached| now - cached.cached_at < ttl);
+        let memory_entries_removed = initial_size - cache.len();
+
+        if memory_entries_removed > 0 {
+            log::debug!("Removed {} expired entries from AbuseIPDB memory cache", memory_entries_removed);
+        }
+
+        Ok(rows_deleted)
+    }
+
     #[allow(dead_code)]
     // 2023-10-18T11:25:11-04:00 is the format of the timestamp
     pub async fn report_ip(&self, ip_address: &str, categories: &Vec<u8>, evidence: &str, timestamp: &str) -> Result<ReportResponse, reqwest::Error> {
