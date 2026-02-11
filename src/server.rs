@@ -807,7 +807,14 @@ impl server::Server for SshServerHandler {
             Error::IO(err) => {
                 match err.kind() {
                     ErrorKind::UnexpectedEof => {
-                        log::warn!("Session did not properly closed. Bad bot.");
+                        let complaints = [
+                            "Session did not properly close. Bad bot.",
+                            "No goodbye? Rude.",
+                            "TCP RST is not a personality.",
+                            "Your mother would be disappointed in your connection handling.",
+                            "Imagine not knowing how to FIN/ACK.",
+                        ];
+                        log::warn!("UnexpectedEof: {}", complaints[rng().random_range(0..complaints.len())]);
                     }
                     ErrorKind::ConnectionReset => {
                         log::warn!("Session closed by remote peer. (TCP RST Packet)");
