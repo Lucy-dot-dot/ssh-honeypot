@@ -18,6 +18,8 @@ pub enum DbMessage {
         password: Option<String>,
         public_key: Option<String>,
         successful: bool,
+        abuseipdb_data: Option<serde_json::Value>,
+        ipapi_data: Option<serde_json::Value>,
         response_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
     RecordCommand {
@@ -84,12 +86,12 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                     }
                 };
             }
-            DbMessage::RecordAuth { timestamp, ip, username, auth_type, password, public_key, successful, response_tx } => {
+            DbMessage::RecordAuth { timestamp, ip, username, auth_type, password, public_key, successful, abuseipdb_data, ipapi_data, response_tx } => {
                 log::trace!("Recording {} auth attempt: user='{}' from {} (success={})", auth_type, username, ip, successful);
 
                 let result = record_auth(
                     &pool, timestamp, ip, username, auth_type,
-                    password, public_key, successful
+                    password, public_key, successful, abuseipdb_data, ipapi_data
                 ).await;
                 
                 let response = match result {
@@ -180,12 +182,14 @@ async fn record_auth(
     password: Option<String>,
     public_key: Option<String>,
     successful: bool,
+    abuseipdb_data: Option<serde_json::Value>,
+    ipapi_data: Option<serde_json::Value>,
 ) -> Result<String, sqlx::Error> {
     log::trace!("Recording auth attempt: {} from {}", username, ip);
-    
+
     let row = query(
-        "INSERT INTO auth (timestamp, ip, username, auth_type, password, public_key, successful)
-         VALUES ($1, $2::inet, $3, $4, $5, $6, $7)
+        "INSERT INTO auth (timestamp, ip, username, auth_type, password, public_key, successful, abuseipdb_data, ipapi_data)
+         VALUES ($1, $2::inet, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id"
     )
     .bind(timestamp)
@@ -195,6 +199,8 @@ async fn record_auth(
     .bind(password)
     .bind(public_key)
     .bind(successful)
+    .bind(abuseipdb_data)
+    .bind(ipapi_data)
     .fetch_one(pool)
     .await?;
 

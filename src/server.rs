@@ -51,6 +51,7 @@ pub struct SshHandler {
     reject_all_auth: bool,
 	command_dispatcher: CommandDispatcher,
     welcome_message: String,
+    ip_api_client: Option<Arc<ipapi::Client>>,
 }
 
 // Implementation of the Handler trait for our SSH server
@@ -75,8 +76,11 @@ impl Handler for SshHandler {
 
             log::info!("Password auth attempt - Username: {}, Password: {}, IP: {}", user, password, peer_str);
 
-            // Check IP with AbuseIPDB if client is available
-            self.check_abuse_ip_db().await;
+            // Check IP with AbuseIPDB if client is available and get the data
+            let abuseipdb_data = self.check_abuse_ip_db().await;
+
+            // Get cached IPAPI data
+            let ipapi_data = self.get_ipapi_data().await;
 
             // Record authentication attempt in database and get the UUID back
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
@@ -88,6 +92,8 @@ impl Handler for SshHandler {
                 password: Some(password.to_string()),
                 public_key: None,
                 successful: !self.reject_all_auth, // Accept/reject based on flag
+                abuseipdb_data,
+                ipapi_data,
                 response_tx,
             }).await {
                 Ok(_) => {
@@ -140,8 +146,11 @@ impl Handler for SshHandler {
 
             log::info!("Public key auth attempt - Username: {}, Key: {}, IP: {}", user, key_str, peer_str);
 
-            // Check IP with AbuseIPDB if client is available
-            self.check_abuse_ip_db().await;
+            // Check IP with AbuseIPDB if client is available and get the data
+            let abuseipdb_data = self.check_abuse_ip_db().await;
+
+            // Get cached IPAPI data
+            let ipapi_data = self.get_ipapi_data().await;
 
             // Record authentication attempt in database and get the UUID back
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
@@ -153,6 +162,8 @@ impl Handler for SshHandler {
                 password: None,
                 public_key: Some(key_str),
                 successful: !self.reject_all_auth, // Accept/reject based on flag
+                abuseipdb_data,
+                ipapi_data,
                 response_tx,
             }).await {
                 Ok(_) => {
@@ -582,10 +593,11 @@ impl SshHandler {
         }
     }
 
-    async fn check_abuse_ip_db(&mut self) {
+    /// Check AbuseIPDB and return the response data as JSON for storage
+    async fn check_abuse_ip_db(&mut self) -> Option<serde_json::Value> {
         let Some(abuse_client) = &self.abuse_ip_client else {
             log::trace!("AbuseIPDB client not configured, skipping IP check");
-            return;
+            return None;
         };
 
         let ip = self.peer.ip().to_string();
@@ -599,6 +611,8 @@ impl SshHandler {
                 log::trace!("AbuseIPDB response: {:?}", response.data);
                 log::info!("AbuseIPDB check for {}: Confidence: {}%, Country: {}, Tor: {}, Reports: {}",
                              ip, score, country, is_tor, response.data.total_reports);
+                log::trace!("Completed AbuseIPDB check for {}", ip);
+                serde_json::to_value(&response.data).ok()
             },
             Err(AbuseIpError::RateLimitExceeded(info)) => {
                 log::trace!("AbuseIPDB rate limit encountered for {}", ip);
@@ -611,12 +625,34 @@ impl SshHandler {
                 } else {
                     log::warn!("AbuseIPDB daily rate limit exceeded for {}", ip);
                 }
+                log::trace!("Completed AbuseIPDB check for {}", ip);
+                None
             },
             Err(e) => {
                 log::warn!("AbuseIPDB check failed for {}: {}", ip, e);
+                log::trace!("Completed AbuseIPDB check for {}", ip);
+                None
             }
         }
-        log::trace!("Completed AbuseIPDB check for {}", ip);
+    }
+
+    /// Get cached IPAPI data for the current peer IP
+    async fn get_ipapi_data(&self) -> Option<serde_json::Value> {
+        let Some(ipapi_client) = &self.ip_api_client else {
+            return None;
+        };
+
+        let ip = self.peer.ip().to_string();
+        let cache = ipapi_client.memory_cache.read().await;
+
+        if let Some(cached) = cache.get(&ip) {
+            let age = Utc::now() - cached.cached_at;
+            if age < chrono::Duration::hours(ipapi_client.cache_ttl_hours as i64) {
+                return serde_json::to_value(&cached.response).ok();
+            }
+        }
+
+        None
     }
 
     /// Generate a welcome message with randomized system statistics
@@ -797,6 +833,7 @@ impl server::Server for SshServerHandler {
             reject_all_auth: self.reject_all_auth,
 			command_dispatcher: Self::create_command_dispatcher(),
             welcome_message: self.welcome_message.clone(),
+            ip_api_client: self.ip_api_client.clone(),
 		}
     }
 
