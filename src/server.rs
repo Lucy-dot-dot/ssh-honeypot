@@ -847,9 +847,20 @@ impl server::Server for SshServerHandler {
                         let complaints = [
                             "Session did not properly close. Bad bot.",
                             "No goodbye? Rude.",
-                            "TCP RST is not a personality.",
+                            "FIN/ACK without SSH disconnect? Half-assing it, I see.",
+                            "TCP teardown: ✓ SSH goodbye: ✗ Try harder.",
+                            "Your mother would be disappointed in your session handling.",
+                            "Closed the TCP socket but forgot there's an SSH session on top.",
                             "Your mother would be disappointed in your connection handling.",
-                            "Imagine not knowing how to FIN/ACK.",
+                            "Tearing down TCP before SSH? Someone skipped the protocol docs.",
+                            "SSH session still open, TCP already gone. Pick a lane.",
+                            "Did you even read RFC 4253? Section 11.1 is right there.",
+                            "Abrupt TCP close detected. The SSH layer is crying.",
+                            "Layer 7 called, they want their proper disconnect back.",
+                            "SSH state machine in shambles. TCP doesn't care about your feelings.",
+                            "Graceful shutdown was an option. You chose violence.",
+                            "EOF on socket != SSH_MSG_DISCONNECT. Learn the difference.",
+                            "The SSH RFC authors are personally disappointed in you.",
                         ];
                         log::warn!("UnexpectedEof: {}", complaints[rng().random_range(0..complaints.len())]);
                     }
