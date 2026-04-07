@@ -28,7 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.9.11"
 directories = "6.0.0"
 flate2 = "1.1.9"
-tar = "0.4.44"
+tar = "0.4.45"
 rand = "0.9.2"
 russh-sftp = "2.1"
 sha2 = "0.11"
