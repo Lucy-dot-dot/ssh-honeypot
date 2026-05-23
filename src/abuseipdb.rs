@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::{RwLock, Notify};
 use chrono::{DateTime, Utc, Duration};
 use reqwest::{Certificate, Method, StatusCode};
 use reqwest::tls::Version;
@@ -10,6 +10,15 @@ use sqlx::PgPool;
 use crate::db::{record_abuse_ip_check, get_abuse_ip_check};
 
 const DEFAULT_CACHE_TTL_HOURS: u8 = 24;
+const IN_FLIGHT_WAIT_TIMEOUT_MS: u64 = 500;
+
+/// Tracks an in-flight API lookup to prevent duplicate requests for the same IP
+struct InFlightLookup {
+    /// None = pending, Some(None) = failed, Some(Some(response)) = success
+    result: StdMutex<Option<Option<CheckResponse>>>,
+    /// Notifies waiters when the lookup completes
+    notify: Notify,
+}
 
 #[derive(Debug, Clone)]
 pub struct RateLimitInfo {
@@ -166,6 +175,8 @@ pub struct Client {
     pub memory_cache: Arc<RwLock<HashMap<String, CachedResult>>>,
     pool: PgPool,
     pub cache_ttl_hours: u8,
+    /// Tracks in-flight API lookups to prevent duplicate requests
+    in_flight: StdMutex<HashMap<String, Arc<InFlightLookup>>>,
 }
 
 impl Client {
@@ -185,11 +196,13 @@ impl Client {
             memory_cache: Arc::new(RwLock::new(HashMap::new())),
             pool,
             cache_ttl_hours: cache_ttl_hours.unwrap_or(DEFAULT_CACHE_TTL_HOURS),
+            in_flight: StdMutex::new(HashMap::new()),
         }
     }
 
     pub async fn check_ip_with_cache(&self, ip_address: &str) -> Result<CheckResponse, AbuseIpError> {
         log::trace!("Checking IP address: {} in cache", ip_address);
+
         // First check memory cache
         let cache = self.memory_cache.read().await;
         if let Some(cached) = cache.get(ip_address) {
@@ -201,8 +214,8 @@ impl Client {
             }
         }
         drop(cache); // Release read lock
-        log::trace!("No cached IP address found for in in-memory-cache {}", ip_address);
-        
+        log::trace!("No cached IP address found in in-memory-cache {}", ip_address);
+
         // Check database cache
         log::trace!("Checking database cache for IP address: {}", ip_address);
         match get_abuse_ip_check(&self.pool, ip_address, self.cache_ttl_hours).await {
@@ -218,7 +231,7 @@ impl Client {
                     response: response.clone(),
                     cached_at: timestamp,
                 });
-                
+
                 return Ok(response);
             },
             Ok(None) => {
@@ -230,42 +243,115 @@ impl Client {
                 // Continue to API call on database error
             }
         }
-        
-        // Cache miss or expired, make API call
-        log::debug!("AbuseIPDB cache miss for IP: {}, making API call", ip_address);
-        let response = self.check_ip_api(ip_address).await?;
 
-        log::trace!("API call result: {:?}", response);
-        log::trace!("Updating memory cache");
+        // Check if there's already an in-flight lookup for this IP
+        let existing_lookup = {
+            let in_flight = self.in_flight.lock().unwrap();
+            in_flight.get(ip_address).cloned()
+        };
 
-        // Update memory cache
-        let mut cache = self.memory_cache.write().await;
-        let now = Utc::now();
-        cache.insert(ip_address.to_string(), CachedResult {
-            response: response.clone(),
-            cached_at: now,
-        });
-        drop(cache);
-        log::trace!("Memory cache updated");
+        if let Some(lookup) = existing_lookup {
+            log::debug!("Found in-flight lookup for IP: {}, waiting up to {}ms", ip_address, IN_FLIGHT_WAIT_TIMEOUT_MS);
 
-        log::trace!("Updating database cache");
-        // Store in database cache
-        if let Err(e) = record_abuse_ip_check(
-            &self.pool,
-            ip_address.to_string(),
-            now,
-            response.data.abuse_confidence_score,
-            response.data.country_code.clone(),
-            response.data.is_tor,
-            response.data.is_allowlisted,
-            response.data.total_reports,
-            serde_json::to_string(&response.data).unwrap_or_default(),
-        ).await {
-            log::error!("Failed to cache AbuseIPDB result in database: {}", e);
+            // Wait for the in-flight lookup to complete (with timeout)
+            let wait_result = tokio::time::timeout(
+                std::time::Duration::from_millis(IN_FLIGHT_WAIT_TIMEOUT_MS),
+                lookup.notify.notified()
+            ).await;
+
+            if wait_result.is_err() {
+                log::debug!("Timeout waiting for in-flight lookup for IP: {}", ip_address);
+                return Err(AbuseIpError::Other("Timeout waiting for in-flight lookup".to_string()));
+            }
+
+            // Check the result
+            let result = lookup.result.lock().unwrap();
+            match &*result {
+                Some(Some(response)) => {
+                    log::debug!("Got result from in-flight lookup for IP: {}", ip_address);
+                    return Ok(response.clone());
+                },
+                Some(None) => {
+                    log::debug!("In-flight lookup failed for IP: {}", ip_address);
+                    return Err(AbuseIpError::Other("In-flight lookup failed".to_string()));
+                },
+                None => {
+                    // This shouldn't happen - notified but no result
+                    log::warn!("In-flight lookup notified but no result for IP: {}", ip_address);
+                    return Err(AbuseIpError::Other("In-flight lookup state error".to_string()));
+                }
+            }
         }
-        log::trace!("Database cache updated");
-        
-        Ok(response)
+
+        // No in-flight lookup, register ourselves and make the API call
+        let lookup = Arc::new(InFlightLookup {
+            result: StdMutex::new(None),
+            notify: Notify::new(),
+        });
+
+        {
+            let mut in_flight = self.in_flight.lock().unwrap();
+            in_flight.insert(ip_address.to_string(), lookup.clone());
+        }
+
+        log::debug!("AbuseIPDB cache miss for IP: {}, making API call", ip_address);
+        let api_result = self.check_ip_api(ip_address).await;
+
+        // Store result and notify waiters
+        let response = match &api_result {
+            Ok(response) => {
+                log::trace!("API call result: {:?}", response);
+
+                // Update memory cache
+                log::trace!("Updating memory cache");
+                let mut cache = self.memory_cache.write().await;
+                let now = Utc::now();
+                cache.insert(ip_address.to_string(), CachedResult {
+                    response: response.clone(),
+                    cached_at: now,
+                });
+                drop(cache);
+                log::trace!("Memory cache updated");
+
+                // Store in database cache
+                log::trace!("Updating database cache");
+                if let Err(e) = record_abuse_ip_check(
+                    &self.pool,
+                    ip_address.to_string(),
+                    now,
+                    response.data.abuse_confidence_score,
+                    response.data.country_code.clone(),
+                    response.data.is_tor,
+                    response.data.is_allowlisted,
+                    response.data.total_reports,
+                    serde_json::to_string(&response.data).unwrap_or_default(),
+                ).await {
+                    log::error!("Failed to cache AbuseIPDB result in database: {}", e);
+                }
+                log::trace!("Database cache updated");
+
+                Some(response.clone())
+            },
+            Err(e) => {
+                log::debug!("API call failed for IP {}: {}", ip_address, e);
+                None
+            }
+        };
+
+        // Update in-flight state and notify waiters
+        {
+            let mut result = lookup.result.lock().unwrap();
+            *result = Some(response);
+        }
+        lookup.notify.notify_waiters();
+
+        // Clean up in-flight entry
+        {
+            let mut in_flight = self.in_flight.lock().unwrap();
+            in_flight.remove(ip_address);
+        }
+
+        api_result
     }
 
     async fn check_ip_api(&self, ip_address: &str) -> Result<CheckResponse, AbuseIpError> {
