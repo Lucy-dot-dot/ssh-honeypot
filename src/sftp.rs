@@ -193,10 +193,9 @@ impl Handler for HoneypotSftpSession {
             let filepath = format!("/tmp/{}", filename);
             
             // Calculate SHA256 hash
-            let mut hasher = Sha256::new();
-            hasher.update(&data);
-            let file_hash = format!("{:x}", hasher.finalize());
-            
+            let hasher = Sha256::digest(&data);
+            let file_hash = hex::encode(hasher.as_slice());
+
             // Analyze file with magic detection and entropy
             let (claimed_mime, detected_mime, format_mismatch, file_entropy) = 
                 HoneypotSftpSession::analyze_file(&data, &filepath);

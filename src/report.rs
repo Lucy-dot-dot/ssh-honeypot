@@ -5,6 +5,7 @@ use std::fmt::Write;
 use clap::ValueEnum;
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct AuthPasswordEnrichedRecord {
     pub id: String,
     pub timestamp: DateTime<Utc>,
@@ -33,7 +34,6 @@ pub struct AuthPasswordEnrichedRecord {
 
 #[derive(Debug, Clone)]
 pub struct PasswordReportData {
-    pub password: String,
     pub total_attempts: i64,
     pub unique_ips: i64,
     pub unique_usernames: i64,
@@ -1182,7 +1182,6 @@ impl ReportGenerator {
             .collect();
 
         Ok(PasswordReportData {
-            password: password.to_string(),
             total_attempts,
             unique_ips,
             unique_usernames,

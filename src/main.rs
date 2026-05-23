@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         inactivity_timeout: Some(std::time::Duration::from_secs(30)),
         auth_rejection_time: std::time::Duration::from_secs(3),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
-        server_id: SshId::Standard(app.server_id.clone()),
+        server_id: SshId::Standard(Cow::from(app.server_id.clone())),
         keys: vec![keys.ed25519, keys.rsa, keys.ecdsa],
         methods: (&[MethodKind::PublicKey, MethodKind::Password, MethodKind::KeyboardInteractive]).as_slice().into(),
         preferred: Preferred {

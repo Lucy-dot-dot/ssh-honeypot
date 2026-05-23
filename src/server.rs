@@ -3,14 +3,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
-use russh::{server, Channel, ChannelId, ChannelMsg, CryptoVec, Error};
+use russh::{server, Channel, ChannelId, ChannelMsg, Error};
 use russh::keys::{HashAlg, PublicKey};
 use russh::server::{Auth, Handler, Msg, Session};
 use ssh_encoding::Error as SshEncodingError;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
-use rand::{rng, Rng};
-use rand_core::RngCore;
+use rand::{rng, Rng, RngExt};
 use crate::db::DbMessage;
 use crate::shell::commands::{
 	CommandDispatcher, CommandContext,
@@ -572,10 +571,10 @@ impl SshHandler {
                 let wait_time = std::time::Duration::from_millis(rng().random_range(10..700));
                 log::trace!("Tarpit delay: {}", wait_time.as_millis());
                 tokio::time::sleep(wait_time).await;
-                session.data(channel, CryptoVec::from_slice(&[*datum]))?;
+                session.data(channel, vec![*datum])?;
             }
         } else {
-            session.data(channel, CryptoVec::from_slice(data))?;
+            session.data(channel, data.to_vec())?;
         }
         Ok(())
     }

@@ -2,7 +2,6 @@ use std::fs::OpenOptions;
 use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
 use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PrivateKey};
-use russh::keys::signature::rand_core::OsRng;
 use crate::app::App;
 
 pub struct Keys {
@@ -43,7 +42,7 @@ fn load_or_create_key(key_file_path: PathBuf, algorithm: Algorithm) -> PrivateKe
                     let size = metadata.len();
                     if size == 0 {
                         log::warn!("Key file '{}' is empty", key_file_path.display());
-                        let key = PrivateKey::random(&mut OsRng, algorithm).unwrap();
+                        let key = PrivateKey::random(&mut rand::rng(), algorithm).unwrap();
                         match std::fs::write(key_file_path, key.to_bytes().unwrap()) {
                             Ok(_) => log::debug!("Wrote key to file"),
                             Err(err) => log::warn!("Error when writing key to file: {err}")
@@ -57,7 +56,7 @@ fn load_or_create_key(key_file_path: PathBuf, algorithm: Algorithm) -> PrivateKe
                                     Ok(key) => key,
                                     Err(err) => {
                                         log::warn!("Error when reading key file: {err}. Creating ephemeral key");
-                                        PrivateKey::random(&mut OsRng, algorithm).unwrap()
+                                        PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
                                     }
                                 };
                                 log::debug!("Loaded key");
@@ -65,14 +64,14 @@ fn load_or_create_key(key_file_path: PathBuf, algorithm: Algorithm) -> PrivateKe
                             }
                             Err(err) => {
                                 log::warn!("Error when reading key file: {err}. Creating ephemeral key");
-                                PrivateKey::random(&mut OsRng, algorithm).unwrap()
+                                PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
                             }
                         }
                     }
                 }
                 Err(err) => {
                     log::warn!("Error when reading key file: {err}. Creating ephemeral key");
-                    PrivateKey::random(&mut OsRng, algorithm).unwrap()
+                    PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
                 }
             }
         }
@@ -85,7 +84,7 @@ fn load_or_create_key(key_file_path: PathBuf, algorithm: Algorithm) -> PrivateKe
                     log::warn!("Key file is a directory; Creating ephemeral key");
                 }
                 ErrorKind::NotFound => {
-                    let key = PrivateKey::random(&mut OsRng, algorithm).unwrap();
+                    let key = PrivateKey::random(&mut rand::rng(), algorithm).unwrap();
                     match std::fs::write(key_file_path, key.to_bytes().unwrap()) {
                         Ok(_) => log::debug!("Wrote key to new file"),
                         Err(err) => log::warn!("Error when writing key to file: {err}")
@@ -96,7 +95,7 @@ fn load_or_create_key(key_file_path: PathBuf, algorithm: Algorithm) -> PrivateKe
                     log::warn!("Error when opening key file: {err}. Creating ephemeral key");
                 }
             };
-            PrivateKey::random(&mut OsRng, algorithm).unwrap()
+            PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
         }
     }
 }

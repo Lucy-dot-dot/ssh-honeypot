@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
 use chrono::{DateTime, Duration, Local};
-use rand::{Rng, rng};
+use rand::{rng, RngExt};
 
 /// Represents a simulated process
 struct Process {

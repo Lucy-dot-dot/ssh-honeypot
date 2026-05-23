@@ -266,19 +266,19 @@ impl Client {
 
             // Check the result
             let result = lookup.result.lock().unwrap();
-            match &*result {
+            return match &*result {
                 Some(Some(response)) => {
                     log::debug!("Got result from in-flight lookup for IP: {}", ip_address);
-                    return Ok(response.clone());
+                    Ok(response.clone())
                 },
                 Some(None) => {
                     log::debug!("In-flight lookup failed for IP: {}", ip_address);
-                    return Err(AbuseIpError::Other("In-flight lookup failed".to_string()));
+                    Err(AbuseIpError::Other("In-flight lookup failed".to_string()))
                 },
                 None => {
                     // This shouldn't happen - notified but no result
                     log::warn!("In-flight lookup notified but no result for IP: {}", ip_address);
-                    return Err(AbuseIpError::Other("In-flight lookup state error".to_string()));
+                    Err(AbuseIpError::Other("In-flight lookup state error".to_string()))
                 }
             }
         }
@@ -404,12 +404,10 @@ impl Client {
     /// Returns the number of database entries deleted.
     pub async fn cleanup_expired_cache(&self) -> Result<u64, sqlx::Error> {
         // Clean up database cache
-        let result = sqlx::query(&format!(
-            "DELETE FROM abuse_ip_cache WHERE timestamp < NOW() - INTERVAL '{} hours'",
-            self.cache_ttl_hours
-        ))
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query("DELETE FROM abuse_ip_cache WHERE timestamp < NOW() - ($1 * INTERVAL '1 hour')")
+            .bind(format!("'{} hours'", self.cache_ttl_hours))
+            .execute(&self.pool)
+            .await?;
 
         let rows_deleted = result.rows_affected();
 

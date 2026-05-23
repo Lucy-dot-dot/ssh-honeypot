@@ -2652,7 +2652,7 @@ dependencies = [
  "sha3",
  "signature",
  "spki",
- "ssh-encoding 0.3.0-rc.9",
+ "ssh-encoding",
  "ssh-key",
  "subtle",
  "thiserror 2.0.18",
@@ -2670,7 +2670,7 @@ checksum = "443f6bbcfacb34a1aab2b12b99bf08e0c63abdc5a0db261901365df9d57fff51"
 dependencies = [
  "log",
  "nix",
- "ssh-encoding 0.3.0-rc.9",
+ "ssh-encoding",
  "windows-sys 0.61.2",
 ]
 
@@ -3329,15 +3329,9 @@ dependencies = [
  "ctutils",
  "des",
  "poly1305",
- "ssh-encoding 0.3.0-rc.9",
+ "ssh-encoding",
  "zeroize",
 ]
-
-[[package]]
-name = "ssh-encoding"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb9242b9ef4108a78e8cd1a2c98e193ef372437f8c22be363075233321dd4a15"
 
 [[package]]
 name = "ssh-encoding"
@@ -3364,10 +3358,10 @@ dependencies = [
  "directories",
  "env_logger",
  "flate2",
+ "hex",
  "infer",
  "log",
  "rand 0.10.1",
- "rand_core 0.10.1",
  "reqwest",
  "russh",
  "russh-sftp",
@@ -3375,7 +3369,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "sqlx",
- "ssh-encoding 0.2.0",
+ "ssh-encoding",
  "tar",
  "tokio",
  "toml",
@@ -3404,7 +3398,7 @@ dependencies = [
  "sha2 0.11.0",
  "signature",
  "ssh-cipher",
- "ssh-encoding 0.3.0-rc.9",
+ "ssh-encoding",
  "zeroize",
 ]
 

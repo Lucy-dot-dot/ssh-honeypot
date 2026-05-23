@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
-use rand::{Rng, rng};
+use rand::{rng, RngExt};
 
 /// Represents simulated system memory usage
 struct MemoryStats {
