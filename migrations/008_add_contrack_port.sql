@@ -1,0 +1,2 @@
+ALTER TABLE conn_track ADD COLUMN port INTEGER;
+ALTER TABLE conn_track ADD COLUMN local_port INTEGER;

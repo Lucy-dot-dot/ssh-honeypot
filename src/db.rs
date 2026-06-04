@@ -9,6 +9,8 @@ pub enum DbMessage {
     RecordConnect {
         timestamp: DateTime<Utc>,
         ip: String,
+        port: u16,
+        local_port: u16,
     },
     RecordAuth {
         timestamp: DateTime<Utc>,
@@ -74,10 +76,10 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
     while let Some(msg) = rx.recv().await {
         log::trace!("Processing database message: {:?}", std::mem::discriminant(&msg));
         match msg {
-            DbMessage::RecordConnect { timestamp, ip } => {
+            DbMessage::RecordConnect { timestamp, ip, port, local_port } => {
                 log::trace!("Recording connection from {} at {}", ip, timestamp);
 
-                match record_connect(&pool, timestamp, ip).await {
+                match record_connect(&pool, timestamp, ip, port, local_port).await {
                     Ok(_) => {
                         log::trace!("Connection recorded");
                     }
@@ -212,13 +214,17 @@ async fn record_auth(
 async fn record_connect(
     pool: &PgPool,
     timestamp: DateTime<Utc>,
-    ip: String
+    ip: String,
+    port: u16,
+    local_port: u16,
 ) -> Result<(), Error> {
-    log::trace!("Recording connection attempt from {}", ip);
+    log::trace!("Recording connection attempt from {} on port {}", ip, port);
 
-    query("INSERT INTO conn_track (timestamp, ip) VALUES ($1, $2::inet)")
+    query("INSERT INTO conn_track (timestamp, ip, port, local_port) VALUES ($1, $2::inet, $3, $4)")
         .bind(timestamp)
         .bind(&ip.to_string())
+        .bind(port as i32)
+        .bind(local_port as i32)
         .execute(pool)
         .await?;
 

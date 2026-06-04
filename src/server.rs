@@ -701,6 +701,7 @@ impl SshHandler {
 
 // Implementation of Server trait
 pub struct SshServerHandler {
+    local_port: u16,
     db_tx: mpsc::Sender<DbMessage>,
     disable_cli_interface: bool,
     authentication_banner: Option<String>,
@@ -802,10 +803,13 @@ impl server::Server for SshServerHandler {
         }
 
         let db_tx = self.db_tx.clone();
+        let local_port = self.local_port;
         tokio::spawn(async move {
             match db_tx.send(DbMessage::RecordConnect {
                 ip: peer_addr.ip().to_string(),
+                port: peer_addr.port(),
                 timestamp: Utc::now(),
+                local_port,
             }).await {
                 Ok(_) => { log::trace!("Send record command to db task") },
                 Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
@@ -898,7 +902,7 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>, welcome_message: String, hostname: String) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>, welcome_message: String, hostname: String, local_port: u16) -> SshServerHandler {
         Self {
             disable_cli_interface,
             db_tx,
@@ -911,6 +915,7 @@ impl SshServerHandler {
             ip_api_client,
             welcome_message,
             hostname,
+            local_port
         }
     }
 

@@ -235,7 +235,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.reject_all_auth,
             ip_api_client.clone(),
             app.welcome_message.clone(),
-            app.hostname.clone()
+            app.hostname.clone(),
+            // Does not work the intended way because of NATting on dockers side if DNAT port != target port
+            interface.port()
         );
         tasks.push(tokio::spawn(async move {
             // Start the SSH server
