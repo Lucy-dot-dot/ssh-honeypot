@@ -6,6 +6,7 @@ pub type CommandResult = Result<String, CommandError>;
 
 /// Errors that can occur during command execution
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum CommandError {
     /// Invalid arguments provided to the command
     InvalidArguments(String),
@@ -35,6 +36,7 @@ impl std::error::Error for CommandError {}
 
 /// Trait that all honeypot commands must implement
 #[async_trait]
+#[allow(dead_code)]
 pub trait Command: Send + Sync {
     /// The name of the command (e.g., "echo", "ls", "cat")
     fn name(&self) -> &'static str;

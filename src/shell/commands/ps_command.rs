@@ -5,6 +5,7 @@ use chrono::{DateTime, Duration, Local};
 use rand::{rng, RngExt};
 
 /// Represents a simulated process
+#[allow(dead_code)]
 struct Process {
     pid: u32,
     user: String,

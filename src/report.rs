@@ -5,6 +5,13 @@ use std::fmt::Write;
 use clap::ValueEnum;
 
 #[derive(Debug, Clone)]
+pub struct ConnTrackRecord {
+    pub timestamp: DateTime<Utc>,
+    pub port: Option<i32>,
+    pub local_port: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
 #[allow(unused)]
 pub struct AuthPasswordEnrichedRecord {
     pub id: String,
@@ -57,16 +64,32 @@ impl ReportGenerator {
 
     pub async fn generate_ip_report(&self, ip: &str, format: &ReportFormat) -> Result<String, Box<dyn std::error::Error>> {
         let records = self.get_auth_data_for_ip(ip).await?;
+        let conn_track = self.get_conn_track_for_ip(ip).await?;
 
-        if records.is_empty() {
+        if records.is_empty() && conn_track.is_empty() {
             return Ok(format!("No data found for IP address: {}", ip));
         }
 
         match format {
-            ReportFormat::Text => self.generate_text_report(ip, &records),
-            ReportFormat::Html => self.generate_html_report(ip, &records),
+            ReportFormat::Text => self.generate_text_report(ip, &records, &conn_track),
+            ReportFormat::Html => self.generate_html_report(ip, &records, &conn_track),
             ReportFormat::Markdown => self.generate_markdown_report(ip, &records),
         }
+    }
+
+    async fn get_conn_track_for_ip(&self, ip: &str) -> Result<Vec<ConnTrackRecord>, sqlx::Error> {
+        let query = "SELECT timestamp, port, local_port FROM conn_track WHERE ip = $1::inet ORDER BY timestamp DESC";
+
+        let rows = sqlx::query(query)
+            .bind(ip)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows.iter().map(|row| ConnTrackRecord {
+            timestamp: row.get("timestamp"),
+            port: row.get("port"),
+            local_port: row.get("local_port"),
+        }).collect())
     }
 
     async fn get_auth_data_for_ip(&self, ip: &str) -> Result<Vec<AuthPasswordEnrichedRecord>, sqlx::Error> {
@@ -115,13 +138,41 @@ impl ReportGenerator {
         Ok(records)
     }
 
-    fn generate_text_report(&self, ip: &str, records: &[AuthPasswordEnrichedRecord]) -> Result<String, Box<dyn std::error::Error>> {
+    fn generate_text_report(&self, ip: &str, records: &[AuthPasswordEnrichedRecord], conn_track: &[ConnTrackRecord]) -> Result<String, Box<dyn std::error::Error>> {
         let mut report = String::new();
 
         writeln!(report, "==========================================")?;
         writeln!(report, "SSH HONEYPOT REPORT FOR IP: {}", ip)?;
         writeln!(report, "==========================================")?;
         writeln!(report)?;
+
+        if !conn_track.is_empty() {
+            writeln!(report, "CONNECTION TRACKING:")?;
+            writeln!(report, "  Total Connections: {}", conn_track.len())?;
+            if let (Some(last), Some(first)) = (conn_track.first(), conn_track.last()) {
+                writeln!(report, "  First Connection: {}", first.timestamp.format("%Y-%m-%d %H:%M:%S UTC"))?;
+                writeln!(report, "  Last Connection:  {}", last.timestamp.format("%Y-%m-%d %H:%M:%S UTC"))?;
+            }
+            let unique_local_ports: std::collections::HashSet<i32> = conn_track.iter()
+                .filter_map(|r| r.local_port)
+                .collect();
+            if !unique_local_ports.is_empty() {
+                let mut ports: Vec<_> = unique_local_ports.into_iter().collect();
+                ports.sort();
+                writeln!(report, "  Local Ports Targeted: {}", ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", "))?;
+            }
+            writeln!(report)?;
+            writeln!(report, "  RECENT CONNECTIONS (last 20):")?;
+            for record in conn_track.iter().take(20) {
+                let port_str = record.port.map_or("-".to_string(), |p| p.to_string());
+                let local_port_str = record.local_port.map_or("-".to_string(), |p| p.to_string());
+                writeln!(report, "    {} | src port: {} | dst port: {}",
+                    record.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                    port_str,
+                    local_port_str)?;
+            }
+            writeln!(report)?;
+        }
 
         // Basic info from first record (should be same for all)
         if let Some(first_record) = records.first() {
@@ -243,7 +294,7 @@ impl ReportGenerator {
         Ok(report)
     }
 
-    fn generate_html_report(&self, ip: &str, records: &[AuthPasswordEnrichedRecord]) -> Result<String, Box<dyn std::error::Error>> {
+    fn generate_html_report(&self, ip: &str, records: &[AuthPasswordEnrichedRecord], conn_track: &[ConnTrackRecord]) -> Result<String, Box<dyn std::error::Error>> {
         let mut html = String::new();
 
         // HTML5 DOCTYPE and semantic structure
@@ -631,6 +682,63 @@ impl ReportGenerator {
             }
             writeln!(html, "                </div>")?;
             writeln!(html, "            </section>")?;
+
+            // Connection Tracking section
+            if !conn_track.is_empty() {
+                let unique_local_ports: std::collections::HashSet<i32> = conn_track.iter()
+                    .filter_map(|r| r.local_port)
+                    .collect();
+                let mut sorted_local_ports: Vec<_> = unique_local_ports.into_iter().collect();
+                sorted_local_ports.sort();
+
+                writeln!(html, "            <section aria-labelledby=\"conntrack-heading\">")?;
+                writeln!(html, "                <h2 id=\"conntrack-heading\">Connection Tracking</h2>")?;
+                writeln!(html, "                <div class=\"stats-grid\">")?;
+                writeln!(html, "                    <div class=\"stat-card\">")?;
+                writeln!(html, "                        <span class=\"stat-number\">{}</span>", conn_track.len())?;
+                writeln!(html, "                        <div class=\"stat-label\">Total Connections</div>")?;
+                writeln!(html, "                    </div>")?;
+                if let (Some(last), Some(first)) = (conn_track.first(), conn_track.last()) {
+                    writeln!(html, "                    <div class=\"stat-card\">")?;
+                    writeln!(html, "                        <span class=\"stat-number\" style=\"font-size:1.1rem;\">{}</span>", first.timestamp.format("%Y-%m-%d %H:%M"))?;
+                    writeln!(html, "                        <div class=\"stat-label\">First Connection (UTC)</div>")?;
+                    writeln!(html, "                    </div>")?;
+                    writeln!(html, "                    <div class=\"stat-card\">")?;
+                    writeln!(html, "                        <span class=\"stat-number\" style=\"font-size:1.1rem;\">{}</span>", last.timestamp.format("%Y-%m-%d %H:%M"))?;
+                    writeln!(html, "                        <div class=\"stat-label\">Last Connection (UTC)</div>")?;
+                    writeln!(html, "                    </div>")?;
+                }
+                if !sorted_local_ports.is_empty() {
+                    let ports_str = sorted_local_ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+                    writeln!(html, "                    <div class=\"stat-card\">")?;
+                    writeln!(html, "                        <span class=\"stat-number\" style=\"font-size:1.1rem;\">{}</span>", ports_str)?;
+                    writeln!(html, "                        <div class=\"stat-label\">Local Ports Targeted</div>")?;
+                    writeln!(html, "                    </div>")?;
+                }
+                writeln!(html, "                </div>")?;
+
+                writeln!(html, "                <table role=\"table\" aria-label=\"Recent connections\">")?;
+                writeln!(html, "                    <thead>")?;
+                writeln!(html, "                        <tr>")?;
+                writeln!(html, "                            <th scope=\"col\">Timestamp</th>")?;
+                writeln!(html, "                            <th scope=\"col\">Source Port</th>")?;
+                writeln!(html, "                            <th scope=\"col\">Destination Port</th>")?;
+                writeln!(html, "                        </tr>")?;
+                writeln!(html, "                    </thead>")?;
+                writeln!(html, "                    <tbody>")?;
+                for record in conn_track.iter().take(20) {
+                    let port_str = record.port.map_or("-".to_string(), |p| p.to_string());
+                    let local_port_str = record.local_port.map_or("-".to_string(), |p| p.to_string());
+                    writeln!(html, "                        <tr>")?;
+                    writeln!(html, "                            <td>{}</td>", record.timestamp.format("%Y-%m-%d %H:%M:%S"))?;
+                    writeln!(html, "                            <td><span class=\"code\">{}</span></td>", port_str)?;
+                    writeln!(html, "                            <td><span class=\"code\">{}</span></td>", local_port_str)?;
+                    writeln!(html, "                        </tr>")?;
+                }
+                writeln!(html, "                    </tbody>")?;
+                writeln!(html, "                </table>")?;
+                writeln!(html, "            </section>")?;
+            }
 
             // Geolocation and Network Info
             if let Some(first_record) = records.first() {

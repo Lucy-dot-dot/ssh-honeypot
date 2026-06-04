@@ -4,6 +4,7 @@ use crate::shell::filesystem::fs2::FileSystem;
 
 /// Context passed to all command implementations containing shared state
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct CommandContext {
     /// Current working directory
     pub cwd: String,
@@ -19,6 +20,7 @@ pub struct CommandContext {
     pub env_vars: std::collections::HashMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl CommandContext {
     /// Create a new command context
     pub fn new(

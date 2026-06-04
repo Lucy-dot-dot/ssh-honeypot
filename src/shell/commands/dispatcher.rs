@@ -6,6 +6,7 @@ pub struct CommandDispatcher {
     registry: CommandRegistry,
 }
 
+#[allow(dead_code)]
 impl CommandDispatcher {
     /// Create a new command dispatcher with an empty registry
     pub fn new() -> Self {
