@@ -125,7 +125,7 @@ impl ReportGenerator {
 
         // Basic info from first record (should be same for all)
         if let Some(first_record) = records.first() {
-            writeln!(report, "GEOLOCATION INFORMATION:")?;
+            /*writeln!(report, "GEOLOCATION INFORMATION:")?;
             if let Some(country) = &first_record.country {
                 writeln!(report, "  Country: {}", country)?;
             }
@@ -172,7 +172,7 @@ impl ReportGenerator {
                     writeln!(report, "  Total Abuse Reports: {}", total_reports)?;
                 }
                 writeln!(report)?;
-            }
+            }*/
         }
 
         // Statistics

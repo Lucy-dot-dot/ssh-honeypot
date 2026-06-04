@@ -405,7 +405,7 @@ impl Client {
     pub async fn cleanup_expired_cache(&self) -> Result<u64, sqlx::Error> {
         // Clean up database cache
         let result = sqlx::query("DELETE FROM abuse_ip_cache WHERE timestamp < NOW() - ($1 * INTERVAL '1 hour')")
-            .bind(format!("'{} hours'", self.cache_ttl_hours))
+            .bind(self.cache_ttl_hours as i32)
             .execute(&self.pool)
             .await?;
 
