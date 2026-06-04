@@ -166,47 +166,43 @@ git clone <repository-url>
 # Change directory to the repo root
 cd ssh-honeypot
 
-# Create configuration file
-touch config.toml
+# Create configuration file from the example (edit as needed)
+cp config.toml.example config.toml
 
-# Pull latest postgres docker image
+# Pull the current image
 docker compose pull
-
-# Build the server. Redo this step if you `git pull` new changes
-docker compose build
 
 # Run the server
 docker compose up -d && docker compose logs -f ssh-honeypot
 ```
 
-If you want to save the generated keys for faster startup:
+### IPv6 Support
 
-```bash
-# Clone the repo
-git clone <repository-url>
+The default `config.toml.example` enables both IPv4 (`0.0.0.0`) and IPv6 (`[::]`) listeners. If the container or host does not have IPv6 enabled, binding the `[::]` interfaces will fail with a logged error — **this is harmless**, the server continues running on the IPv4 interfaces only.
 
-# Change directory to the repo root
-cd ssh-honeypot
+To enable proper IPv6 inside Docker you need two things:
 
-# Create configuration file
-touch config.toml
-
-# Create keys directory and set permissions to allow the container to write to it
-mkdir keys
-chown 1000:1000 keys
-
-# Now patch docker-compose.yml and add this to the volumes section:
-#   - ./keys:keys
-
-# Pull latest postgres docker image
-docker compose pull
-
-# Build the server. Redo this step if you `git pull` new changes
-docker compose build
-
-# Run the server
-docker compose up -d && docker compose logs -f ssh-honeypot
+**1. Update `/etc/docker/daemon.json` on the host:**
+```json
+{
+  "ipv6": true,
+  "fixed-cidr-v6": "fd00:1::/64"
+}
 ```
+Then restart the Docker daemon (`sudo systemctl restart docker`).
+
+**2. Uncomment the network block at the bottom of `docker-compose.yml`:**
+```yaml
+networks:
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+        - subnet: fd00:2::/64
+```
+
+Without both changes, Docker containers cannot receive IPv6 traffic regardless of what the honeypot binds to.
 
 ## Development
 

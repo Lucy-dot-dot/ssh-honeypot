@@ -27,22 +27,20 @@ services:
       retries: 5
       start_period: 10s
   ssh-honeypot:
-    build: .
+    image: ghcr.io/lucy-dot-dot/ssh-honeypot:master
     environment:
-      INTERFACE: 0.0.0.0:2222
       DISABLE_CLI_INTERFACE: true
       DATABASE_URL: postgresql://honeypot:honeypot@postgres:5432/ssh_honeypot
     volumes:
       - source: ./config.toml
         target: /config.toml
         type: bind
+      - source: keys
+        target: /keys
+        type: volume
     ports:
-      - protocol: tcp
-        mode: host
-        host_ip: 0.0.0.0
-        name: ssh-ipv4
-        published: 2222
-        target: 2222
+      - "2222:2222"
+      - "22:22"
     cap_drop:
       - ALL
     cap_add:
@@ -52,3 +50,16 @@ services:
 
 volumes:
   postgres_data:
+  keys:
+
+# Uncomment this block AND update /etc/docker/daemon.json on the host to enable
+# IPv6 inside the container (see README for daemon.json content).
+# Without this, the honeypot will log a harmless bind error for the [::] interfaces
+# and continue running on IPv4 only.
+# networks:
+#   default:
+#     enable_ipv6: true
+#     ipam:
+#       config:
+#         - subnet: 172.21.0.0/16
+#         - subnet: fd00:2::/64

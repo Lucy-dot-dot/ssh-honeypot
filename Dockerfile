@@ -21,14 +21,19 @@ RUN cargo chef cook --release --bin ssh-honeypot --recipe-path recipe.json
 # Full source comes in here; only user code is recompiled from this point
 COPY . .
 RUN cargo build --release --bin ssh-honeypot && \
-    cp target/release/ssh-honeypot /ssh-honeypot
+    cp target/release/ssh-honeypot /ssh-honeypot && \
+    mkdir /keys
 
 FROM scratch
 
 USER 1000:1000
 
 COPY --from=builder --chown=1000:1000 /ssh-honeypot /ssh-honeypot
+# Empty dir copied so the named-volume mount inherits 1000:1000 on first creation.
+# RUN is not available in scratch — directory must come from the builder stage.
+COPY --from=builder --chown=1000:1000 /keys /keys
 
+EXPOSE 22
 EXPOSE 2222
 
 ENTRYPOINT ["/ssh-honeypot"]
