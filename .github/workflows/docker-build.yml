@@ -21,12 +21,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # Sets up Docker BuildKit, which is required to process your
       # --mount=type=cache instructions in the Dockerfile
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Logs into the GitHub registry (only on pushes to main, not PRs)
       - name: Log in to the Container registry
