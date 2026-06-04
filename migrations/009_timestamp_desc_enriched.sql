@@ -52,7 +52,7 @@ ORDER BY a.timestamp DESC;
 -- Comment for documentation
 COMMENT ON VIEW auth_password_enriched IS 'Enriched authentication password attempts with IP geolocation and threat intelligence. AbuseIPDB data takes precedence for overlapping fields like country_code and ISP.';
 
-CREATE VIEW auth_enriched AS
+CREATE OR REPLACE VIEW auth_enriched AS
 SELECT
     -- Core authentication data
     a.id,
