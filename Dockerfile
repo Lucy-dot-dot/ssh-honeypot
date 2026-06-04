@@ -9,7 +9,7 @@ COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/home/root/app/target \
-    cargo build --release && cp /home/root/app/target/release/ssh-honeypot /home/root/app/ssh-honeypot
+    cargo build --release --bin ssh-honeypot && cp /home/root/app/target/release/ssh-honeypot /home/root/app/ssh-honeypot
 
 FROM scratch
 

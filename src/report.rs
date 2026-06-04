@@ -62,6 +62,17 @@ impl ReportGenerator {
         Self { pool }
     }
 
+    pub async fn get_ip_isp_org(&self, ip: &str) -> Result<(Option<String>, Option<String>), sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT isp, org FROM auth_password_enriched WHERE ip = $1::inet AND (isp IS NOT NULL OR org IS NOT NULL) ORDER BY timestamp DESC LIMIT 1"
+        )
+        .bind(ip)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map_or((None, None), |r| (r.get("isp"), r.get("org"))))
+    }
+
     pub async fn generate_ip_report(&self, ip: &str, format: &ReportFormat) -> Result<String, Box<dyn std::error::Error>> {
         let records = self.get_auth_data_for_ip(ip).await?;
         let conn_track = self.get_conn_track_for_ip(ip).await?;
