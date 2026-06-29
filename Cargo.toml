@@ -44,7 +44,7 @@ ssh-encoding = "0.3.0-rc.9"
 
 # gui
 eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "glow"] }
-egui = "0.34.3"
+egui = "0.35.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { version = "0.34.3", features = ["x11", "wayland"] }
