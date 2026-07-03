@@ -17,6 +17,10 @@ pub struct CommonArgs {
     /// PostgreSQL database connection URL
     #[arg(short, long, env = "DATABASE_URL", default_value = "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot", global = true)]
     database_url: String,
+
+    /// Include geolocation, network and threat-intelligence sections in IP text reports
+    #[arg(long, env = "EXTENDED_INFO", global = true)]
+    extended_info: bool,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -59,7 +63,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let report = match args.mode {
         ReportMode::Ip { ip } => {
-            generator.generate_ip_report(&ip, &args.args.format).await?
+            generator
+                .generate_ip_report(&ip, &args.args.format, args.args.extended_info)
+                .await?
         }
         ReportMode::Password { password } => {
             generator.generate_password_report(&password, &args.args.format).await?

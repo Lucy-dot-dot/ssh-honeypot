@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH Honeypot Report - IP {{ ip }}</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --danger-color: #e74c3c;
+            --success-color: #27ae60;
+            --warning-color: #f39c12;
+            --background-color: #ecf0f1;
+            --text-color: #2c3e50;
+            --border-color: #bdc3c7;
+            --table-header-bg: #34495e;
+            --table-stripe-bg: #f8f9fa;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            background-color: var(--background-color);
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        header {
+            background: var(--primary-color);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 2rem;
+            font-weight: 300;
+        }
+
+        .ip-address {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            color: var(--warning-color);
+        }
+
+        main {
+            padding: 2rem;
+        }
+
+        section {
+            margin-bottom: 3rem;
+        }
+
+        h2 {
+            color: var(--primary-color);
+            border-bottom: 2px solid var(--secondary-color);
+            padding-bottom: 0.5rem;
+            margin-bottom: 1.5rem;
+            font-size: 1.5rem;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .info-card {
+            background: var(--table-stripe-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 1rem;
+        }
+
+        .info-label {
+            font-weight: bold;
+            color: var(--primary-color);
+            margin-bottom: 0.25rem;
+        }
+
+        .info-value {
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 2rem;
+            background: white;
+            border-radius: 6px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        th {
+            background: var(--table-header-bg);
+            color: white;
+            font-weight: 600;
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        tbody tr:nth-child(even) {
+            background-color: var(--table-stripe-bg);
+        }
+
+        tbody tr:hover {
+            background-color: #e8f4fd;
+        }
+
+        .metric-value {
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .threat-high {
+            color: var(--danger-color);
+            font-weight: bold;
+        }
+
+        .threat-medium {
+            color: var(--warning-color);
+            font-weight: bold;
+        }
+
+        .threat-low {
+            color: var(--success-color);
+        }
+
+        .tor-indicator {
+            background: var(--danger-color);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.875rem;
+            font-weight: bold;
+        }
+
+        .code {
+            font-family: 'Courier New', monospace;
+            background: var(--table-stripe-bg);
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.9rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, var(--secondary-color), #5dade2);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 6px;
+            text-align: center;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            opacity: 0.9;
+            margin-top: 0.5rem;
+        }
+
+        .no-data {
+            text-align: center;
+            color: #7f8c8d;
+            font-style: italic;
+            padding: 2rem;
+        }
+
+        footer {
+            background: var(--background-color);
+            padding: 1rem 2rem;
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 0.875rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        details {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            margin: 1rem 0;
+            overflow: hidden;
+        }
+
+        summary {
+            background: var(--table-stripe-bg);
+            padding: 1rem;
+            cursor: pointer;
+            font-weight: 600;
+            border-bottom: 1px solid var(--border-color);
+            transition: background-color 0.2s ease;
+        }
+
+        summary:hover {
+            background: #e9ecef;
+        }
+
+        summary h2 {
+            margin: 0;
+            display: inline;
+            border: none;
+            padding: 0;
+            font-size: 1.25rem;
+        }
+
+        .details-content {
+            padding: 1rem;
+        }
+
+        .details-content table {
+            font-size: 0.875rem;
+            margin-top: 1rem;
+        }
+
+        .details-content th, .details-content td {
+            padding: 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        @media print {
+            body {
+                background: white;
+                color: black;
+            }
+
+            .container {
+                box-shadow: none;
+                border: 1px solid #000;
+            }
+
+            header {
+                background: #f0f0f0 !important;
+                color: black !important;
+            }
+        }
+
+        @media (prefers-contrast: more) {
+            :root {
+                --border-color: #000;
+                --text-color: #000;
+            }
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+
+            .container {
+                border-radius: 0;
+            }
+
+            header {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 1.5rem;
+            }
+
+            main {
+                padding: 1rem;
+            }
+
+            table {
+                font-size: 0.875rem;
+            }
+
+            th, td {
+                padding: 0.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>SSH Honeypot Security Report</h1>
+            <p>Analysis for IP Address: <span class="ip-address">{{ ip }}</span></p>
+        </header>
+
+        <main>
+{% if not has_data %}
+            <div class="no-data">
+                <h2>No Data Available</h2>
+                <p>No authentication attempts found for this IP address.</p>
+            </div>
+{% else %}
+            <section aria-labelledby="stats-heading">
+                <h2 id="stats-heading">Attack Statistics</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-number">{{ total_attempts }}</span>
+                        <div class="stat-label">Total Attempts</div>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-number">{{ unique_usernames }}</span>
+                        <div class="stat-label">Unique Usernames</div>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-number">{{ unique_passwords }}</span>
+                        <div class="stat-label">Unique Passwords</div>
+                    </div>
+{% if attack_duration_hours is defined %}
+                    <div class="stat-card">
+                        <span class="stat-number">{{ attack_duration_hours }}</span>
+                        <div class="stat-label">Attack Duration (hours)</div>
+                    </div>
+{% endif %}
+                </div>
+            </section>
+{% if has_conn %}
+            <section aria-labelledby="conntrack-heading">
+                <h2 id="conntrack-heading">Connection Tracking</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-number">{{ conn_total }}</span>
+                        <div class="stat-label">Total Connections</div>
+                    </div>
+{% if conn_first is defined %}
+                    <div class="stat-card">
+                        <span class="stat-number" style="font-size:1.1rem;">{{ conn_first | fmt("%Y-%m-%d %H:%M") }}</span>
+                        <div class="stat-label">First Connection (UTC)</div>
+                    </div>
+{% endif %}
+{% if conn_last is defined %}
+                    <div class="stat-card">
+                        <span class="stat-number" style="font-size:1.1rem;">{{ conn_last | fmt("%Y-%m-%d %H:%M") }}</span>
+                        <div class="stat-label">Last Connection (UTC)</div>
+                    </div>
+{% endif %}
+{% if conn_ports %}
+                    <div class="stat-card">
+                        <span class="stat-number" style="font-size:1.1rem;">{{ conn_ports | join(", ") }}</span>
+                        <div class="stat-label">Local Ports Targeted</div>
+                    </div>
+{% endif %}
+                </div>
+
+                <table role="table" aria-label="Recent connections">
+                    <thead>
+                        <tr>
+                            <th scope="col">Timestamp</th>
+                            <th scope="col">Source Port</th>
+                            <th scope="col">Destination Port</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+{% for r in conn_recent %}
+                        <tr>
+                            <td>{{ r.timestamp | fmt("%Y-%m-%d %H:%M:%S") }}</td>
+                            <td><span class="code">{{ r.port }}</span></td>
+                            <td><span class="code">{{ r.local_port }}</span></td>
+                        </tr>
+{% endfor %}
+                    </tbody>
+                </table>
+            </section>
+{% endif %}
+            <section aria-labelledby="geo-heading">
+                <h2 id="geo-heading">Geolocation &amp; Network Information</h2>
+                <div class="info-grid">
+{% if country is defined %}
+                    <div class="info-card">
+                        <div class="info-label">Country</div>
+                        <div class="info-value">{{ country }}</div>
+                    </div>
+{% endif %}
+{% if region is defined %}
+                    <div class="info-card">
+                        <div class="info-label">Region</div>
+                        <div class="info-value">{{ region }}</div>
+                    </div>
+{% endif %}
+{% if city is defined %}
+                    <div class="info-card">
+                        <div class="info-label">City</div>
+                        <div class="info-value">{{ city }}</div>
+                    </div>
+{% endif %}
+{% if isp is defined %}
+                    <div class="info-card">
+                        <div class="info-label">Internet Service Provider</div>
+                        <div class="info-value">{{ isp }}</div>
+                    </div>
+{% endif %}
+{% if org is defined %}
+                    <div class="info-card">
+                        <div class="info-label">Organization</div>
+                        <div class="info-value">{{ org }}</div>
+                    </div>
+{% endif %}
+{% if as_info is defined %}
+                    <div class="info-card">
+                        <div class="info-label">AS Information</div>
+                        <div class="info-value">{{ as_info }}</div>
+                    </div>
+{% endif %}
+                </div>
+            </section>
+{% if has_threat %}
+            <section aria-labelledby="threat-heading">
+                <h2 id="threat-heading">Threat Intelligence</h2>
+                <p><em>Data from AbuseIPDB cached at: {{ abuse_timestamp }}</em></p>
+                <div class="info-grid">
+                    <div class="info-card">
+                        <div class="info-label">Abuse Confidence Score</div>
+                        <div class="info-value"><span class="{{ threat_class }}">{{ abuse_score }} %</span></div>
+                    </div>
+{% if is_tor is defined %}
+                    <div class="info-card">
+                        <div class="info-label">Tor Exit Node</div>
+{% if is_tor %}
+                        <div class="info-value"><span class="tor-indicator">YES</span></div>
+{% else %}
+                        <div class="info-value">No</div>
+{% endif %}
+                    </div>
+{% endif %}
+{% if total_reports is defined %}
+                    <div class="info-card">
+                        <div class="info-label">Total Abuse Reports</div>
+                        <div class="info-value">{{ total_reports }}</div>
+                    </div>
+{% endif %}
+                </div>
+            </section>
+{% endif %}
+            <section aria-labelledby="usernames-heading">
+                <h2 id="usernames-heading">Top Usernames Attempted</h2>
+                <table role="table" aria-label="Top attempted usernames">
+                    <thead>
+                        <tr>
+                            <th scope="col">Rank</th>
+                            <th scope="col">Username</th>
+                            <th scope="col">Attempts</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+{% for row in top_usernames %}
+                        <tr>
+                            <td>{{ row.rank }}</td>
+                            <td><span class="code">{{ row.value }}</span></td>
+                            <td><span class="metric-value">{{ row.count }}</span></td>
+                        </tr>
+{% endfor %}
+                    </tbody>
+                </table>
+            </section>
+
+            <section aria-labelledby="passwords-heading">
+                <h2 id="passwords-heading">Top Passwords Attempted</h2>
+                <table role="table" aria-label="Top attempted passwords">
+                    <thead>
+                        <tr>
+                            <th scope="col">Rank</th>
+                            <th scope="col">Password</th>
+                            <th scope="col">Attempts</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+{% for row in top_passwords %}
+                        <tr>
+                            <td>{{ row.rank }}</td>
+                            <td><span class="code">{{ row.value }}</span></td>
+                            <td><span class="metric-value">{{ row.count }}</span></td>
+                        </tr>
+{% endfor %}
+                    </tbody>
+                </table>
+            </section>
+
+            <section aria-labelledby="recent-heading">
+                <h2 id="recent-heading">Recent Authentication Attempts</h2>
+                <table role="table" aria-label="Recent authentication attempts">
+                    <thead>
+                        <tr>
+                            <th scope="col">Timestamp</th>
+                            <th scope="col">Username</th>
+                            <th scope="col">Password</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+{% for row in recent_attempts %}
+                        <tr>
+                            <td>{{ row.timestamp | fmt("%Y-%m-%d %H:%M:%S") }}</td>
+                            <td><span class="code">{{ row.username }}</span></td>
+                            <td><span class="code">{% if row.password is defined %}{{ row.password }}{% else %}*no password*{% endif %}</span></td>
+                        </tr>
+{% endfor %}
+                    </tbody>
+                </table>
+            </section>
+
+            <section aria-labelledby="details-heading">
+                <details>
+                    <summary><h2 id="details-heading">Complete Authentication Data</h2></summary>
+                    <div class="details-content">
+                        <p><em>Complete detailed information for all authentication attempts from this IP address.</em></p>
+                        <table role="table" aria-label="Complete authentication data">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Timestamp</th>
+                                    <th scope="col">Username</th>
+                                    <th scope="col">Password</th>
+                                    <th scope="col">Country</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+{% for row in all_attempts %}
+                                <tr>
+                                    <td>{{ row.timestamp | fmt("%Y-%m-%d %H:%M:%S") }}</td>
+                                    <td><span class="code">{{ row.username }}</span></td>
+                                    <td><span class="code">{% if row.password is defined %}{{ row.password }}{% else %}*no password*{% endif %}</span></td>
+                                    <td>{{ row.country }}</td>
+                                </tr>
+{% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+            </section>
+{% endif %}
+        </main>
+
+        <footer>
+            <p>Report generated by SSH Honeypot Report Generator on {{ generated_at | fmt("%Y-%m-%d %H:%M:%S UTC") }}</p>
+        </footer>
+    </div>
+</body>
+</html>

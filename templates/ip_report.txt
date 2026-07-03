@@ -1,0 +1,68 @@
+==========================================
+SSH HONEYPOT REPORT FOR IP: {{ ip }}
+==========================================
+{% if has_conn %}
+CONNECTION TRACKING:
+  Total Connections: {{ conn_total }}
+{% if conn_first is defined %}  First Connection: {{ conn_first | fmt("%Y-%m-%d %H:%M:%S UTC") }}
+{% endif %}
+{% if conn_last is defined %}  Last Connection:  {{ conn_last | fmt("%Y-%m-%d %H:%M:%S UTC") }}
+{% endif %}
+{% if conn_ports %}  Local Ports Targeted: {{ conn_ports | join(", ") }}
+{% endif %}
+  RECENT CONNECTIONS (last 20):
+{% for r in conn_recent %}    {{ r.timestamp | fmt("%Y-%m-%d %H:%M:%S") }} | src port: {{ r.port }} | dst port: {{ r.local_port }}
+{% endfor %}{% endif %}
+{% if extended_info and has_data %}
+GEOLOCATION INFORMATION:
+{% if country is defined %}  Country: {{ country }}
+{% endif %}
+{% if country_code is defined %}  Country Code: {{ country_code }}
+{% endif %}
+{% if region is defined %}  Region: {{ region }}
+{% endif %}
+{% if city is defined %}  City: {{ city }}
+{% endif %}
+{% if coordinates is defined %}  Coordinates: {{ coordinates }}
+{% endif %}
+{% if timezone is defined %}  Timezone: {{ timezone }}
+{% endif %}
+
+NETWORK INFORMATION:
+{% if isp is defined %}  ISP: {{ isp }}
+{% endif %}
+{% if org is defined %}  Organization: {{ org }}
+{% endif %}
+{% if as_info is defined %}  AS Info: {{ as_info }}
+{% endif %}
+{% if has_threat %}
+
+THREAT INTELLIGENCE (from AbuseIPDB cached at: {{ abuse_timestamp }}):
+  Abuse Confidence Score: {{ abuse_score }}%
+{% if is_tor is defined %}  Tor Exit Node: {{ "Yes" if is_tor else "No" }}
+{% endif %}
+{% if total_reports is defined %}  Total Abuse Reports: {{ total_reports }}
+{% endif %}
+{% endif %}
+{% endif %}
+
+ATTACK STATISTICS:
+  Total Authentication Attempts: {{ total_attempts }}
+  Unique Usernames Tried: {{ unique_usernames }}
+  Unique Passwords Tried: {{ unique_passwords }}
+{% if first_seen is defined %}  First Seen: {{ first_seen | fmt("%Y-%m-%d %H:%M:%S UTC") }}
+{% endif %}
+{% if last_seen is defined %}  Last Seen: {{ last_seen | fmt("%Y-%m-%d %H:%M:%S UTC") }}
+{% endif %}
+
+TOP USERNAMES ATTEMPTED:
+{% for row in top_usernames %}  {{ row.value }} ({{ row.count }}x)
+{% endfor %}
+TOP PASSWORDS ATTEMPTED:
+{% for row in top_passwords %}  {{ row.value }} ({{ row.count }}x)
+{% endfor %}
+RECENT AUTHENTICATION ATTEMPTS:
+{% for row in recent_attempts %}  {{ row.timestamp | fmt("%Y-%m-%d %H:%M:%S") }} | {{ row.username }} | {{ row.password | default("<no password>") }}
+{% endfor %}
+
+==========================================

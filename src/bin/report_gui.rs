@@ -45,6 +45,7 @@ struct ReportApp {
 
     report_type: ReportType,
     query_input: String,
+    extended_info: bool,
     report_text: String,
     report_isp: Option<String>,
     report_org: Option<String>,
@@ -63,6 +64,7 @@ impl ReportApp {
             is_connecting: false,
             report_type: ReportType::Ip,
             query_input: String::new(),
+            extended_info: false,
             report_text: String::new(),
             report_isp: None,
             report_org: None,
@@ -106,6 +108,7 @@ impl ReportApp {
 
         let query = self.query_input.trim().to_string();
         let report_type = self.report_type;
+        let extended_info = self.extended_info;
 
         self.runtime.spawn(async move {
             let generator = ReportGenerator::new(pool);
@@ -117,7 +120,11 @@ impl ReportApp {
             };
 
             let result = match report_type {
-                ReportType::Ip => generator.generate_ip_report(&query, &ReportFormat::Text).await,
+                ReportType::Ip => {
+                    generator
+                        .generate_ip_report(&query, &ReportFormat::Text, extended_info)
+                        .await
+                }
                 ReportType::Password => {
                     generator.generate_password_report(&query, &ReportFormat::Text).await
                 }
@@ -167,7 +174,7 @@ impl eframe::App for ReportApp {
 
         let ctx = ui.ctx().clone();
 
-        egui::Panel::top("connection_panel").show_inside(ui, |ui| {
+        egui::Panel::top("connection_panel").show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Database URL:");
@@ -196,12 +203,26 @@ impl eframe::App for ReportApp {
             ui.add_space(6.0);
         });
 
-        egui::Panel::top("query_panel").show_inside(ui, |ui| {
+        egui::Panel::top("query_panel").show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Report type:");
                 ui.radio_value(&mut self.report_type, ReportType::Ip, "IP Address");
                 ui.radio_value(&mut self.report_type, ReportType::Password, "Password");
+
+                ui.separator();
+
+                ui.add_enabled(
+                    self.report_type == ReportType::Ip,
+                    egui::Checkbox::new(&mut self.extended_info, "Extended info"),
+                );
+                if self.report_type == ReportType::Ip {
+                    ui.label(
+                        egui::RichText::new("(geo / network / threat in text reports)")
+                            .small()
+                            .color(egui::Color32::DARK_GRAY),
+                    );
+                }
 
                 ui.separator();
 
