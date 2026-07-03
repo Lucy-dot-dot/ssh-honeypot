@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
 use russh::{server, Channel, ChannelId, ChannelMsg, Error};
 use russh::keys::{HashAlg, PublicKey};
-use russh::server::{Auth, Handler, Msg, Session};
+use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session};
 use ssh_encoding::Error as SshEncodingError;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
@@ -117,10 +117,10 @@ impl Handler for SshHandler {
             log::trace!("Letting client wait for {}", delay);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             if self.reject_all_auth {
-                log::info!("Rejected authentication attempt");
+                log::debug!("Rejected authentication attempt");
                 Ok(Auth::Reject { proceed_with_methods: None, partial_success: false })
             } else {
-                log::info!("Accepted new connection");
+                log::debug!("Accepted new connection");
                 Ok(Auth::Accept)
             }
         }
@@ -188,10 +188,10 @@ impl Handler for SshHandler {
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
             if self.reject_all_auth {
-                log::info!("Rejected authentication attempt");
+                log::debug!("Rejected authentication attempt");
                 Ok(Auth::Reject { proceed_with_methods: None, partial_success: false })
             } else {
-                log::info!("Accepted new connection");
+                log::debug!("Accepted new connection");
                 Ok(Auth::Accept)
             }
         }
@@ -217,8 +217,9 @@ impl Handler for SshHandler {
     fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
-    ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
             log::debug!("Open session on channel: {} for ip {}", channel.id(), self.peer.ip());
             if let (Some(user), Some(auth_id)) = (&self.user, &self.auth_id) {
@@ -248,9 +249,10 @@ impl Handler for SshHandler {
                 }));
                 self.send_task_tx = Some(sender_task);*/
 
+                reply.accept().await;
             }
 
-            Ok(true)
+            Ok(())
         }
     }
 
