@@ -21,6 +21,11 @@ interfaces = [
 # Default: false
 disable_cli_interface = false
 
+# Disable exec request handling (ssh user@host "command")
+# Commands are still logged. Does not affect the interactive shell.
+# Default: false
+disable_exec = false
+
 # SSH authentication banner (makes honeypot appear more realistic)
 # Default: none
 authentication_banner = "Ubuntu 22.04.3 LTS"
@@ -89,6 +94,7 @@ disable_ipapi = false
 # DATABASE_URL=postgresql://user:pass@host:port/db
 # INTERFACE=0.0.0.0:2222
 # DISABLE_CLI_INTERFACE=true
+# DISABLE_EXEC=true
 # AUTHENTICATION_BANNER="Ubuntu 22.04.3 LTS"
 # SERVER_ID="SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4"
 # WELCOME_MESSAGE="Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)"

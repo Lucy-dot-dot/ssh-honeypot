@@ -90,20 +90,17 @@ impl Command for FreeCommand {
         "free from procps-ng 3.3.15\n".to_string()
     }
     
-    async fn execute(&self, args: &str, _context: &mut CommandContext) -> CommandResult {
+    async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
         let memory_stats = MemoryStats::generate();
         
         // Handle help and version flags
-        if args.contains("--help") {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
         
-        if args.contains("--version") {
+        if args.iter().any(|a| a == "--version") {
             return Ok(self.version());
         }
-        
-        // Parse flags
-        let parts: Vec<&str> = args.split_whitespace().collect();
         
         // Default to kilobytes if no flags specified
         let mut show_human_readable = false;
@@ -112,8 +109,8 @@ impl Command for FreeCommand {
         let mut unit_divisor = 1; // Default is kilobytes (divisor=1)
         let mut unit_label = "kB";
         
-        for part in parts.iter() {
-            match *part {
+        for part in args {
+            match part.as_str() {
                 "-h" | "--human" => {
                     show_human_readable = true;
                     unit_divisor = 1024; // Will adjust dynamically during formatting

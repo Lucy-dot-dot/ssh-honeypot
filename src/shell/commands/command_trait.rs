@@ -18,6 +18,8 @@ pub enum CommandError {
     NotFound(String),
     /// Generic execution error
     ExecutionError(String),
+    /// Non-zero exit status with no diagnostic output (e.g. `test`/`[` returning false).
+    SilentFailure,
 }
 
 impl std::fmt::Display for CommandError {
@@ -28,6 +30,7 @@ impl std::fmt::Display for CommandError {
             CommandError::PermissionDenied(msg) => write!(f, "{}", msg),
             CommandError::NotFound(msg) => write!(f, "{}", msg),
             CommandError::ExecutionError(msg) => write!(f, "{}", msg),
+            CommandError::SilentFailure => Ok(()),
         }
     }
 }
@@ -46,8 +49,8 @@ pub trait Command: Send + Sync {
         vec![]
     }
     
-    /// Execute the command with the given arguments and context
-    async fn execute(&self, args: &str, context: &mut CommandContext) -> CommandResult;
+    /// Execute the command with the given (pre-tokenized, expanded) arguments and context
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult;
     
     /// Get help text for this command
     fn help(&self) -> String {
@@ -74,5 +77,5 @@ pub trait Command: Send + Sync {
 #[async_trait]
 pub trait StatefulCommand: Command {
     /// Execute the command and potentially modify the context state
-    async fn execute_with_state_change(&self, args: &str, context: &mut CommandContext) -> CommandResult;
+    async fn execute_with_state_change(&self, args: &[String], context: &mut CommandContext) -> CommandResult;
 }

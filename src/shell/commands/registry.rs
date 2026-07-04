@@ -47,7 +47,7 @@ impl CommandRegistry {
     }
     
     /// Execute a command by name with the given arguments and context
-    pub async fn execute_command(&self, command_name: &str, args: &str, context: &mut CommandContext) -> CommandResult {
+    pub async fn execute_command(&self, command_name: &str, args: &[String], context: &mut CommandContext) -> CommandResult {
         // First check for stateful commands (they take precedence)
         if let Some(command) = self.stateful_commands.get(command_name) {
             return command.execute_with_state_change(args, context).await;

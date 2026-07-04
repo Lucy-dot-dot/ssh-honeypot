@@ -45,207 +45,191 @@ impl Command for EchoCommand {
         There is NO WARRANTY, to the extent permitted by law.\n".to_string()
     }
     
-    async fn execute(&self, args: &str, _context: &mut CommandContext) -> CommandResult {
-        let mut args = args.trim();
-        
-        // Default settings
+    async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
         let mut new_line = true;
         let mut enable_escapes = false;
         let mut no_space_output = false;
         let mut print_help = false;
         let mut print_version = false;
-        
-        // Parse flags until we hit a non-flag or '--' delimiter
-        while !args.is_empty() && args.starts_with('-') {
-            if args.starts_with("--") {
-                if args == "--" {
-                    args = ""; // Just -- with nothing after it
-                    break;
-                } else if args.starts_with("--help") {
-                    print_help = true;
-                    break;
-                } else if args.starts_with("--version") {
-                    print_version = true;
-                    break;
-                } else if args.starts_with("--enable-escapes") || args.starts_with("--escape") {
-                    enable_escapes = true;
-                    args = args["--enable-escapes".len()..].trim_start();
-                } else if args.starts_with("--disable-escapes") {
-                    enable_escapes = false;
-                    args = args["--disable-escapes".len()..].trim_start();
-                } else if args.starts_with("--no-newline") || args.starts_with("--newline=") {
-                    new_line = false;
-                    if args.starts_with("--no-newline") {
-                        args = args["--no-newline".len()..].trim_start();
-                    } else {
-                        // Handle --newline=yes|no
-                        let option = &args["--newline=".len()..];
-                        if option.starts_with("yes") {
-                            new_line = true;
-                            args = option["yes".len()..].trim_start();
-                        } else if option.starts_with("no") {
-                            new_line = false;
-                            args = option["no".len()..].trim_start();
-                        } else {
-                            // Invalid option - treat the rest as a string to echo
-                            break;
-                        }
-                    }
-                } else {
-                    // Unknown long option - treat the rest as a string to echo
+
+        let mut idx = 0;
+        while idx < args.len() {
+            let arg = &args[idx];
+            if arg == "--help" {
+                print_help = true;
+                break;
+            }
+            if arg == "--version" {
+                print_version = true;
+                break;
+            }
+            if arg == "--" {
+                idx += 1;
+                break;
+            }
+            if arg == "--enable-escapes" || arg == "--escape" {
+                enable_escapes = true;
+                idx += 1;
+                continue;
+            }
+            if arg == "--disable-escapes" {
+                enable_escapes = false;
+                idx += 1;
+                continue;
+            }
+            if arg == "--no-newline" {
+                new_line = false;
+                idx += 1;
+                continue;
+            }
+            if let Some(flags) = arg.strip_prefix('-') {
+                if flags.is_empty() {
                     break;
                 }
-            } else {
-                // Short options can be combined (like -ne)
-                let options = &args[1..]; // Skip the '-'
-                let mut option_len = 1; // Include the '-'
-                
-                for c in options.chars() {
-                    option_len += 1;
+                let mut consumed_all = true;
+                for c in flags.chars() {
                     match c {
                         'n' => new_line = false,
                         'e' => enable_escapes = true,
                         'E' => enable_escapes = false,
                         's' => no_space_output = true,
-                        'h' => { print_help = true; break; }
-                        'v' => { print_version = true; break; }
+                        'h' => {
+                            print_help = true;
+                        }
+                        'v' => {
+                            print_version = true;
+                        }
                         _ => {
-                            // Unknown option - Stop parsing and treat the rest as strings
-                            option_len -= 1; // Don't include this character in what we skip
+                            consumed_all = false;
                             break;
                         }
                     }
                 }
-                
-                args = args[option_len..].trim_start();
+                if consumed_all {
+                    idx += 1;
+                    continue;
+                } else {
+                    break;
+                }
             }
+            break;
         }
-        
-        // Handle special print modes
+
         if print_help {
             return Ok(self.help());
         }
-        
+
         if print_version {
             return Ok(self.version());
         }
-        
-        // Process the arguments
-        if args.is_empty() {
-            // Echo with no args gives just a newline
-            return Ok(if new_line { "\r\n".to_string() } else { "".to_string() });
+
+        let strings: &[String] = &args[idx..];
+
+        if strings.is_empty() {
+            return Ok(if new_line { "\r\n".to_string() } else { String::new() });
         }
-        
-        // Split the arguments - we need to handle quoted arguments properly
-        let mut processed_output = String::new();
-        let mut current_arg = String::new();
-        
-        // Simplified argument parsing
-        let mut in_single_quotes = false;
-        let mut in_double_quotes = false;
-        let mut i = 0;
-        let chars: Vec<char> = args.chars().collect();
-        
-        while i < chars.len() {
-            let c = chars[i];
-            
-            match c {
-                '\'' if !in_double_quotes => {
-                    in_single_quotes = !in_single_quotes;
-                },
-                '"' if !in_single_quotes => {
-                    in_double_quotes = !in_double_quotes;
-                },
-                ' ' if !in_single_quotes && !in_double_quotes => {
-                    // Space outside quotes marks end of current argument
-                    if !current_arg.is_empty() || !no_space_output {
-                        if !processed_output.is_empty() && !no_space_output {
-                            processed_output.push(' ');
-                        }
-                        processed_output.push_str(&current_arg);
-                        current_arg.clear();
-                    }
-                },
-                '\\' if (enable_escapes && !in_single_quotes) && i + 1 < chars.len() => {
-                    // Handle escape sequences
-                    i += 1;
-                    match chars[i] {
-                        '\\' => current_arg.push('\\'),
-                        'a' => current_arg.push('\x07'), // Bell
-                        'b' => current_arg.push('\x08'), // Backspace
-                        'c' => {
-                            // \c means stop output immediately
-                            if !processed_output.is_empty() && !current_arg.is_empty() {
-                                if !no_space_output {
-                                    processed_output.push(' ');
-                                }
-                                processed_output.push_str(&current_arg);
-                            }
-                            return Ok(processed_output); // Return without newline
-                        },
-                        'e' => current_arg.push('\x1B'), // Escape
-                        'f' => current_arg.push('\x0C'), // Form feed
-                        'n' => current_arg.push('\n'),
-                        'r' => current_arg.push('\r'),
-                        't' => current_arg.push('\t'),
-                        'v' => current_arg.push('\x0B'), // Vertical tab
-                        'x' => {
-                            // Hex value (up to 2 digits)
-                            let mut hex_val = String::new();
-                            let mut j = 1;
-                            while i + j < chars.len() && j <= 2 && chars[i + j].is_ascii_hexdigit() {
-                                hex_val.push(chars[i + j]);
-                                j += 1;
-                            }
-                            if !hex_val.is_empty() {
-                                if let Ok(val) = u8::from_str_radix(&hex_val, 16) {
-                                    current_arg.push(val as char);
-                                }
-                                i += hex_val.len();
-                            } else {
-                                current_arg.push('x'); // No valid hex digits
-                            }
-                            i -= 1; // Compensate for the additional increment at the end
-                        },
-                        '0' => {
-                            // Octal value (up to 3 digits)
-                            let mut octal_val = String::new();
-                            let mut j = 0;
-                            while i + j < chars.len() && j < 3 && chars[i + j].is_digit(8) {
-                                octal_val.push(chars[i + j]);
-                                j += 1;
-                            }
-                            if !octal_val.is_empty() {
-                                if let Ok(val) = u8::from_str_radix(&octal_val, 8) {
-                                    current_arg.push(val as char);
-                                }
-                                i += octal_val.len() - 1; // -1 for the '0' we've already processed
-                            } else {
-                                current_arg.push('0');
-                            }
-                            i -= 1; // Compensate for the additional increment at the end
-                        },
-                        _ => current_arg.push(chars[i]), // Other escapes just print the char
-                    }
-                },
-                _ => current_arg.push(c),
+
+        let mut processed: Vec<String> = Vec::with_capacity(strings.len());
+        for (n, s) in strings.iter().enumerate() {
+            let interpreted = if enable_escapes {
+                interpret_escapes(s)
+            } else {
+                s.clone()
+            };
+            if let Some(stripped) = interpreted.strip_suffix('\x00') {
+                processed.push(stripped.to_string());
+                break;
             }
-            i += 1;
-        }
-        
-        // Add the last argument
-        if !current_arg.is_empty() {
-            if !processed_output.is_empty() && !no_space_output {
-                processed_output.push(' ');
+            if interpreted.contains('\x00') {
+                let (head, _) = interpreted.split_once('\x00').unwrap();
+                processed.push(head.to_string());
+                break;
             }
-            processed_output.push_str(&current_arg);
+            let _ = n;
+            processed.push(interpreted);
         }
-        
-        // Add newline if needed
+
+        let separator = if no_space_output { "" } else { " " };
+        let mut output = processed.join(separator);
+
         if new_line {
-            processed_output.push_str("\r\n");
+            output.push_str("\r\n");
         }
-        
-        Ok(processed_output)
+
+        Ok(output)
     }
+}
+
+/// Interpret backslash escape sequences (used by `echo -e`).
+fn interpret_escapes(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c != '\\' {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let Some(&next) = chars.get(i + 1) else {
+            out.push('\\');
+            i += 1;
+            continue;
+        };
+        match next {
+            '\\' => out.push('\\'),
+            'a' => out.push('\x07'),
+            'b' => out.push('\x08'),
+            'c' => {
+                out.push('\x00');
+                i += 2;
+                continue;
+            }
+            'e' => out.push('\x1B'),
+            'f' => out.push('\x0C'),
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'v' => out.push('\x0B'),
+            'x' => {
+                let mut hex = String::new();
+                let mut j = 1;
+                while i + 1 + j < chars.len() && j <= 2 && chars[i + 1 + j].is_ascii_hexdigit() {
+                    hex.push(chars[i + 1 + j]);
+                    j += 1;
+                }
+                if let Ok(val) = u8::from_str_radix(&hex, 16) {
+                    out.push(val as char);
+                } else {
+                    out.push('\\');
+                    out.push('x');
+                }
+                i += 1 + hex.len();
+                continue;
+            }
+            '0' => {
+                let mut oct = String::new();
+                let mut j = 1;
+                while i + 1 + j < chars.len() && j <= 3 && chars[i + 1 + j].is_digit(8) {
+                    oct.push(chars[i + 1 + j]);
+                    j += 1;
+                }
+                if let Ok(val) = u8::from_str_radix(&oct, 8) {
+                    out.push(val as char);
+                } else {
+                    out.push('\\');
+                    out.push('0');
+                }
+                i += 1 + oct.len();
+                continue;
+            }
+            other => {
+                out.push('\\');
+                out.push(other);
+            }
+        }
+        i += 2;
+    }
+    out
 }

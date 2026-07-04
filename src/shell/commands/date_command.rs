@@ -55,9 +55,7 @@ impl Command for DateCommand {
         There is NO WARRANTY, to the extent permitted by law.\n".to_string()
     }
     
-    async fn execute(&self, args: &str, _context: &mut CommandContext) -> CommandResult {
-        let mut args = args.trim();
-        
+    async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
         // Default settings
         let mut utc_time = false;
         let mut iso_format = false;
@@ -65,52 +63,28 @@ impl Command for DateCommand {
         let mut custom_format: Option<String> = None;
         let mut print_help = false;
         let mut print_version = false;
-        
+
         // Parse arguments
-        while !args.is_empty() {
-            if args.starts_with("--help") {
+        for arg in args {
+            if arg == "--help" {
                 print_help = true;
-                break;
-            } else if args.starts_with("--version") {
+            } else if arg == "--version" {
                 print_version = true;
-                break;
-            } else if args.starts_with("--utc") || args.starts_with("-u") {
+            } else if arg == "--utc" || arg == "-u" || arg == "--universal" {
                 utc_time = true;
-                if args.starts_with("--utc") {
-                    args = args["--utc".len()..].trim_start();
-                } else {
-                    args = args["-u".len()..].trim_start();
-                }
-            } else if args.starts_with("--iso-8601") || args.starts_with("-I") {
+            } else if arg == "--iso-8601" || arg == "-I" || arg.starts_with("--iso-8601=") || arg.starts_with("-I") {
                 iso_format = true;
-                if args.starts_with("--iso-8601") {
-                    args = args["--iso-8601".len()..].trim_start();
-                } else {
-                    args = args["-I".len()..].trim_start();
-                }
-            } else if args.starts_with("--rfc-3339") {
+            } else if arg == "--rfc-3339" || arg == "-R" || arg == "--rfc-2822" || arg.starts_with("--rfc-3339=") {
                 rfc_format = true;
-                args = args["--rfc-3339".len()..].trim_start();
-                // Skip the required argument for --rfc-3339
-                if args.starts_with("=date") || args.starts_with("=seconds") || args.starts_with("=ns") {
-                    let space_pos = args.find(' ').unwrap_or(args.len());
-                    args = args[space_pos..].trim_start();
-                }
-            } else if args.starts_with("+") {
-                // Custom format string
-                let format_end = args.find(' ').unwrap_or(args.len());
-                custom_format = Some(args[1..format_end].to_string());
-                args = args[format_end..].trim_start();
-            } else {
-                // Unknown option or argument - break to avoid infinite loop
-                break;
+            } else if let Some(fmt) = arg.strip_prefix('+') {
+                custom_format = Some(fmt.to_string());
             }
         }
-        
+
         if print_help {
             return Ok(self.help());
         }
-        
+
         if print_version {
             return Ok(self.version());
         }

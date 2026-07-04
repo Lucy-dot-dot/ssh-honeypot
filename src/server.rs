@@ -14,7 +14,8 @@ use crate::db::DbMessage;
 use crate::shell::commands::{
 	CommandDispatcher, CommandContext,
 	EchoCommand, CatCommand, DateCommand, FreeCommand, PsCommand, UnameCommand, LsCommand,
-	PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand
+	PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand,
+	TestCommand, TrueCommand, FalseCommand, ColonCommand, ExportCommand, UnsetCommand
 };use crate::shell::filesystem::fs2::FileSystem;
 use crate::sftp::HoneypotSftpSession;
 use crate::abuseipdb::{Client as AbuseIpClient, AbuseIpError};
@@ -37,9 +38,11 @@ pub struct SshHandler {
     session_data: SessionData,
     db_tx: mpsc::Sender<DbMessage>,
     current_cmd: String,
+    pending_block: String,
     cwd: String,
     hostname: String,
     disable_cli_interface: bool,
+    disable_exec: bool,
     authentication_banner: Option<String>,
     tarpit: bool,
     fs2: Arc<RwLock<FileSystem>>,
@@ -338,9 +341,28 @@ impl Handler for SshHandler {
                         return Err(Error::Disconnect);
                     }
 
+                    // Accumulate multi-line control-flow block (if/for/while/etc.)
+                    if self.pending_block.is_empty() {
+                        self.pending_block = self.current_cmd.clone();
+                    } else {
+                        self.pending_block.push('\n');
+                        self.pending_block.push_str(&self.current_cmd);
+                    }
+
+                    // If the block is still incomplete (open if/for/while/case), prompt for more
+                    if crate::shell::parser::is_incomplete_block(&self.pending_block) {
+                        self.current_cmd = String::new();
+                        match self.tarpit_data(session, channel, b"\r\n> ".as_ref()).await {
+                            Ok(_) => { log::trace!("Sent secondary (continuation) prompt to client") },
+                            Err(err) => { log::error!("Failed to send secondary prompt to client: {}", err) },
+                        }
+                        return Ok(());
+                    }
+
                     // Process the command
-                    let response = self.process_command().await;
+                    let (response, exit_requested) = self.process_command().await;
                     self.current_cmd = String::new();
+                    self.pending_block = String::new();
 
                     // Send the response
                     match self.tarpit_data(session, channel, "\r\n".as_bytes()).await {
@@ -351,6 +373,16 @@ impl Handler for SshHandler {
                         Ok(_) => { log::trace!("Sent command result data to client") },
                         Err(err) => { log::error!("Failed to send command result data to client: {}", err) },
                     };
+
+                    if exit_requested {
+                        log::debug!("Closing session {} due to exit command in pipeline", self.session_data.auth_id);
+                        match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
+                            Ok(_) => { log::trace!("Sent closing connection to client") },
+                            Err(err) => { log::error!("Failed to send closing connection to client: {}", err) },
+                        };
+                        return Err(Error::Disconnect);
+                    }
+
                     let prompt = format!("\r\n{} ", self.session_data.prompt);
                     match self.tarpit_data(session, channel, prompt.as_bytes()).await {
                         Ok(_) => { log::trace!("Sent prompt to client") },
@@ -430,6 +462,12 @@ impl Handler for SshHandler {
                 Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
             };
 
+            if self.disable_exec {
+                log::debug!("Exec request denied (exec disabled): {}", command);
+                session.channel_failure(channel)?;
+                return Ok(());
+            }
+
             let answer = format!("You thought I'm going to execute '{}'. But jokes on you. You are now my slave.", command);
             log::debug!("Exec request received: {}", command);
             log::debug!("Answering with: {}", answer);
@@ -500,20 +538,14 @@ impl Handler for SshHandler {
 }*/
 
 impl SshHandler {
-    // Process commands and return fake responses
-    async fn process_command(&mut self) -> String {
-        log::debug!("Processing command: {}", self.current_cmd);
-        // First, split on pipes to handle simple command piping
-        let cmd = self.current_cmd.clone();
-        let mut cmd_parts = cmd.split("|");
-
-        let primary_cmd = cmd_parts.next().unwrap_or("").trim();
-        log::debug!("Identified primary cmd: {}", primary_cmd);
-
-        // Handle special exit commands
-        if primary_cmd == "exit" || primary_cmd == "logout" {
-            return "".to_string();
-        }
+    // Process commands and return fake responses, plus whether the session should end.
+    async fn process_command(&mut self) -> (String, bool) {
+        let cmd = if self.pending_block.is_empty() {
+            self.current_cmd.clone()
+        } else {
+            self.pending_block.clone()
+        };
+        log::debug!("Processing command: {}", cmd);
 
         // Create command context
         let mut context = CommandContext::new(
@@ -524,13 +556,13 @@ impl SshHandler {
             self.session_data.auth_id.clone(),
         );
 
-        // Use the new dispatcher for all commands
-        let output = self.command_dispatcher.execute(primary_cmd, &mut context).await;
+        // Use the new dispatcher for all commands (handles parsing, pipes, &&/||, sequencing)
+        let outcome = self.command_dispatcher.execute(&cmd, &mut context).await;
 
         // Update cwd from context in case it changed (e.g., from cd command)
         self.cwd = context.cwd.clone();
 
-        output
+        (outcome.output, outcome.exit_requested)
     }
 
 
@@ -706,6 +738,7 @@ pub struct SshServerHandler {
     local_port: u16,
     db_tx: mpsc::Sender<DbMessage>,
     disable_cli_interface: bool,
+    disable_exec: bool,
     authentication_banner: Option<String>,
     tarpit: bool,
     fs2: Arc<RwLock<FileSystem>>,
@@ -825,9 +858,11 @@ impl server::Server for SshServerHandler {
             session_data: SessionData::default(),
             db_tx: self.db_tx.clone(),
             current_cmd: String::new(),
+            pending_block: String::new(),
             cwd: String::from("/home/user"),
             hostname: self.hostname.clone(),
             disable_cli_interface: self.disable_cli_interface,
+            disable_exec: self.disable_exec,
             authentication_banner: self.authentication_banner.clone(),
             tarpit: self.tarpit,
             fs2: self.fs2.clone(),
@@ -904,9 +939,10 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>, welcome_message: String, hostname: String, local_port: u16) -> SshServerHandler {
+    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, disable_exec: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>, welcome_message: String, hostname: String, local_port: u16) -> SshServerHandler {
         Self {
             disable_cli_interface,
+            disable_exec,
             db_tx,
             authentication_banner,
             tarpit,
@@ -940,6 +976,12 @@ impl SshServerHandler {
         dispatcher.registry_mut().register_command(Arc::new(CurlCommand));
         dispatcher.registry_mut().register_command(Arc::new(SudoCommand));
         dispatcher.registry_mut().register_command(Arc::new(ExitCommand));
+        dispatcher.registry_mut().register_command(Arc::new(TestCommand));
+        dispatcher.registry_mut().register_command(Arc::new(TrueCommand));
+        dispatcher.registry_mut().register_command(Arc::new(FalseCommand));
+        dispatcher.registry_mut().register_command(Arc::new(ColonCommand));
+        dispatcher.registry_mut().register_command(Arc::new(ExportCommand));
+        dispatcher.registry_mut().register_command(Arc::new(UnsetCommand));
 
         // Register stateful commands
         dispatcher.registry_mut().register_stateful_command(Arc::new(CdCommand));

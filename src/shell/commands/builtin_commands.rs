@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use super::command_trait::{Command, StatefulCommand, CommandResult};
+use super::command_trait::{Command, StatefulCommand, CommandResult, CommandError};
 use super::context::CommandContext;
 use crate::shell::filesystem::fs2::FileContent;
 
@@ -12,7 +12,7 @@ impl Command for PwdCommand {
         "pwd"
     }
     
-    async fn execute(&self, _args: &str, context: &mut CommandContext) -> CommandResult {
+    async fn execute(&self, _args: &[String], context: &mut CommandContext) -> CommandResult {
         Ok(format!("{}\r\n", context.cwd))
     }
 }
@@ -26,7 +26,7 @@ impl Command for WhoamiCommand {
         "whoami"
     }
     
-    async fn execute(&self, _args: &str, context: &mut CommandContext) -> CommandResult {
+    async fn execute(&self, _args: &[String], context: &mut CommandContext) -> CommandResult {
         Ok(format!("{}\r\n", context.username))
     }
 }
@@ -54,12 +54,12 @@ impl Command for IdCommand {
         --version      output version information and exit\n".to_string()
     }
     
-    async fn execute(&self, args: &str, context: &mut CommandContext) -> CommandResult {
-        if args.contains("--help") {
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
         
-        if args.contains("--version") {
+        if args.iter().any(|a| a == "--version") {
             return Ok("id (GNU coreutils) 8.32\n".to_string());
         }
         
@@ -87,7 +87,7 @@ impl Command for CdCommand {
         If no DIRECTORY is given, change to the home directory.\n".to_string()
     }
     
-    async fn execute(&self, args: &str, context: &mut CommandContext) -> CommandResult {
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
         // This shouldn't be called for stateful commands - redirect to stateful version
         self.execute_with_state_change(args, context).await
     }
@@ -96,29 +96,30 @@ impl Command for CdCommand {
 #[async_trait]
 impl StatefulCommand for CdCommand {
     
-    async fn execute_with_state_change(&self, args: &str, context: &mut CommandContext) -> CommandResult {
-        let args = args.trim();
-        
-        if args == "--help" {
+    async fn execute_with_state_change(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
         
         // Determine target directory
-        let target_dir = if args.is_empty() || args == "~" {
+        let raw = args.iter().find(|a| !a.starts_with('-')).map(|s| s.as_str()).unwrap_or("");
+        let target_dir = if raw.is_empty() || raw == "~" {
             // Go to home directory
             format!("/home/{}", context.username)
-        } else if args == "-" {
+        } else if raw == "-" {
             // Go to previous directory (simplified: just go to home)
             format!("/home/{}", context.username)
-        } else if args.starts_with('/') {
+        } else if let Some(expanded) = raw.strip_prefix("~/") {
+            format!("/home/{}/{}", context.username, expanded)
+        } else if raw.starts_with('/') {
             // Absolute path
-            args.to_string()
+            raw.to_string()
         } else {
             // Relative path
             if context.cwd.ends_with('/') {
-                format!("{}{}", context.cwd, args)
+                format!("{}{}", context.cwd, raw)
             } else {
-                format!("{}/{}", context.cwd, args)
+                format!("{}/{}", context.cwd, raw)
             }
         };
         
@@ -168,12 +169,12 @@ impl Command for WgetCommand {
         --version  output version information and exit\n".to_string()
     }
     
-    async fn execute(&self, args: &str, _context: &mut CommandContext) -> CommandResult {
-        if args.contains("--help") {
+    async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
         
-        if args.contains("--version") {
+        if args.iter().any(|a| a == "--version") {
             return Ok("GNU Wget 1.20.3\n".to_string());
         }
         
@@ -196,12 +197,12 @@ impl Command for CurlCommand {
         --version  Show version\n".to_string()
     }
     
-    async fn execute(&self, args: &str, _context: &mut CommandContext) -> CommandResult {
-        if args.contains("--help") {
+    async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
         
-        if args.contains("--version") {
+        if args.iter().any(|a| a == "--version") {
             return Ok("curl 7.68.0\n".to_string());
         }
         
@@ -218,7 +219,7 @@ impl Command for SudoCommand {
         "sudo"
     }
     
-    async fn execute(&self, _args: &str, context: &mut CommandContext) -> CommandResult {
+    async fn execute(&self, _args: &[String], context: &mut CommandContext) -> CommandResult {
         Ok(format!("Sorry, user {} may not run sudo on {}.\r\n", context.username, context.hostname))
     }
 }
@@ -236,8 +237,98 @@ impl Command for ExitCommand {
         vec!["logout"]
     }
     
-    async fn execute(&self, _args: &str, _context: &mut CommandContext) -> CommandResult {
+    async fn execute(&self, _args: &[String], _context: &mut CommandContext) -> CommandResult {
         // This will be handled specially by the server
+        Ok(String::new())
+    }
+}
+
+/// TRUE command - always succeeds (exit status 0).
+pub struct TrueCommand;
+
+#[async_trait]
+impl Command for TrueCommand {
+    fn name(&self) -> &'static str {
+        "true"
+    }
+
+    async fn execute(&self, _args: &[String], _context: &mut CommandContext) -> CommandResult {
+        Ok(String::new())
+    }
+}
+
+/// FALSE command - always fails (exit status 1).
+pub struct FalseCommand;
+
+#[async_trait]
+impl Command for FalseCommand {
+    fn name(&self) -> &'static str {
+        "false"
+    }
+
+    async fn execute(&self, _args: &[String], _context: &mut CommandContext) -> CommandResult {
+        Err(CommandError::SilentFailure)
+    }
+}
+
+/// COLON (`:`) command - null command that always succeeds.
+pub struct ColonCommand;
+
+#[async_trait]
+impl Command for ColonCommand {
+    fn name(&self) -> &'static str {
+        ":"
+    }
+
+    async fn execute(&self, _args: &[String], _context: &mut CommandContext) -> CommandResult {
+        Ok(String::new())
+    }
+}
+
+/// EXPORT command - set environment variables.
+pub struct ExportCommand;
+
+#[async_trait]
+impl Command for ExportCommand {
+    fn name(&self) -> &'static str {
+        "export"
+    }
+
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
+        for arg in args {
+            if let Some(eq) = arg.find('=') {
+                let name = arg[..eq].to_string();
+                let value = arg[eq + 1..].to_string();
+                if !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    context.set_env(name, value);
+                }
+            }
+            // `export VAR` (no `=`) is a no-op here (variable already exported
+            // implicitly by being in the environment).
+        }
+        Ok(String::new())
+    }
+}
+
+/// UNSET command - remove environment variables.
+pub struct UnsetCommand;
+
+#[async_trait]
+impl Command for UnsetCommand {
+    fn name(&self) -> &'static str {
+        "unset"
+    }
+
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
+        for arg in args {
+            if !arg.starts_with('-') {
+                context.env_vars.remove(arg);
+            }
+        }
         Ok(String::new())
     }
 }

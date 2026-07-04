@@ -36,13 +36,13 @@ impl Command for UnameCommand {
         There is NO WARRANTY, to the extent permitted by law.\n".to_string()
     }
     
-    async fn execute(&self, args: &str, context: &mut CommandContext) -> CommandResult {
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
         // Handle help and version flags
-        if args.contains("--help") {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
         
-        if args.contains("--version") {
+        if args.iter().any(|a| a == "--version") {
             return Ok(self.version());
         }
         
@@ -59,17 +59,18 @@ impl Command for UnameCommand {
         
         let mut output_parts = Vec::new();
         
-        // Parse arguments
-        let args = args.trim();
+        let has = |flag: &str| args.iter().any(|a| a == flag);
         
-        if args.is_empty() || args.contains("-s") || args.contains("--kernel-name") {
+        let want_all = has("-a") || has("--all");
+
+        if args.is_empty() || has("-s") || has("--kernel-name") {
             output_parts.push(kernel_name);
         }
         
-        if args.contains("-a") || args.contains("--all") {
+        if want_all {
             // Print all information
             output_parts.clear();
-            output_parts.extend(&[
+            output_parts.extend([
                 kernel_name,
                 hostname,
                 kernel_release,
@@ -81,37 +82,37 @@ impl Command for UnameCommand {
             ]);
         } else {
             // Handle individual flags
-            if args.contains("-n") || args.contains("--nodename") {
+            if has("-n") || has("--nodename") {
                 if !output_parts.contains(&hostname.as_str()) {
                     output_parts.push(hostname);
                 }
             }
-            if args.contains("-r") || args.contains("--kernel-release") {
+            if has("-r") || has("--kernel-release") {
                 if !output_parts.contains(&kernel_release) {
                     output_parts.push(kernel_release);
                 }
             }
-            if args.contains("-v") || args.contains("--kernel-version") {
+            if has("-v") || has("--kernel-version") {
                 if !output_parts.contains(&kernel_version) {
                     output_parts.push(kernel_version);
                 }
             }
-            if args.contains("-m") || args.contains("--machine") {
+            if has("-m") || has("--machine") {
                 if !output_parts.contains(&machine) {
                     output_parts.push(machine);
                 }
             }
-            if args.contains("-p") || args.contains("--processor") {
+            if has("-p") || has("--processor") {
                 if !output_parts.contains(&processor) {
                     output_parts.push(processor);
                 }
             }
-            if args.contains("-i") || args.contains("--hardware-platform") {
+            if has("-i") || has("--hardware-platform") {
                 if !output_parts.contains(&hardware_platform) {
                     output_parts.push(hardware_platform);
                 }
             }
-            if args.contains("-o") || args.contains("--operating-system") {
+            if has("-o") || has("--operating-system") {
                 if !output_parts.contains(&operating_system) {
                     output_parts.push(operating_system);
                 }

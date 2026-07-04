@@ -52,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Interface: {}", interface);
     }
     log::info!("Disable CLI interface: {}", app.disable_cli_interface);
+    log::info!("Disable exec requests: {}", app.disable_exec);
     log::info!(
         "Authentication BANNER: {}",
         app.authentication_banner.clone().unwrap_or_default()
@@ -227,6 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut server_handler = SshServerHandler::new(
             db_tx.clone(),
             app.disable_cli_interface,
+            app.disable_exec,
             app.authentication_banner.clone(),
             app.tarpit,
             fs2.clone(),

@@ -40,48 +40,43 @@ impl Command for LsCommand {
         There is NO WARRANTY, to the extent permitted by law.\n".to_string()
     }
     
-    async fn execute(&self, args: &str, context: &mut CommandContext) -> CommandResult {
-        // Handle help and version flags
-        if args.contains("--help") {
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
-        
-        if args.contains("--version") {
+
+        if args.iter().any(|a| a == "--version") {
             return Ok(self.version());
         }
-        
+
         let fs = context.filesystem.read().await;
-        
-        // Parse arguments
+
         let path = &context.cwd;
         let mut show_all = false;
         let mut long_format = false;
         let mut one_per_line = false;
-        
-        // Simple argument parsing
-        let parts: Vec<&str> = args.split_whitespace().collect();
-        let mut target_path = None;
-        
-        for part in parts {
-            match part {
+        let mut target_path: Option<String> = None;
+
+        for part in args {
+            match part.as_str() {
                 "-a" | "--all" => show_all = true,
                 "-l" => long_format = true,
                 "-1" => one_per_line = true,
                 "-la" | "-al" => {
                     show_all = true;
                     long_format = true;
-                },
-                arg if !arg.starts_with('-') => {
-                    target_path = Some(arg);
                 }
-                _ => {} // Ignore other flags for simplicity
+                "-A" | "--almost-all" => show_all = true,
+                arg if !arg.starts_with('-') => {
+                    target_path = Some(arg.to_string());
+                }
+                _ => {}
             }
         }
-        
-        // Determine the directory to list
+
         let list_path = if let Some(target) = target_path {
             if target.starts_with('/') {
-                target.to_string()
+                target
             } else {
                 format!("{}/{}", path.trim_end_matches('/'), target)
             }

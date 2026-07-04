@@ -15,6 +15,7 @@ pub struct Config {
     pub interfaces: Option<Vec<String>>, // Store as strings for TOML compatibility
     pub database_url: Option<String>,
     pub disable_cli_interface: Option<bool>,
+    pub disable_exec: Option<bool>,
     pub authentication_banner: Option<String>,
     pub tarpit: Option<bool>,
     pub disable_base_tar_gz_loading: Option<bool>,
@@ -38,6 +39,7 @@ impl Default for Config {
             interfaces: None,
             database_url: None,
             disable_cli_interface: None,
+            disable_exec: None,
             authentication_banner: None,
             tarpit: None,
             disable_base_tar_gz_loading: None,
@@ -74,7 +76,11 @@ pub struct CliArgs {
     /// Disable the fake cli interface provided and only save passwords and/or key authentication attempts. Does not reject the authentication, --reject-all-auth can be used to do that
     #[arg(short = 'c', long = "disable-cli-interface", env = "DISABLE_CLI_INTERFACE", action = ArgAction::SetTrue)]
     pub disable_cli_interface: bool,
-    
+
+    /// Disable exec request handling (ssh user@host "command"). Commands are still logged. Does not affect the interactive shell
+    #[arg(long = "disable-exec", env = "DISABLE_EXEC", action = ArgAction::SetTrue)]
+    pub disable_exec: bool,
+
     /// Authentication banner to show. Can make the server more realistic
     #[arg(short, long, env = "AUTHENTICATION_BANNER")]
     pub authentication_banner: Option<String>,
@@ -145,6 +151,7 @@ pub struct App {
     pub interfaces: Vec<SocketAddr>,
     pub database_url: String,
     pub disable_cli_interface: bool,
+    pub disable_exec: bool,
     pub authentication_banner: Option<String>,
     pub tarpit: bool,
     pub disable_base_tar_gz_loading: bool,
@@ -232,6 +239,8 @@ impl App {
                 .unwrap_or_else(|| "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot".to_string()),
             
             disable_cli_interface: Self::merge_clap_boolean_with_config(cli.disable_cli_interface, config.disable_cli_interface),
+            
+            disable_exec: Self::merge_clap_boolean_with_config(cli.disable_exec, config.disable_exec),
             
             authentication_banner: cli.authentication_banner
                 .or(config.authentication_banner),

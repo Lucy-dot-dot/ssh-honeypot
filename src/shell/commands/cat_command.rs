@@ -12,59 +12,54 @@ impl Command for CatCommand {
         "cat"
     }
 
-    async fn execute(&self, args: &str, context: &mut CommandContext) -> CommandResult {
-        let args = args.trim();
-
-        // Handle help and version flags
-        if args == "--help" {
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
 
-        if args == "--version" {
+        if args.iter().any(|a| a == "--version") {
             return Ok(self.version());
         }
 
-        // If no arguments, simulate reading from stdin (but we'll just show a message)
-        if args.is_empty() {
+        let files: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+
+        if files.is_empty() {
             return Ok("cat: reading from stdin not supported in honeypot\r\n".to_string());
         }
 
-        // Parse file path (simple implementation - just take the first argument)
-        let file_path = args.split_whitespace().next().unwrap_or("");
-
-        if file_path.is_empty() {
-            return Ok("cat: missing file operand\r\nTry 'cat --help' for more information.\r\n".to_string());
-        }
-
-        // Get filesystem and read file
+        let mut output = String::new();
+        let mut errors = String::new();
         let fs = context.filesystem.read().await;
 
-        match fs.follow_symlink(file_path) {
-            Ok(entry) => {
-                match entry.file_content {
+        for file_path in files {
+            match fs.follow_symlink(file_path) {
+                Ok(entry) => match &entry.file_content {
                     None => {
-                        Ok(format!("cat: {}: No such file or directory\r\n", file_path))
-                    },
-                    Some(ref content) => {
-                        match content {
-                            FileContent::Directory(_) => {
-                                Ok(format!("cat: {}: Is a directory\r\n", file_path))
-                            }
-                            FileContent::RegularFile(bytes) => {
-                                // Convert bytes to string safely
-                                let content = String::from_utf8_lossy(bytes);
-                                let converted = content.replace("\r\n", "\n").replace('\n', "\r\n");
-                                Ok(converted)
-                            },
-                            FileContent::SymbolicLink(_) => {
-                                // This shouldn't happen since we resolved the symlink
-                                Ok(format!("cat: {}: Is a symbolic link\r\n", file_path))
-                            }
-                        }
+                        errors.push_str(&format!("cat: {}: No such file or directory\r\n", file_path));
                     }
+                    Some(FileContent::Directory(_)) => {
+                        errors.push_str(&format!("cat: {}: Is a directory\r\n", file_path));
+                    }
+                    Some(FileContent::RegularFile(bytes)) => {
+                        let content = String::from_utf8_lossy(bytes);
+                        output.push_str(&content.replace("\r\n", "\n").replace('\n', "\r\n"));
+                    }
+                    Some(FileContent::SymbolicLink(_)) => {
+                        errors.push_str(&format!("cat: {}: Is a symbolic link\r\n", file_path));
+                    }
+                },
+                Err(_) => {
+                    errors.push_str(&format!("cat: {}: No such file or directory\r\n", file_path));
                 }
-            },
-            Err(_) => Ok(format!("cat: {}: No such file or directory\r\n", file_path))
+            }
+        }
+
+        // Successful content goes to stdout; error diagnostics go to stderr (Err).
+        // When both are present we prefer stdout so pipe consumers get real content.
+        if output.is_empty() && !errors.is_empty() {
+            Err(super::command_trait::CommandError::ExecutionError(errors))
+        } else {
+            Ok(output)
         }
     }
 

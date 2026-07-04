@@ -84,13 +84,13 @@ impl Command for PsCommand {
         "ps from procps-ng 3.3.15\n".to_string()
     }
     
-    async fn execute(&self, args: &str, context: &mut CommandContext) -> CommandResult {
+    async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
         // Handle help and version flags
-        if args.contains("--help") {
+        if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
         
-        if args.contains("--version") {
+        if args.iter().any(|a| a == "--version") {
             return Ok(self.version());
         }
         
@@ -165,10 +165,10 @@ impl PsCommand {
         processes
     }
     
-    fn format_process_list(processes: &[Process], args: &str) -> String {
+    fn format_process_list(processes: &[Process], args: &[String]) -> String {
         let mut result = String::new();
-        let show_all = args.contains("-e") || args.contains("-A") || args.contains("--everyone");
-        let full_format = args.contains("-f") || args.contains("--full");
+        let show_all = args.iter().any(|a| a == "-e" || a == "-A" || a == "--everyone");
+        let full_format = args.iter().any(|a| a == "-f" || a == "--full");
         
         if full_format {
             result.push_str(&format!("{:<8} {:>5} {:>5} {:>5} {:<5} {:<8} {:<5} {:<8} {}\r\n",

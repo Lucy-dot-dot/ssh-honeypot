@@ -13,6 +13,7 @@ pub mod ps_command;
 pub mod uname_command;
 pub mod ls_command;
 pub mod builtin_commands;
+pub mod test_command;
 
 
 // New trait-based exports
@@ -29,4 +30,5 @@ pub use free_command::FreeCommand;
 pub use ps_command::PsCommand;
 pub use uname_command::UnameCommand;
 pub use ls_command::LsCommand;
-pub use builtin_commands::{PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand};
+pub use builtin_commands::{PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand, TrueCommand, FalseCommand, ColonCommand, ExportCommand, UnsetCommand};
+pub use test_command::TestCommand;
