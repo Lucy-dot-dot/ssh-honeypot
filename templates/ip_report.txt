@@ -61,8 +61,14 @@ TOP USERNAMES ATTEMPTED:
 TOP PASSWORDS ATTEMPTED:
 {% for row in top_passwords %}  {{ row.value }} ({{ row.count }}x)
 {% endfor %}
-RECENT AUTHENTICATION ATTEMPTS:
+ RECENT AUTHENTICATION ATTEMPTS:
 {% for row in recent_attempts %}  {{ row.timestamp | fmt("%Y-%m-%d %H:%M:%S") }} | {{ row.username }} | {{ row.password | default("<no password>") }}
 {% endfor %}
+{% if has_commands %}
+COMMANDS EXECUTED:
+  Total Commands Recorded: {{ commands_total }}
+  RECENT COMMANDS (last {{ commands_recent | length }}):
+{% for row in commands_recent %}    {{ row.timestamp | fmt("%Y-%m-%d %H:%M:%S") }} | {{ row.username }} | {{ row.command }}
+{% endfor %}{% endif %}
 
 ==========================================

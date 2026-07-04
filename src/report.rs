@@ -92,6 +92,20 @@ struct DetailRow {
     total_reports: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct CommandRecord {
+    pub timestamp: DateTime<Utc>,
+    pub username: String,
+    pub command: String,
+}
+
+#[derive(Serialize)]
+struct CommandRow {
+    timestamp: String,
+    username: String,
+    command: String,
+}
+
 #[derive(Serialize)]
 struct IpReportContext {
     ip: String,
@@ -128,6 +142,9 @@ struct IpReportContext {
     top_passwords: Vec<CountRow>,
     recent_attempts: Vec<RecentRow>,
     all_attempts: Vec<DetailRow>,
+    has_commands: bool,
+    commands_total: i64,
+    commands_recent: Vec<CommandRow>,
     generated_at: String,
 }
 
@@ -222,17 +239,31 @@ impl ReportGenerator {
     ) -> Result<String, Box<dyn std::error::Error>> {
         let records = self.get_auth_data_for_ip(ip).await?;
         let conn_track = self.get_conn_track_for_ip(ip).await?;
+        let (commands_total, commands) = self.get_commands_for_ip(ip).await?;
 
-        if records.is_empty() && conn_track.is_empty() {
+        if records.is_empty() && conn_track.is_empty() && commands.is_empty() {
             return Ok(format!("No data found for IP address: {}", ip));
         }
 
         match format {
-            ReportFormat::Text => {
-                self.generate_text_report(ip, &records, &conn_track, extended_info)
+            ReportFormat::Text => self.generate_text_report(
+                ip,
+                &records,
+                &conn_track,
+                commands_total,
+                &commands,
+                extended_info,
+            ),
+            ReportFormat::Html => {
+                self.generate_html_report(ip, &records, &conn_track, commands_total, &commands)
             }
-            ReportFormat::Html => self.generate_html_report(ip, &records, &conn_track),
-            ReportFormat::Markdown => self.generate_markdown_report(ip, &records, &conn_track),
+            ReportFormat::Markdown => self.generate_markdown_report(
+                ip,
+                &records,
+                &conn_track,
+                commands_total,
+                &commands,
+            ),
         }
     }
 
@@ -297,11 +328,47 @@ impl ReportGenerator {
         Ok(records)
     }
 
+    async fn get_commands_for_ip(&self, ip: &str) -> Result<(i64, Vec<CommandRecord>), sqlx::Error> {
+        let count_query = "SELECT COUNT(*) AS total
+            FROM commands c JOIN auth a ON c.auth_id = a.id
+            WHERE a.ip = $1::inet";
+
+        let rows_query = "SELECT c.command, c.timestamp, a.username
+            FROM commands c JOIN auth a ON c.auth_id = a.id
+            WHERE a.ip = $1::inet
+            ORDER BY c.timestamp DESC
+            LIMIT 50";
+
+        let count_row = sqlx::query(count_query)
+            .bind(ip)
+            .fetch_one(&self.pool)
+            .await?;
+        let total: i64 = count_row.get("total");
+
+        let rows = sqlx::query(rows_query)
+            .bind(ip)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let records: Vec<CommandRecord> = rows
+            .iter()
+            .map(|row| CommandRecord {
+                timestamp: row.get("timestamp"),
+                username: row.get("username"),
+                command: row.get("command"),
+            })
+            .collect();
+
+        Ok((total, records))
+    }
+
     fn build_ip_context(
         &self,
         ip: &str,
         records: &[AuthPasswordEnrichedRecord],
         conn_track: &[ConnTrackRecord],
+        commands_total: i64,
+        commands: &[CommandRecord],
         extended_info: bool,
     ) -> IpReportContext {
         let has_data = !records.is_empty();
@@ -512,6 +579,16 @@ impl ReportGenerator {
             top_passwords,
             recent_attempts,
             all_attempts,
+            has_commands: !commands.is_empty(),
+            commands_total,
+            commands_recent: commands
+                .iter()
+                .map(|c| CommandRow {
+                    timestamp: c.timestamp.to_rfc3339(),
+                    username: c.username.clone(),
+                    command: c.command.clone(),
+                })
+                .collect(),
             generated_at: Utc::now().to_rfc3339(),
         }
     }
@@ -521,9 +598,18 @@ impl ReportGenerator {
         ip: &str,
         records: &[AuthPasswordEnrichedRecord],
         conn_track: &[ConnTrackRecord],
+        commands_total: i64,
+        commands: &[CommandRecord],
         extended_info: bool,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let ctx = self.build_ip_context(ip, records, conn_track, extended_info);
+        let ctx = self.build_ip_context(
+            ip,
+            records,
+            conn_track,
+            commands_total,
+            commands,
+            extended_info,
+        );
         Ok(report_env().get_template("ip_report.txt")?.render(ctx)?)
     }
 
@@ -532,8 +618,11 @@ impl ReportGenerator {
         ip: &str,
         records: &[AuthPasswordEnrichedRecord],
         conn_track: &[ConnTrackRecord],
+        commands_total: i64,
+        commands: &[CommandRecord],
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let ctx = self.build_ip_context(ip, records, conn_track, false);
+        let ctx =
+            self.build_ip_context(ip, records, conn_track, commands_total, commands, false);
         Ok(report_env().get_template("ip_report.html")?.render(ctx)?)
     }
 
@@ -542,8 +631,11 @@ impl ReportGenerator {
         ip: &str,
         records: &[AuthPasswordEnrichedRecord],
         conn_track: &[ConnTrackRecord],
+        commands_total: i64,
+        commands: &[CommandRecord],
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let ctx = self.build_ip_context(ip, records, conn_track, false);
+        let ctx =
+            self.build_ip_context(ip, records, conn_track, commands_total, commands, false);
         Ok(report_env().get_template("ip_report.md")?.render(ctx)?)
     }
 
@@ -839,6 +931,20 @@ mod tests {
                 is_tor: "No".to_string(),
                 total_reports: "42".to_string(),
             }],
+            has_commands: true,
+            commands_total: 2,
+            commands_recent: vec![
+                CommandRow {
+                    timestamp: "2024-01-02T00:05:00+00:00".to_string(),
+                    username: "root".to_string(),
+                    command: "uname -a".to_string(),
+                },
+                CommandRow {
+                    timestamp: "2024-01-02T00:04:00+00:00".to_string(),
+                    username: "root".to_string(),
+                    command: "cat /etc/passwd".to_string(),
+                },
+            ],
             generated_at: "2024-01-03T00:00:00+00:00".to_string(),
         }
     }

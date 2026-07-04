@@ -73,7 +73,15 @@
 | Timestamp | Username | Password |
 |-----------|----------|----------|
 {% for row in recent_attempts %}| {{ row.timestamp | fmt("%Y-%m-%d %H:%M:%S") }} | `{{ row.username }}` | {% if row.password is defined %}`{{ row.password }}`{% else %}`*no password*`{% endif %} |
-{% endfor %}
+{% endfor %}{% if has_commands %}
+## Commands Executed
+
+**Total Commands Recorded:** {{ commands_total }}{% if commands_recent | length < commands_total %} (showing most recent {{ commands_recent | length }}){% endif %}
+
+| Timestamp | Username | Command |
+|-----------|----------|---------|
+{% for row in commands_recent %}| {{ row.timestamp | fmt("%Y-%m-%d %H:%M:%S") }} | `{{ row.username }}` | `{{ row.command }}` |
+{% endfor %}{% endif %}
 ## Complete Authentication Data
 
 <details>

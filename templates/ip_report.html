@@ -536,7 +536,36 @@
                     </tbody>
                 </table>
             </section>
-
+{% if has_commands %}
+            <section aria-labelledby="commands-heading">
+                <h2 id="commands-heading">Commands Executed</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-number">{{ commands_total }}</span>
+                        <div class="stat-label">Total Commands Recorded</div>
+                    </div>
+                </div>
+                <p><em>Showing the most recent {{ commands_recent | length }} command(s) run from this IP address.</em></p>
+                <table role="table" aria-label="Recent commands executed">
+                    <thead>
+                        <tr>
+                            <th scope="col">Timestamp</th>
+                            <th scope="col">Username</th>
+                            <th scope="col">Command</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+{% for row in commands_recent %}
+                        <tr>
+                            <td>{{ row.timestamp | fmt("%Y-%m-%d %H:%M:%S") }}</td>
+                            <td><span class="code">{{ row.username }}</span></td>
+                            <td><span class="code">{{ row.command }}</span></td>
+                        </tr>
+{% endfor %}
+                    </tbody>
+                </table>
+            </section>
+{% endif %}
             <section aria-labelledby="details-heading">
                 <details>
                     <summary><h2 id="details-heading">Complete Authentication Data</h2></summary>
