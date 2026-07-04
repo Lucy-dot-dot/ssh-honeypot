@@ -206,6 +206,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match fs2.write().await.process_targz(file) {
                     Ok(_) => {
                         log::debug!("Processed {} successfully", app.base_tar_gz_path.display());
+                        // Take a snapshot for periodic rollback
+                        fs2.write().await.take_snapshot();
+                        log::info!("Filesystem snapshot taken for rollback support");
                     }
                     Err(err) => {
                         log::error!(
@@ -220,6 +223,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 log::error!("Failed to open base.tar.gz: {:?}. Continuing anyway", err);
             }
         }
+    }
+
+    // Periodically roll back the shared filesystem to its snapshot
+    // to prevent unbounded growth from attacker mutations
+    {
+        let fs2_for_rollback = fs2.clone();
+        tasks.push(tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(1800); // 30 minutes
+            loop {
+                tokio::time::sleep(interval).await;
+                let mut fs = fs2_for_rollback.write().await;
+                match fs.restore_snapshot() {
+                    Ok(_) => log::info!("Filesystem rolled back to snapshot"),
+                    Err(e) => log::warn!("Failed to rollback filesystem: {}", e),
+                }
+            }
+        }));
     }
 
     for interface in app.interfaces {

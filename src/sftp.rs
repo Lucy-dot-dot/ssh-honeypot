@@ -205,6 +205,7 @@ impl Handler for HoneypotSftpSession {
                 let mut fs_guard = fs.write().await;
                 if let Ok(entry) = fs_guard.create_file(&filepath) {
                     if let Some(FileContent::RegularFile(file_data)) = &mut entry.content {
+                        let file_data = Arc::make_mut(file_data);
                         let required_size = (offset + data.len() as u64) as usize;
                         if file_data.len() < required_size {
                             file_data.resize(required_size, 0);
