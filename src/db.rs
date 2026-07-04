@@ -29,12 +29,15 @@ pub enum DbMessage {
         timestamp: DateTime<Utc>,
         command: String,
     },
-    RecordSession {
+    RecordSessionStart {
         auth_id: String,
         start_time: DateTime<Utc>,
+        response_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
+    RecordSessionEnd {
+        session_id: String,
         end_time: DateTime<Utc>,
         duration_seconds: i64,
-        response_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
     RecordFileUpload {
         auth_id: String,
@@ -110,17 +113,22 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                     log::error!("Database error recording command: {}", e);
                 }
             },
-            DbMessage::RecordSession { auth_id, start_time, end_time, duration_seconds, response_tx } => {
-                let result = record_session(&pool, auth_id, start_time, end_time, duration_seconds).await;
-                
+            DbMessage::RecordSessionStart { auth_id, start_time, response_tx } => {
+                let result = record_session_start(&pool, auth_id, start_time).await;
+
                 let response = match result {
                     Ok(session_id) => Ok(session_id),
                     Err(e) => {
-                        log::error!("Database error recording session: {}", e);
+                        log::error!("Database error recording session start: {}", e);
                         Err(e.to_string())
                     }
                 };
                 let _ = response_tx.send(response);
+            },
+            DbMessage::RecordSessionEnd { session_id, end_time, duration_seconds } => {
+                if let Err(e) = record_session_end(&pool, session_id, end_time, duration_seconds).await {
+                    log::error!("Database error recording session end: {}", e);
+                }
             },
             DbMessage::RecordFileUpload { auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data } => {
                 if let Err(e) = record_file_upload(&pool, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data).await {
@@ -253,30 +261,51 @@ async fn record_command(
     Ok(())
 }
 
-// Record session in database and return the generated UUID
-async fn record_session(
+// Insert a new session row marking the start of a live session. end_time and
+// duration_seconds are left NULL until the session closes. Returns the new id.
+async fn record_session_start(
     pool: &PgPool,
     auth_id: String,
     start_time: DateTime<Utc>,
-    end_time: DateTime<Utc>,
-    duration_seconds: i64,
 ) -> Result<String, Error> {
-    log::trace!("Recording session: {} duration {} seconds", auth_id, duration_seconds);
-    
+    log::trace!("Recording session start: auth={} at {}", auth_id, start_time);
+
     let row = query(
-        "INSERT INTO sessions (auth_id, start_time, end_time, duration_seconds)
-         VALUES ($1::uuid, $2, $3, $4)
+        "INSERT INTO sessions (auth_id, start_time)
+         VALUES ($1::uuid, $2)
          RETURNING id"
     )
     .bind(&auth_id)
     .bind(start_time)
-    .bind(end_time)
-    .bind(duration_seconds)
     .fetch_one(pool)
     .await?;
 
     let session_id: Uuid = row.get("id");
     Ok(session_id.to_string())
+}
+
+// Update an existing session row with its end time and duration, closing out a
+// previously live session.
+async fn record_session_end(
+    pool: &PgPool,
+    session_id: String,
+    end_time: DateTime<Utc>,
+    duration_seconds: i64,
+) -> Result<(), Error> {
+    log::trace!("Recording session end: session={} duration {} seconds", session_id, duration_seconds);
+
+    query(
+        "UPDATE sessions
+         SET end_time = $2, duration_seconds = $3
+         WHERE id = $1::uuid"
+    )
+    .bind(&session_id)
+    .bind(end_time)
+    .bind(duration_seconds)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 // Record file upload in database

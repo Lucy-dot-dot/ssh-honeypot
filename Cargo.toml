@@ -18,6 +18,10 @@ path = "src/bin/report_generator.rs"
 name = "report-gui"
 path = "src/bin/report_gui.rs"
 
+[[bin]]
+name = "dashboard-gui"
+path = "src/bin/dashboard_gui.rs"
+
 [dependencies]
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "signal"] }
 russh = "0.62.1"

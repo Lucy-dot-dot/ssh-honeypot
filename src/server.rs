@@ -25,6 +25,7 @@ use crate::ipapi;
 // Store session data
 struct SessionData {
     auth_id: String,
+    session_id: Option<String>,
     commands: Vec<String>,
     start_time: DateTime<Utc>,
     prompt: String,
@@ -226,11 +227,45 @@ impl Handler for SshHandler {
         async move {
             log::debug!("Open session on channel: {} for ip {}", channel.id(), self.peer.ip());
             if let (Some(user), Some(auth_id)) = (&self.user, &self.auth_id) {
+                let start_time = Utc::now();
+
+                // Record the start of a live session so the dashboard can show
+                // currently active sessions (end_time IS NULL).
+                let session_id = {
+                    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                    match self
+                        .db_tx
+                        .send(DbMessage::RecordSessionStart {
+                            auth_id: auth_id.clone(),
+                            start_time,
+                            response_tx,
+                        })
+                        .await
+                    {
+                        Ok(_) => match response_rx.await {
+                            Ok(Ok(id)) => Some(id),
+                            Ok(Err(e)) => {
+                                log::error!("Database error recording session start: {}", e);
+                                None
+                            }
+                            Err(e) => {
+                                log::error!("Failed to receive session-start response: {}", e);
+                                None
+                            }
+                        },
+                        Err(e) => {
+                            log::error!("Error sending session-start record: {}", e);
+                            None
+                        }
+                    }
+                };
+
                 // Initialize session data once we have a channel session
                 let data = SessionData {
                     auth_id: auth_id.clone(),
+                    session_id,
                     commands: Vec::new(),
-                    start_time: Utc::now(),
+                    start_time,
                     prompt: format!("{}@{}:~$ ", user, self.hostname)
                 };
                 self.session_data = data.clone();
@@ -1022,30 +1057,32 @@ async fn handle_shell_session(
     let duration = end_time - session_data.start_time;
 
     log::info!("Session closed for {}. Session start {}, Session end: {}, Duration: {}", session_data.auth_id, session_data.start_time, end_time, duration);
-    // Log session end to database
-    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-    match db_tx.send(DbMessage::RecordSession {
-        auth_id: session_data.auth_id,
-        start_time: session_data.start_time,
-        end_time,
-        duration_seconds: duration.num_seconds(),
-        response_tx,
-    }).await {
-        Ok(_) => {
-            match response_rx.await {
-                Ok(Ok(session_id)) => {
-                    log::trace!("Successfully recorded session with ID: {}", session_id);
-                },
-                Ok(Err(e)) => {
-                    log::error!("Database error recording session: {}", e);
-                },
+
+    // Close out the live session row if we have its id, otherwise we have
+    // nothing to update (the start was never recorded).
+    match &session_data.session_id {
+        Some(session_id) => {
+            match db_tx
+                .send(DbMessage::RecordSessionEnd {
+                    session_id: session_id.clone(),
+                    end_time,
+                    duration_seconds: duration.num_seconds(),
+                })
+                .await
+            {
+                Ok(_) => {
+                    log::trace!("Recorded session end for session ID: {}", session_id);
+                }
                 Err(e) => {
-                    log::error!("Failed to receive session response: {}", e);
+                    log::error!("Error sending session-end record: {}", e);
                 }
             }
-        },
-        Err(e) => {
-            log::error!("Error sending session record: {}", e);
         }
-    };
+        None => {
+            log::warn!(
+                "No session_id recorded for auth {}; session end not persisted",
+                session_data.auth_id
+            );
+        }
+    }
 }
