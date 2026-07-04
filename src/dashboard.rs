@@ -8,6 +8,13 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool, Row};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// How long the expensive "top-N" aggregates (top IPs / passwords / usernames)
+/// are served from cache before being recomputed. These queries scan millions
+/// of auth rows, so they are cached separately from the cheap "recent" feeds.
+const DEFAULT_TOP_TTL: Duration = Duration::from_secs(60);
 
 /// A recent connection-tracking row (conn_track table).
 #[derive(Debug, Clone, FromRow)]
@@ -102,6 +109,9 @@ pub struct TopEntry {
 #[derive(Debug, Clone, Default)]
 pub struct DashboardSnapshot {
     pub fetched_at: Option<DateTime<Utc>>,
+    /// When the cached top-N aggregates were last *computed* (may be older than
+    /// `fetched_at`, since they are cached with a TTL).
+    pub top_fetched_at: Option<DateTime<Utc>>,
     pub recent_connections: Vec<RecentConnRow>,
     pub recent_auths: Vec<RecentAuthRow>,
     pub live_sessions: Vec<LiveSessionRow>,
@@ -111,29 +121,124 @@ pub struct DashboardSnapshot {
     pub top_usernames: Vec<TopEntry>,
 }
 
-/// Dashboard query helper. Holds a cloneable connection pool.
+#[derive(Default)]
+struct CachedTop {
+    fetched_at: Option<DateTime<Utc>>,
+    data: Vec<TopEntry>,
+}
+
+#[derive(Default)]
+struct TopCache {
+    ips: CachedTop,
+    passwords: CachedTop,
+    usernames: CachedTop,
+}
+
+#[derive(Clone, Copy)]
+enum CacheSlot {
+    Ips,
+    Passwords,
+    Usernames,
+}
+
+/// Dashboard query helper. Holds a cloneable connection pool plus a shared
+/// TTL cache for the expensive top-N aggregates.
 #[derive(Clone)]
 pub struct Dashboard {
     pool: PgPool,
+    cache: Arc<Mutex<TopCache>>,
+    top_ttl: Duration,
 }
 
 impl Dashboard {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            cache: Arc::new(Mutex::new(TopCache::default())),
+            top_ttl: DEFAULT_TOP_TTL,
+        }
     }
 
-    /// Fetch every dashboard section in one shot.
+    /// Override the top-N aggregate cache TTL.
+    pub fn with_top_ttl(mut self, ttl: Duration) -> Self {
+        self.top_ttl = ttl;
+        self
+    }
+
+    /// Returns the cached top-N list for `slot` if it is still fresh.
+    fn cache_get(&self, slot: CacheSlot) -> Option<Vec<TopEntry>> {
+        let cache = self.cache.lock().ok()?;
+        let c = match slot {
+            CacheSlot::Ips => &cache.ips,
+            CacheSlot::Passwords => &cache.passwords,
+            CacheSlot::Usernames => &cache.usernames,
+        };
+        if let Some(t) = c.fetched_at {
+            if Utc::now().signed_duration_since(t).to_std().ok()? < self.top_ttl {
+                return Some(c.data.clone());
+            }
+        }
+        None
+    }
+
+    /// Stores a freshly computed top-N list, returning the timestamp it was
+    /// stored at.
+    fn cache_store(&self, slot: CacheSlot, data: &[TopEntry]) -> Option<DateTime<Utc>> {
+        let mut cache = self.cache.lock().ok()?;
+        let now = Utc::now();
+        let c = match slot {
+            CacheSlot::Ips => &mut cache.ips,
+            CacheSlot::Passwords => &mut cache.passwords,
+            CacheSlot::Usernames => &mut cache.usernames,
+        };
+        c.fetched_at = Some(now);
+        c.data = data.to_vec();
+        Some(now)
+    }
+
+    /// When the cached top-N aggregates were last computed (if ever).
+    pub fn top_fetched_at(&self) -> Option<DateTime<Utc>> {
+        self.cache.lock().ok().and_then(|c| {
+            [c.ips.fetched_at, c.passwords.fetched_at, c.usernames.fetched_at]
+                .into_iter()
+                .flatten()
+                .max()
+        })
+    }
+
+    /// Fetch every dashboard section in one shot. The recent feeds and the
+    /// cached top-N aggregates run concurrently, so the wall-clock time is
+    /// roughly that of the slowest single query rather than the sum.
     pub async fn snapshot(&self) -> Result<DashboardSnapshot, sqlx::Error> {
-        let mut snap = DashboardSnapshot::default();
-        snap.fetched_at = Some(Utc::now());
-        snap.recent_connections = self.recent_connections(20).await?;
-        snap.recent_auths = self.recent_auths(40).await?;
-        snap.live_sessions = self.live_sessions().await?;
-        snap.recent_sessions = self.recent_sessions(20).await?;
-        snap.top_ips = self.top_ips(15).await?;
-        snap.top_passwords = self.top_passwords(15).await?;
-        snap.top_usernames = self.top_usernames(15).await?;
-        Ok(snap)
+        let (
+            recent_connections,
+            recent_auths,
+            live_sessions,
+            recent_sessions,
+            top_ips,
+            top_passwords,
+            top_usernames,
+        ) = tokio::try_join!(
+            self.recent_connections(20),
+            self.recent_auths(40),
+            self.live_sessions(),
+            self.recent_sessions(20),
+            self.top_ips(15),
+            self.top_passwords(15),
+            self.top_usernames(15),
+        )?;
+
+        Ok(DashboardSnapshot {
+            fetched_at: Some(Utc::now()),
+            top_fetched_at: self.top_fetched_at(),
+            recent_connections,
+            recent_auths,
+            live_sessions,
+            recent_sessions,
+            top_ips,
+            top_passwords,
+            top_usernames,
+        })
     }
 
     /// Most recent connection-tracking events.
@@ -218,9 +323,12 @@ impl Dashboard {
         .await
     }
 
-    /// Top source IPs by auth-attempt count.
+    /// Top source IPs by auth-attempt count (cached with a TTL).
     pub async fn top_ips(&self, limit: i64) -> Result<Vec<TopEntry>, sqlx::Error> {
-        sqlx::query_as::<_, TopEntry>(
+        if let Some(cached) = self.cache_get(CacheSlot::Ips) {
+            return Ok(cached);
+        }
+        let rows = sqlx::query_as::<_, TopEntry>(
             r#"
             SELECT host(ip) AS value, COUNT(*)::int8 AS count
             FROM auth
@@ -231,12 +339,17 @@ impl Dashboard {
         )
         .bind(limit)
         .fetch_all(&self.pool)
-        .await
+        .await?;
+        self.cache_store(CacheSlot::Ips, &rows);
+        Ok(rows)
     }
 
-    /// Top passwords by auth-attempt count (non-empty only).
+    /// Top passwords by auth-attempt count, non-empty only (cached with a TTL).
     pub async fn top_passwords(&self, limit: i64) -> Result<Vec<TopEntry>, sqlx::Error> {
-        sqlx::query_as::<_, TopEntry>(
+        if let Some(cached) = self.cache_get(CacheSlot::Passwords) {
+            return Ok(cached);
+        }
+        let rows = sqlx::query_as::<_, TopEntry>(
             r#"
             SELECT password AS value, COUNT(*)::int8 AS count
             FROM auth
@@ -248,12 +361,17 @@ impl Dashboard {
         )
         .bind(limit)
         .fetch_all(&self.pool)
-        .await
+        .await?;
+        self.cache_store(CacheSlot::Passwords, &rows);
+        Ok(rows)
     }
 
-    /// Top usernames by auth-attempt count.
+    /// Top usernames by auth-attempt count (cached with a TTL).
     pub async fn top_usernames(&self, limit: i64) -> Result<Vec<TopEntry>, sqlx::Error> {
-        sqlx::query_as::<_, TopEntry>(
+        if let Some(cached) = self.cache_get(CacheSlot::Usernames) {
+            return Ok(cached);
+        }
+        let rows = sqlx::query_as::<_, TopEntry>(
             r#"
             SELECT username AS value, COUNT(*)::int8 AS count
             FROM auth
@@ -264,7 +382,9 @@ impl Dashboard {
         )
         .bind(limit)
         .fetch_all(&self.pool)
-        .await
+        .await?;
+        self.cache_store(CacheSlot::Usernames, &rows);
+        Ok(rows)
     }
 
     /// Full detail for one auth id: enriched auth fields + commands + uploaded files.

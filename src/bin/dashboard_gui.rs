@@ -114,6 +114,9 @@ impl OpenWindow {
 struct DashboardApp {
     db_url: String,
     pool: Option<PgPool>,
+    /// Persistent dashboard helper — kept across refreshes so the top-N
+    /// aggregate cache survives and isn't rebuilt on every poll.
+    dashboard: Option<Dashboard>,
     connection_status: String,
     is_connecting: bool,
 
@@ -139,6 +142,7 @@ impl DashboardApp {
         Self {
             db_url: DEFAULT_DB_URL.to_string(),
             pool: None,
+            dashboard: None,
             connection_status: "Not connected".to_string(),
             is_connecting: false,
             snapshot: None,
@@ -158,6 +162,7 @@ impl DashboardApp {
     fn connect(&mut self, ctx: &egui::Context) {
         self.is_connecting = true;
         self.pool = None;
+        self.dashboard = None;
         self.snapshot = None;
         self.snapshot_error = None;
         self.connection_status = "Connecting…".to_string();
@@ -179,7 +184,7 @@ impl DashboardApp {
     }
 
     fn refresh(&mut self, ctx: &egui::Context) {
-        let Some(pool) = self.pool.clone() else {
+        let Some(dash) = self.dashboard.clone() else {
             return;
         };
         self.is_loading_snapshot = true;
@@ -188,7 +193,6 @@ impl DashboardApp {
         let tx = self.tx.clone();
         let ctx = ctx.clone();
         self.runtime.spawn(async move {
-            let dash = Dashboard::new(pool);
             let result = dash.snapshot().await.map_err(|e| e.to_string());
             let _ = tx.send(AppEvent::Snapshot(result));
             ctx.request_repaint();
@@ -289,13 +293,12 @@ impl DashboardApp {
             open: true,
         });
 
-        let Some(pool) = self.pool.clone() else {
+        let Some(dash) = self.dashboard.clone() else {
             return;
         };
         let tx = self.tx.clone();
         let ctx = ctx.clone();
         self.runtime.spawn(async move {
-            let dash = Dashboard::new(pool);
             let result = dash.session_detail(&auth_id).await.map_err(|e| e.to_string());
             let _ = tx.send(AppEvent::SessionReady { auth_id, result });
             ctx.request_repaint();
@@ -321,6 +324,7 @@ impl DashboardApp {
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 AppEvent::Connected(pool) => {
+                    self.dashboard = Some(Dashboard::new(pool.clone()));
                     self.pool = Some(pool);
                     self.is_connecting = false;
                     self.connection_status = "Connected".to_string();
@@ -488,6 +492,13 @@ impl eframe::App for DashboardApp {
                 match self.snapshot.as_ref().and_then(|s| s.fetched_at) {
                     Some(t) => ui.label(format!("Last update: {}", fmt_ts(t))),
                     None => ui.colored_label(GRAY, "No data yet"),
+                };
+                match self.snapshot.as_ref().and_then(|s| s.top_fetched_at) {
+                    Some(t) => ui.colored_label(
+                        GRAY,
+                        format!("stats cached since: {}", fmt_ts(t)),
+                    ),
+                    None => ui.colored_label(GRAY, "stats: not cached"),
                 };
                 if let Some(e) = &self.snapshot_error {
                     ui.colored_label(RED, e);
