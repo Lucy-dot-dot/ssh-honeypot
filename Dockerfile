@@ -1,6 +1,6 @@
 FROM rust:alpine AS chef
-RUN cargo install cargo-chef
 RUN apk add musl-dev pkgconfig openssl-dev openssl-libs-static
+RUN cargo install cargo-chef --locked
 
 FROM chef AS planner
 WORKDIR /app
@@ -10,17 +10,21 @@ COPY Cargo.toml Cargo.lock ./
 # cargo chef prepare needs the bin/lib entry-points to exist
 RUN mkdir -p src/bin && \
     touch src/lib.rs src/main.rs \
-          src/bin/report_generator.rs src/bin/report_gui.rs
+          src/bin/report_generator.rs src/bin/report_gui.rs src/bin/dashboard_gui.rs
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 WORKDIR /app
 COPY --from=planner /app/recipe.json recipe.json
 # This layer is cached as long as recipe.json (i.e. Cargo.toml / Cargo.lock) is unchanged
-RUN cargo chef cook --release --bin ssh-honeypot --recipe-path recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo chef cook --release --bin ssh-honeypot --recipe-path recipe.json
 # Full source comes in here; only user code is recompiled from this point
 COPY . .
-RUN cargo build --release --bin ssh-honeypot && \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --bin ssh-honeypot && \
     cp target/release/ssh-honeypot /ssh-honeypot && \
     mkdir /keys
 
