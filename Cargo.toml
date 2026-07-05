@@ -55,6 +55,10 @@ egui = "0.35.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { version = "0.35.0", features = ["x11", "wayland"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+clipboard-win = "5.4.1"
+image = "0.25.10"
+
 [profile.release]
 lto = true
 strip = true

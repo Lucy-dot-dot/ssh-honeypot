@@ -10,12 +10,13 @@
 
 use chrono::{DateTime, Utc};
 use eframe::egui;
-use ssh_honeypot::dashboard::{Dashboard, DashboardSnapshot, SessionDetail};
+use ssh_honeypot::dashboard::{Dashboard, DashboardSnapshot, SessionDetail, TopData};
 use ssh_honeypot::db::initialize_database_pool;
 use ssh_honeypot::report::{ReportFormat, ReportGenerator};
 use sqlx::PgPool;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+use egui::{Key, KeyboardShortcut, Modifiers};
 
 const DEFAULT_DB_URL: &str = "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot";
 
@@ -36,6 +37,8 @@ enum AppEvent {
     Connected(PgPool),
     ConnectionFailed(String),
     Snapshot(Result<DashboardSnapshot, String>),
+    /// Result of the background top-N aggregate refresh.
+    TopReady(Result<TopData, String>),
     ReportReady {
         kind: ReportKind,
         query: String,
@@ -124,6 +127,12 @@ struct DashboardApp {
     snapshot_error: Option<String>,
     is_loading_snapshot: bool,
 
+    /// True while the expensive top-N aggregates are being (re)computed in the
+    /// background. The cheap recent feeds are already shown; the top lists
+    /// render a skeleton until this clears.
+    top_loading: bool,
+    top_error: Option<String>,
+
     auto_refresh: bool,
     refresh_interval_secs: f32,
     last_refresh: Option<Instant>,
@@ -148,6 +157,8 @@ impl DashboardApp {
             snapshot: None,
             snapshot_error: None,
             is_loading_snapshot: false,
+            top_loading: false,
+            top_error: None,
             auto_refresh: true,
             refresh_interval_secs: 10.0,
             last_refresh: None,
@@ -165,6 +176,8 @@ impl DashboardApp {
         self.dashboard = None;
         self.snapshot = None;
         self.snapshot_error = None;
+        self.top_loading = false;
+        self.top_error = None;
         self.connection_status = "Connecting…".to_string();
 
         let ctx = ctx.clone();
@@ -189,13 +202,29 @@ impl DashboardApp {
         };
         self.is_loading_snapshot = true;
         self.snapshot_error = None;
+        self.top_loading = true;
+        self.top_error = None;
 
+        // Fast path: cheap recent/live feeds + whatever top-N data is already
+        // cached. Returns in milliseconds so the dashboard repaints instantly.
         let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let ctx_main = ctx.clone();
+        let dash_main = dash.clone();
         self.runtime.spawn(async move {
-            let result = dash.snapshot().await.map_err(|e| e.to_string());
+            let result = dash_main.main_snapshot().await.map_err(|e| e.to_string());
             let _ = tx.send(AppEvent::Snapshot(result));
-            ctx.request_repaint();
+            ctx_main.request_repaint();
+        });
+
+        // Slow path: (re)compute the top-N aggregates in the background. On a
+        // warm cache this returns near-instantly; on a cold cache it takes a
+        // few seconds, during which the top lists show a loading skeleton.
+        let tx = self.tx.clone();
+        let ctx_top = ctx.clone();
+        self.runtime.spawn(async move {
+            let result = dash.refresh_top().await.map_err(|e| e.to_string());
+            let _ = tx.send(AppEvent::TopReady(result));
+            ctx_top.request_repaint();
         });
     }
 
@@ -345,6 +374,22 @@ impl DashboardApp {
                     self.is_loading_snapshot = false;
                     self.snapshot_error = Some(e);
                 }
+                AppEvent::TopReady(Ok(top)) => {
+                    // Merge the freshly computed top-N lists into whatever
+                    // snapshot we already have (it may be None if the main
+                    // snapshot hasn't landed yet, which is fine).
+                    let snap = self.snapshot.get_or_insert_with(DashboardSnapshot::default);
+                    snap.top_ips = top.ips;
+                    snap.top_passwords = top.passwords;
+                    snap.top_usernames = top.usernames;
+                    snap.top_fetched_at = top.fetched_at;
+                    self.top_loading = false;
+                    self.top_error = None;
+                }
+                AppEvent::TopReady(Err(e)) => {
+                    self.top_loading = false;
+                    self.top_error = Some(e);
+                }
                 AppEvent::ReportReady {
                     kind,
                     query,
@@ -429,6 +474,58 @@ impl eframe::App for DashboardApp {
         let ctx = ui.ctx().clone();
         self.poll_events();
         self.maybe_auto_refresh(&ctx);
+
+        let mut screenshot_to_copy = None;
+
+        ctx.input(|i| {
+            for event in &i.events {
+                if let egui::Event::Screenshot { image, .. } = event {
+                    screenshot_to_copy = Some((**image).clone());
+                }
+            }
+        });
+
+        if let Some(image) = screenshot_to_copy {
+            ui.ctx().copy_image(image.clone());
+            #[cfg(target_os = "windows")]
+            {
+                use clipboard_win::{set_clipboard, formats::{RawData, CF_DIB}};
+                use image::codecs::bmp::BmpEncoder;
+                use image::{ImageEncoder, ExtendedColorType};
+
+                let raw_bytes: Vec<u8> = image
+                    .pixels
+                    .iter()
+                    .flat_map(|color| color.to_array())
+                    .collect();
+
+                let width = image.size[0] as u32;
+                let height = image.size[1] as u32;
+
+                let mut bmp_buffer = Vec::new();
+                let encoder = BmpEncoder::new(&mut bmp_buffer);
+
+                // Encode as standard BMP instead of PNG
+                if encoder.write_image(&raw_bytes, width, height, ExtendedColorType::Rgba8).is_ok() {
+
+                    println!("Time to copy {} kbytes", bmp_buffer.len() / 1024);
+
+                    // CF_DIB is universally mapped to format ID 8 in the Win32 API.
+                    // Slicing [14..] strips the BITMAPFILEHEADER, leaving a perfect DIB payload.
+                    if bmp_buffer.len() > 14 {
+                        let _ = set_clipboard(RawData(CF_DIB), &bmp_buffer[14..]);
+                    }
+                }
+            }
+        }
+
+        let f2_pressed = ctx.input_mut(|i| {
+            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::F2))
+        });
+
+        if f2_pressed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+        }
 
         let mut actions: Vec<Action> = Vec::new();
 
@@ -533,11 +630,33 @@ impl eframe::App for DashboardApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if let Some(snap) = self.snapshot.as_ref() {
-                    render_live_sessions(ui, snap, &mut actions);
-                    render_recent_auths(ui, snap, &mut actions);
-                    render_recent_connections(ui, snap, &mut actions);
-                    render_recent_sessions(ui, snap, &mut actions);
-                    render_top_lists(ui, snap, &mut actions);
+                    let n_cols = column_count(ui.available_width());
+                    let top_loading = self.top_loading;
+                    let top_error = self.top_error.as_deref();
+                    let sections = [
+                        Section::LiveSessions,
+                        Section::RecentAuths,
+                        Section::RecentConnections,
+                        Section::RecentSessions,
+                        Section::TopActivity,
+                    ];
+                    for row in sections.chunks(n_cols) {
+                        ui.columns(n_cols, |cols| {
+                            for (i, section) in row.iter().enumerate() {
+                                if let Some(col_ui) = cols.get_mut(i) {
+                                    render_section(
+                                        col_ui,
+                                        snap,
+                                        &mut actions,
+                                        top_loading,
+                                        top_error,
+                                        *section,
+                                    );
+                                }
+                            }
+                        });
+                        ui.add_space(8.0);
+                    }
                 } else {
                     ui.add_space(10.0);
                     ui.colored_label(
@@ -748,6 +867,41 @@ impl eframe::App for DashboardApp {
 
 // ---- section renderers --------------------------------------------------
 
+/// A dashboard section that can be placed in a responsive column layout.
+#[derive(Clone, Copy)]
+enum Section {
+    LiveSessions,
+    RecentAuths,
+    RecentConnections,
+    RecentSessions,
+    TopActivity,
+}
+
+fn render_section(
+    ui: &mut egui::Ui,
+    snap: &DashboardSnapshot,
+    actions: &mut Vec<Action>,
+    top_loading: bool,
+    top_error: Option<&str>,
+    section: Section,
+) {
+    match section {
+        Section::LiveSessions => render_live_sessions(ui, snap, actions),
+        Section::RecentAuths => render_recent_auths(ui, snap, actions),
+        Section::RecentConnections => render_recent_connections(ui, snap, actions),
+        Section::RecentSessions => render_recent_sessions(ui, snap, actions),
+        Section::TopActivity => render_top_lists(ui, snap, actions, top_loading, top_error),
+    }
+}
+
+/// Pick how many sections sit side-by-side based on the available width,
+/// so wide / 4K viewports use horizontal space instead of one tall column.
+fn column_count(avail_width: f32) -> usize {
+    const MIN_SECTION_WIDTH: f32 = 460.0;
+    const MAX_COLUMNS: usize = 3;
+    ((avail_width / MIN_SECTION_WIDTH).floor() as usize).clamp(1, MAX_COLUMNS)
+}
+
 fn render_live_sessions(
     ui: &mut egui::Ui,
     snap: &DashboardSnapshot,
@@ -922,8 +1076,14 @@ fn render_top_lists(
     ui: &mut egui::Ui,
     snap: &DashboardSnapshot,
     actions: &mut Vec<Action>,
+    loading: bool,
+    error: Option<&str>,
 ) {
-    section_header(ui, "Top Activity");
+    let header = if loading { "Top Activity  (loading…)" } else { "Top Activity" };
+    section_header(ui, header);
+    if let Some(e) = error {
+        ui.colored_label(RED, format!("Top stats error: {e}"));
+    }
     ui.columns(3, |cols| {
         render_top_list(
             &mut cols[0],
@@ -931,6 +1091,7 @@ fn render_top_lists(
             &snap.top_ips,
             actions,
             Some(ReportKind::Ip),
+            loading,
         );
         render_top_list(
             &mut cols[1],
@@ -938,8 +1099,16 @@ fn render_top_lists(
             &snap.top_passwords,
             actions,
             Some(ReportKind::Password),
+            loading,
         );
-        render_top_list(&mut cols[2], "Top Usernames", &snap.top_usernames, actions, None);
+        render_top_list(
+            &mut cols[2],
+            "Top Usernames",
+            &snap.top_usernames,
+            actions,
+            None,
+            loading,
+        );
     });
 }
 
@@ -949,10 +1118,18 @@ fn render_top_list(
     entries: &[ssh_honeypot::dashboard::TopEntry],
     actions: &mut Vec<Action>,
     kind: Option<ReportKind>,
+    loading: bool,
 ) {
     ui.strong(title);
     if entries.is_empty() {
-        ui.colored_label(GRAY, "No data.");
+        if loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.colored_label(GRAY, "Loading…");
+            });
+        } else {
+            ui.colored_label(GRAY, "No data.");
+        }
         return;
     }
     egui::Grid::new(title)
@@ -1055,7 +1232,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SSH Honeypot Dashboard")
-            .with_inner_size([1100.0, 780.0]),
+            .with_inner_size([1200.0, 780.0]),
         ..Default::default()
     };
     eframe::run_native(

@@ -121,6 +121,17 @@ pub struct DashboardSnapshot {
     pub top_usernames: Vec<TopEntry>,
 }
 
+/// Just the three top-N aggregate lists plus when they were computed. This is
+/// computed separately (and slower) from the cheap recent feeds so the first
+/// dashboard frame can render fast and fill the top lists in afterwards.
+#[derive(Debug, Clone, Default)]
+pub struct TopData {
+    pub ips: Vec<TopEntry>,
+    pub passwords: Vec<TopEntry>,
+    pub usernames: Vec<TopEntry>,
+    pub fetched_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Default)]
 struct CachedTop {
     fetched_at: Option<DateTime<Utc>>,
@@ -238,6 +249,62 @@ impl Dashboard {
             top_ips,
             top_passwords,
             top_usernames,
+        })
+    }
+
+    /// Read the top-N lists from cache only (no DB access). Returns empty
+    /// lists when the cache is cold, so the caller can paint a fast first
+    /// frame and fill the top lists in afterwards via [`Self::refresh_top`].
+    fn top_from_cache(&self) -> TopData {
+        TopData {
+            ips: self.cache_get(CacheSlot::Ips).unwrap_or_default(),
+            passwords: self.cache_get(CacheSlot::Passwords).unwrap_or_default(),
+            usernames: self.cache_get(CacheSlot::Usernames).unwrap_or_default(),
+            fetched_at: self.top_fetched_at(),
+        }
+    }
+
+    /// Fast snapshot: the four cheap "recent"/"live" feeds run concurrently,
+    /// and the top-N lists are filled from cache only. This returns in
+    /// milliseconds; pair it with [`Self::refresh_top`] to (re)compute the
+    /// expensive aggregates in the background.
+    pub async fn main_snapshot(&self) -> Result<DashboardSnapshot, sqlx::Error> {
+        let (recent_connections, recent_auths, live_sessions, recent_sessions) = tokio::try_join!(
+            self.recent_connections(20),
+            self.recent_auths(40),
+            self.live_sessions(),
+            self.recent_sessions(20),
+        )?;
+
+        let top = self.top_from_cache();
+        Ok(DashboardSnapshot {
+            fetched_at: Some(Utc::now()),
+            top_fetched_at: top.fetched_at,
+            recent_connections,
+            recent_auths,
+            live_sessions,
+            recent_sessions,
+            top_ips: top.ips,
+            top_passwords: top.passwords,
+            top_usernames: top.usernames,
+        })
+    }
+
+    /// (Re)compute the top-N aggregates if the cache is stale, otherwise
+    /// return the cached values. The three queries run concurrently. Safe to
+    /// call on every refresh — it returns near-instantly when the cache is
+    /// fresh and only hits the database roughly once per `top_ttl`.
+    pub async fn refresh_top(&self) -> Result<TopData, sqlx::Error> {
+        let (ips, passwords, usernames) = tokio::try_join!(
+            self.top_ips(15),
+            self.top_passwords(15),
+            self.top_usernames(15),
+        )?;
+        Ok(TopData {
+            ips,
+            passwords,
+            usernames,
+            fetched_at: self.top_fetched_at(),
         })
     }
 
