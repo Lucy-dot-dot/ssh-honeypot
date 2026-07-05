@@ -14,6 +14,7 @@ use ssh_honeypot::dashboard::{Dashboard, DashboardSnapshot, SessionDetail, TopDa
 use ssh_honeypot::db::initialize_database_pool;
 use ssh_honeypot::report::{ReportFormat, ReportGenerator};
 use sqlx::PgPool;
+use sqlx::postgres::PgListener;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use egui::{Key, KeyboardShortcut, Modifiers};
@@ -25,6 +26,14 @@ const GREEN: egui::Color32 = egui::Color32::from_rgb(80, 180, 80);
 const RED: egui::Color32 = egui::Color32::from_rgb(220, 70, 70);
 const GRAY: egui::Color32 = egui::Color32::GRAY;
 const BLUEISH: egui::Color32 = egui::Color32::from_rgb(140, 180, 220);
+
+/// Postgres LISTEN channels the dashboard subscribes to for near-real-time
+/// updates. A DB trigger (migration 012) fires these on INSERT/UPDATE.
+const NOTIFY_CHANNELS: &[&str] = &["auth_new", "conn_new", "session_change"];
+/// Minimum spacing between notify-triggered refreshes, so a burst of events
+/// (e.g. a password spray issuing one NOTIFY per attempt) collapses into one
+/// refresh per ~second rather than one per row.
+const NOTIFY_DEBOUNCE_SECS: f32 = 1.0;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum ReportKind {
@@ -55,6 +64,9 @@ enum AppEvent {
         auth_id: String,
         result: Result<SessionDetail, String>,
     },
+    /// A Postgres LISTEN/NOTIFY arrived on one of NOTIFY_CHANNELS. The payload
+    /// names the channel so the UI can show which feed was touched.
+    Notify(&'static str),
 }
 
 /// UI actions queued while drawing (collected, then applied once drawing is
@@ -143,6 +155,16 @@ struct DashboardApp {
     runtime: tokio::runtime::Runtime,
     tx: mpsc::Sender<AppEvent>,
     rx: mpsc::Receiver<AppEvent>,
+
+    /// Handle to the background LISTEN/NOTIFY task, so it can be cancelled on
+    /// reconnect.
+    notify_task: Option<tokio::task::JoinHandle<()>>,
+    /// Set when a NOTIFY has arrived and a refresh is pending. Cleared once a
+    /// refresh is actually kicked off (debounced in maybe_auto_refresh).
+    notify_pending: bool,
+    /// `(when, channel)` of the most recent NOTIFY, shown in the UI as a
+    /// "live" indicator so the user can see real-time updates flowing.
+    last_notify: Option<(Instant, &'static str)>,
 }
 
 impl DashboardApp {
@@ -167,10 +189,17 @@ impl DashboardApp {
             runtime: tokio::runtime::Runtime::new().expect("failed to create tokio runtime"),
             tx,
             rx,
+            notify_task: None,
+            notify_pending: false,
+            last_notify: None,
         }
     }
 
     fn connect(&mut self, ctx: &egui::Context) {
+        // Cancel any previous LISTEN/NOTIFY listener before opening a new one.
+        if let Some(handle) = self.notify_task.take() {
+            handle.abort();
+        }
         self.is_connecting = true;
         self.pool = None;
         self.dashboard = None;
@@ -237,7 +266,18 @@ impl DashboardApp {
                 .last_refresh
                 .map(|l| l.elapsed().as_secs_f32() >= self.refresh_interval_secs)
                 .unwrap_or(false);
-        if need_initial || need_auto {
+        // Real-time path: a NOTIFY arrived. Debounced so a burst of events
+        // (e.g. a password spray) collapses into one refresh per ~second.
+        let need_notify = self.auto_refresh
+            && self.notify_pending
+            && self.pool.is_some()
+            && !self.is_loading_snapshot
+            && self
+                .last_refresh
+                .map(|l| l.elapsed().as_secs_f32() >= NOTIFY_DEBOUNCE_SECS)
+                .unwrap_or(true);
+        if need_initial || need_auto || need_notify {
+            self.notify_pending = false;
             self.refresh(ctx);
         }
     }
@@ -334,6 +374,18 @@ impl DashboardApp {
         });
     }
 
+    /// Spawn the background task that LISTENs on the NOTIFY channels and
+    /// forwards notifications to the UI thread via the event channel.
+    fn start_notify_listener(&mut self, ctx: &egui::Context) {
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        let db_url = self.db_url.clone();
+        let handle = self.runtime.spawn(async move {
+            run_notify_listener(db_url, tx, ctx).await;
+        });
+        self.notify_task = Some(handle);
+    }
+
     fn has_report_window(&self, kind: ReportKind, query: &str) -> bool {
         self.open_windows.iter().any(|w| {
             matches!(
@@ -349,7 +401,7 @@ impl DashboardApp {
             .any(|w| matches!(w, OpenWindow::Session { auth_id: a, open: true, .. } if a == auth_id))
     }
 
-    fn poll_events(&mut self) {
+    fn poll_events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 AppEvent::Connected(pool) => {
@@ -359,6 +411,8 @@ impl DashboardApp {
                     self.connection_status = "Connected".to_string();
                     self.snapshot = None;
                     self.snapshot_error = None;
+                    // Begin listening for real-time row notifications.
+                    self.start_notify_listener(ctx);
                 }
                 AppEvent::ConnectionFailed(e) => {
                     self.is_connecting = false;
@@ -464,6 +518,12 @@ impl DashboardApp {
                         }
                     }
                 }
+                AppEvent::Notify(channel) => {
+                    // A DB row landed. Flag a pending refresh; maybe_auto_refresh
+                    // will coalesce bursts into a single refresh.
+                    self.notify_pending = true;
+                    self.last_notify = Some((Instant::now(), channel));
+                }
             }
         }
     }
@@ -472,7 +532,7 @@ impl DashboardApp {
 impl eframe::App for DashboardApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.poll_events();
+        self.poll_events(&ctx);
         self.maybe_auto_refresh(&ctx);
 
         let mut screenshot_to_copy = None;
@@ -597,6 +657,10 @@ impl eframe::App for DashboardApp {
                     ),
                     None => ui.colored_label(GRAY, "stats: not cached"),
                 };
+                if let Some((when, ch)) = self.last_notify {
+                    let ago = when.elapsed().as_secs();
+                    ui.colored_label(GREEN, format!("live \u{00b7} {ch} {ago}s ago"));
+                }
                 if let Some(e) = &self.snapshot_error {
                     ui.colored_label(RED, e);
                 }
@@ -1225,6 +1289,57 @@ fn fmt_size(bytes: i64) -> String {
         format!("{:.1} MiB", b / (KB * KB))
     } else {
         format!("{:.1} GiB", b / (KB * KB * KB))
+    }
+}
+
+// ---- LISTEN/NOTIFY listener --------------------------------------------
+
+/// Owns the long-lived `PgListener`. Reconnects with a short backoff whenever
+/// the session errors out (network blip, server restart). Aborted externally
+/// via the stored `JoinHandle` when the dashboard reconnects to another DB.
+async fn run_notify_listener(db_url: String, tx: mpsc::Sender<AppEvent>, ctx: egui::Context) {
+    loop {
+        match run_listener_session(&db_url, tx.clone(), &ctx).await {
+            Ok(()) => {
+                // Only returns Ok if the inner infinite loop broke, which it
+                // never does; pause defensively before re-looping anyway.
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(e) => {
+                log::warn!("LISTEN/NOTIFY session ended: {e}; reconnecting in 2s");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
+/// One listener lifetime: connect, subscribe to all channels, then loop on
+/// `recv()`. Any error propagates so the caller can reconnect.
+async fn run_listener_session(
+    db_url: &str,
+    tx: mpsc::Sender<AppEvent>,
+    ctx: &egui::Context,
+) -> Result<(), sqlx::Error> {
+    let mut listener = PgListener::connect(db_url).await?;
+    for ch in NOTIFY_CHANNELS {
+        listener.listen(ch).await?;
+    }
+    log::info!("Dashboard LISTEN/NOTIFY active on {NOTIFY_CHANNELS:?}");
+    loop {
+        let notification = listener.recv().await?;
+        // Map the borrowed channel name to a 'static str so it can ride the
+        // event channel without a lifetime obligation. Unknown channels (e.g.
+        // added by future code) are ignored.
+        let channel = match notification.channel() {
+            "auth_new" => Some("auth_new"),
+            "conn_new" => Some("conn_new"),
+            "session_change" => Some("session_change"),
+            _ => None,
+        };
+        if let Some(ch) = channel {
+            let _ = tx.send(AppEvent::Notify(ch));
+            ctx.request_repaint();
+        }
     }
 }
 
