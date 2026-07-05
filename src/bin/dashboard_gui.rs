@@ -81,6 +81,8 @@ enum Action {
         username: String,
         start_time: Option<DateTime<Utc>>,
     },
+    /// Re-fetch the contents of a single floating window (id).
+    RefreshWindow(u64),
 }
 
 /// A floating sub-window.
@@ -151,6 +153,10 @@ struct DashboardApp {
 
     open_windows: Vec<OpenWindow>,
     next_window_id: u64,
+    /// The floating window most recently clicked by the user, used by F5 to
+    /// decide which window to refresh. Persists after the pointer leaves, so
+    /// F5 refreshes the window you last interacted with (like native OS focus).
+    focused_window_id: Option<u64>,
 
     runtime: tokio::runtime::Runtime,
     tx: mpsc::Sender<AppEvent>,
@@ -186,6 +192,7 @@ impl DashboardApp {
             last_refresh: None,
             open_windows: Vec::new(),
             next_window_id: 1,
+            focused_window_id: None,
             runtime: tokio::runtime::Runtime::new().expect("failed to create tokio runtime"),
             tx,
             rx,
@@ -298,7 +305,15 @@ impl DashboardApp {
             loading: true,
             open: true,
         });
+        // A freshly opened window becomes the focused one so F5 targets it
+        // immediately, before the user has clicked inside it.
+        self.focused_window_id = Some(id);
+        self.spawn_report(ctx, kind, query);
+    }
 
+    /// Kick off the background report generation for the given query, sending
+    /// the result back through the event channel.
+    fn spawn_report(&self, ctx: &egui::Context, kind: ReportKind, query: String) {
         let Some(pool) = self.pool.clone() else {
             return;
         };
@@ -361,7 +376,14 @@ impl DashboardApp {
             error: None,
             open: true,
         });
+        // A freshly opened window becomes the focused one so F5 targets it
+        // immediately, before the user has clicked inside it.
+        self.focused_window_id = Some(id);
+        self.spawn_session(ctx, auth_id);
+    }
 
+    /// Kick off the background session detail fetch for the given auth id.
+    fn spawn_session(&self, ctx: &egui::Context, auth_id: String) {
         let Some(dash) = self.dashboard.clone() else {
             return;
         };
@@ -372,6 +394,45 @@ impl DashboardApp {
             let _ = tx.send(AppEvent::SessionReady { auth_id, result });
             ctx.request_repaint();
         });
+    }
+
+    /// Re-fetch the contents of a single floating window, identified by its
+    /// numeric id. Used by the per-window Refresh button and by F5.
+    fn refresh_window(&mut self, ctx: &egui::Context, window_id: u64) {
+        let Some(idx) = self.open_windows.iter().position(|w| w.id() == window_id) else {
+            return;
+        };
+
+        // Don't stack a second refresh on top of one already in flight.
+        let already_loading = match &self.open_windows[idx] {
+            OpenWindow::Report { loading, .. } | OpenWindow::Session { loading, .. } => *loading,
+        };
+        if already_loading {
+            return;
+        }
+
+        enum Job {
+            Report(ReportKind, String),
+            Session(String),
+        }
+
+        let job = match &self.open_windows[idx] {
+            OpenWindow::Report { kind, query, .. } => Job::Report(*kind, query.clone()),
+            OpenWindow::Session { auth_id, .. } => Job::Session(auth_id.clone()),
+        };
+
+        match &mut self.open_windows[idx] {
+            OpenWindow::Report { loading, .. } => *loading = true,
+            OpenWindow::Session { loading, error, .. } => {
+                *loading = true;
+                *error = None;
+            }
+        }
+
+        match job {
+            Job::Report(kind, query) => self.spawn_report(ctx, kind, query),
+            Job::Session(auth_id) => self.spawn_session(ctx, auth_id),
+        }
     }
 
     /// Spawn the background task that LISTENs on the NOTIFY channels and
@@ -731,6 +792,19 @@ impl eframe::App for DashboardApp {
             });
 
         // --- Floating sub-windows --------------------------------------------
+        // Detect which window the user clicked this frame (if any) so we can
+        // latch it as the "focused" window. `layer_id_at` returns the true
+        // topmost interactive area under the pointer — robust even when the
+        // click lands on a child widget that consumes the interaction. The
+        // layer's `id` equals the `egui::Id` we pass to each `Window`.
+        let primary_pressed = ctx.input(|i| i.pointer.primary_pressed());
+        let clicked_layer = if primary_pressed {
+            ctx.input(|i| i.pointer.latest_pos())
+                .and_then(|p| ctx.layer_id_at(p))
+        } else {
+            None
+        };
+        let mut new_focus: Option<u64> = None;
         for w in self.open_windows.iter_mut() {
             let id = w.id();
             let mut open = w.is_open();
@@ -753,6 +827,13 @@ impl eframe::App for DashboardApp {
                         .default_height(440.0)
                         .show(&ctx, |ui| {
                             ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(!*loading, egui::Button::new("Refresh (F5)"))
+                                    .clicked()
+                                {
+                                    actions.push(Action::RefreshWindow(id));
+                                }
+                                ui.separator();
                                 if *loading {
                                     ui.spinner();
                                     ui.label("Generating report…");
@@ -776,7 +857,7 @@ impl eframe::App for DashboardApp {
                                         );
                                     });
                             }
-                        });
+                        })
                 }
                 OpenWindow::Session {
                     ip,
@@ -795,6 +876,13 @@ impl eframe::App for DashboardApp {
                         .default_height(540.0)
                         .show(&ctx, |ui| {
                             ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(!*loading, egui::Button::new("Refresh (F5)"))
+                                    .clicked()
+                                {
+                                    actions.push(Action::RefreshWindow(id));
+                                }
+                                ui.separator();
                                 ui.label(format!("User: {username}"));
                                 if let Some(st) = start_time {
                                     ui.label(format!("Started: {}", fmt_ts(*st)));
@@ -900,10 +988,30 @@ impl eframe::App for DashboardApp {
                                         }
                                     });
                             }
-                        });
+                        })
                 }
+            };
+
+            // If this window was the topmost area under the pointer when the
+            // primary button went down, it becomes the focused window.
+            if clicked_layer.is_some_and(|l| l.id == egui::Id::new(id)) {
+                new_focus = Some(id);
             }
             w.set_open(open);
+        }
+
+        if let Some(id) = new_focus {
+            self.focused_window_id = Some(id);
+        }
+
+        // F5: refresh the last-interacted ("focused") floating window, or fall
+        // back to the main dashboard refresh when none has focus.
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F5)) {
+            if let Some(id) = self.focused_window_id {
+                actions.push(Action::RefreshWindow(id));
+            } else {
+                actions.push(Action::Refresh);
+            }
         }
 
         // --- Apply queued actions --------------------------------------------
@@ -918,10 +1026,18 @@ impl eframe::App for DashboardApp {
                     username,
                     start_time,
                 } => self.open_session(&ctx, auth_id, ip, username, start_time),
+                Action::RefreshWindow(id) => self.refresh_window(&ctx, id),
             }
         }
 
         self.open_windows.retain(|w| w.is_open());
+
+        // Drop focus if the focused window was closed.
+        if let Some(fid) = self.focused_window_id {
+            if !self.open_windows.iter().any(|w| w.id() == fid) {
+                self.focused_window_id = None;
+            }
+        }
 
         if self.auto_refresh && self.pool.is_some() {
             ctx.request_repaint_after(Duration::from_millis(500));
