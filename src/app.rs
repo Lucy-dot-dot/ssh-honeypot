@@ -1,13 +1,16 @@
-use std::net::{SocketAddr, Ipv4Addr, Ipv6Addr};
-use std::path::PathBuf;
+use crate::paths::PathManager;
 use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
-use crate::paths::PathManager;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::PathBuf;
 
 // Default interfaces
 const DEFAULT_INTERFACES: [SocketAddr; 2] = [
     SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 2222),
-    SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)), 2222),
+    SocketAddr::new(
+        std::net::IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)),
+        2222,
+    ),
 ];
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -60,7 +63,11 @@ impl Default for Config {
 }
 
 #[derive(clap::Parser, Debug)]
-#[command(version, about = "A small ssh server that allows for advanced honeypot usage", long_about = "A small ssh server that allows for advanced honeypot usage. It provides a fake command interface mimicking ubuntu without any fear of malicious code execution, since no commands are actually executed. It also records all commands in a central database")]
+#[command(
+    version,
+    about = "A small ssh server that allows for advanced honeypot usage",
+    long_about = "A small ssh server that allows for advanced honeypot usage. It provides a fake command interface mimicking ubuntu without any fear of malicious code execution, since no commands are actually executed. It also records all commands in a central database"
+)]
 pub struct CliArgs {
     /// Path to configuration file
     #[arg(short = 'f', long = "config", env = "CONFIG_FILE")]
@@ -112,7 +119,7 @@ pub struct CliArgs {
     pub disable_so_reuseaddr: bool,
 
     /// Enable SFTP subsystem support
-    /// When enabled, SFTP connection attempts will be handled. 
+    /// When enabled, SFTP connection attempts will be handled.
     #[arg(long = "enable-sftp", env = "ENABLE_SFTP", action = ArgAction::SetTrue)]
     pub enable_sftp: bool,
 
@@ -121,7 +128,10 @@ pub struct CliArgs {
     pub abuse_ip_db_api_key: Option<String>,
 
     /// Interval in hours for cleaning up expired AbuseIPDB cache entries (default: 24 hours)
-    #[arg(long = "abuse-ip-cache-cleanup-hours", env = "ABUSE_IP_CACHE_CLEANUP_HOURS")]
+    #[arg(
+        long = "abuse-ip-cache-cleanup-hours",
+        env = "ABUSE_IP_CACHE_CLEANUP_HOURS"
+    )]
     pub abuse_ip_cache_cleanup_interval_hours: Option<u32>,
 
     /// Reject all authentication attempts instead of accepting them
@@ -184,20 +194,23 @@ impl App {
 
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
         let path_manager = PathManager::new();
-        
+
         // Log the paths being used
         path_manager.log_paths();
-        
+
         let cli_args = CliArgs::parse();
-        
+
         // Load configuration file
         let config = Self::load_config_file(&path_manager, cli_args.config_file.as_deref())?;
-        
+
         // Merge CLI args with config file, CLI args take precedence
         Ok(Self::merge_config(cli_args, config, path_manager))
     }
-    
-    fn load_config_file(path_manager: &PathManager, config_path: Option<&std::path::Path>) -> Result<Config, Box<dyn std::error::Error>> {
+
+    fn load_config_file(
+        path_manager: &PathManager,
+        config_path: Option<&std::path::Path>,
+    ) -> Result<Config, Box<dyn std::error::Error>> {
         let config_path = if let Some(path) = config_path {
             // Use explicit config path
             path.to_path_buf()
@@ -205,7 +218,7 @@ impl App {
             // Use PathManager's default config file
             path_manager.config_file()
         };
-        
+
         if config_path.exists() {
             let config_content = std::fs::read_to_string(&config_path)?;
             let config: Config = toml::from_str(&config_content)?;
@@ -216,7 +229,7 @@ impl App {
             Ok(Config::default())
         }
     }
-    
+
     fn merge_config(cli: CliArgs, config: Config, path_manager: PathManager) -> Self {
         // Parse interfaces from config file strings
         let config_interfaces = if let Some(interface_strings) = config.interfaces {
@@ -226,64 +239,98 @@ impl App {
                 .collect()
         } else {
             Vec::new()
-    };
+        };
 
         Self {
-            interfaces: cli.interfaces
+            interfaces: cli
+                .interfaces
                 .filter(|v| !v.is_empty())
-                .or_else(|| if config_interfaces.is_empty() { None } else { Some(config_interfaces) })
+                .or_else(|| {
+                    if config_interfaces.is_empty() {
+                        None
+                    } else {
+                        Some(config_interfaces)
+                    }
+                })
                 .unwrap_or(DEFAULT_INTERFACES.to_vec()),
-            
-            database_url: cli.database_url
-                .or(config.database_url)
-                .unwrap_or_else(|| "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot".to_string()),
-            
-            disable_cli_interface: Self::merge_clap_boolean_with_config(cli.disable_cli_interface, config.disable_cli_interface),
-            
-            disable_exec: Self::merge_clap_boolean_with_config(cli.disable_exec, config.disable_exec),
-            
-            authentication_banner: cli.authentication_banner
-                .or(config.authentication_banner),
-            
+
+            database_url: cli.database_url.or(config.database_url).unwrap_or_else(|| {
+                "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot".to_string()
+            }),
+
+            disable_cli_interface: Self::merge_clap_boolean_with_config(
+                cli.disable_cli_interface,
+                config.disable_cli_interface,
+            ),
+
+            disable_exec: Self::merge_clap_boolean_with_config(
+                cli.disable_exec,
+                config.disable_exec,
+            ),
+
+            authentication_banner: cli.authentication_banner.or(config.authentication_banner),
+
             tarpit: Self::merge_clap_boolean_with_config(cli.tarpit, config.tarpit),
-            
-            disable_base_tar_gz_loading: Self::merge_clap_boolean_with_config(cli.disable_base_tar_gz_loading, config.disable_base_tar_gz_loading),
-            
-            base_tar_gz_path: cli.base_tar_gz_path
+
+            disable_base_tar_gz_loading: Self::merge_clap_boolean_with_config(
+                cli.disable_base_tar_gz_loading,
+                config.disable_base_tar_gz_loading,
+            ),
+
+            base_tar_gz_path: cli
+                .base_tar_gz_path
                 .or_else(|| config.base_tar_gz_path.map(PathBuf::from))
                 .unwrap_or_else(|| path_manager.base_tar_gz_file()),
-            
-            key_folder: cli.key_folder
+
+            key_folder: cli
+                .key_folder
                 .or_else(|| config.key_folder.map(PathBuf::from))
                 .unwrap_or_else(|| path_manager.key_dir.clone()),
-            
-            disable_so_reuseport: Self::merge_clap_boolean_with_config(cli.disable_so_reuseport, config.disable_so_reuseport),
-            
-            disable_so_reuseaddr: Self::merge_clap_boolean_with_config(cli.disable_so_reuseaddr, config.disable_so_reuseaddr),
-            
+
+            disable_so_reuseport: Self::merge_clap_boolean_with_config(
+                cli.disable_so_reuseport,
+                config.disable_so_reuseport,
+            ),
+
+            disable_so_reuseaddr: Self::merge_clap_boolean_with_config(
+                cli.disable_so_reuseaddr,
+                config.disable_so_reuseaddr,
+            ),
+
             enable_sftp: Self::merge_clap_boolean_with_config(cli.enable_sftp, config.enable_sftp),
-            
-            abuse_ip_db_api_key: cli.abuse_ip_db_api_key
-                .or(config.abuse_ip_db_api_key),
-            
-            abuse_ip_cache_cleanup_interval_hours: cli.abuse_ip_cache_cleanup_interval_hours
+
+            abuse_ip_db_api_key: cli.abuse_ip_db_api_key.or(config.abuse_ip_db_api_key),
+
+            abuse_ip_cache_cleanup_interval_hours: cli
+                .abuse_ip_cache_cleanup_interval_hours
                 .or(config.abuse_ip_cache_cleanup_interval_hours)
                 .unwrap_or(24),
-            
-            reject_all_auth: Self::merge_clap_boolean_with_config(cli.reject_all_auth, config.reject_all_auth),
-            
+
+            reject_all_auth: Self::merge_clap_boolean_with_config(
+                cli.reject_all_auth,
+                config.reject_all_auth,
+            ),
+
             path_manager,
-            disable_ipapi: Self::merge_clap_boolean_with_config(cli.disable_ipapi, config.disable_ipapi),
-            
-            server_id: cli.server_id
+            disable_ipapi: Self::merge_clap_boolean_with_config(
+                cli.disable_ipapi,
+                config.disable_ipapi,
+            ),
+
+            server_id: cli
+                .server_id
                 .or(config.server_id)
                 .unwrap_or_else(|| "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.4".to_string()),
-            
-            welcome_message: cli.welcome_message
+
+            welcome_message: cli
+                .welcome_message
                 .or(config.welcome_message)
-                .unwrap_or_else(|| "Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)".to_string()),
-            
-            hostname: cli.hostname
+                .unwrap_or_else(|| {
+                    "Ubuntu 20.04.4 LTS (GNU/Linux 5.4.0-109-generic x86_64)".to_string()
+                }),
+
+            hostname: cli
+                .hostname
                 .or(config.hostname)
                 .unwrap_or_else(|| "server01".to_string()),
         }

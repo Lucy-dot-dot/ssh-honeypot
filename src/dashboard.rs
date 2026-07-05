@@ -105,6 +105,16 @@ pub struct TopEntry {
     pub count: i64,
 }
 
+/// An IP the operator flagged as "reported" from the dashboard. The flag is
+/// purely a UI annotation (a marker drawn in front of the IP across every
+/// feed); the underlying auth/session data is unchanged.
+#[derive(Debug, Clone, FromRow)]
+pub struct ReportedIp {
+    pub ip: String,
+    pub reported_at: DateTime<Utc>,
+    pub notes: String,
+}
+
 /// A point-in-time snapshot of dashboard activity.
 #[derive(Debug, Clone, Default)]
 pub struct DashboardSnapshot {
@@ -119,6 +129,10 @@ pub struct DashboardSnapshot {
     pub top_ips: Vec<TopEntry>,
     pub top_passwords: Vec<TopEntry>,
     pub top_usernames: Vec<TopEntry>,
+    /// Every reported-IP flag (see [`ReportedIp`]). Carried in the snapshot so
+    /// the markers repaint in near-real-time alongside the other NOTIFY-driven
+    /// feeds.
+    pub reported_ips: Vec<ReportedIp>,
 }
 
 /// Just the three top-N aggregate lists plus when they were computed. This is
@@ -210,10 +224,14 @@ impl Dashboard {
     /// When the cached top-N aggregates were last computed (if ever).
     pub fn top_fetched_at(&self) -> Option<DateTime<Utc>> {
         self.cache.lock().ok().and_then(|c| {
-            [c.ips.fetched_at, c.passwords.fetched_at, c.usernames.fetched_at]
-                .into_iter()
-                .flatten()
-                .max()
+            [
+                c.ips.fetched_at,
+                c.passwords.fetched_at,
+                c.usernames.fetched_at,
+            ]
+            .into_iter()
+            .flatten()
+            .max()
         })
     }
 
@@ -229,6 +247,7 @@ impl Dashboard {
             top_ips,
             top_passwords,
             top_usernames,
+            reported_ips,
         ) = tokio::try_join!(
             self.recent_connections(20),
             self.recent_auths(40),
@@ -237,6 +256,7 @@ impl Dashboard {
             self.top_ips(15),
             self.top_passwords(15),
             self.top_usernames(15),
+            self.reported_ips(),
         )?;
 
         Ok(DashboardSnapshot {
@@ -249,6 +269,7 @@ impl Dashboard {
             top_ips,
             top_passwords,
             top_usernames,
+            reported_ips,
         })
     }
 
@@ -269,11 +290,12 @@ impl Dashboard {
     /// milliseconds; pair it with [`Self::refresh_top`] to (re)compute the
     /// expensive aggregates in the background.
     pub async fn main_snapshot(&self) -> Result<DashboardSnapshot, sqlx::Error> {
-        let (recent_connections, recent_auths, live_sessions, recent_sessions) = tokio::try_join!(
+        let (recent_connections, recent_auths, live_sessions, recent_sessions, reported_ips) = tokio::try_join!(
             self.recent_connections(20),
             self.recent_auths(40),
             self.live_sessions(),
             self.recent_sessions(20),
+            self.reported_ips(),
         )?;
 
         let top = self.top_from_cache();
@@ -287,6 +309,7 @@ impl Dashboard {
             top_ips: top.ips,
             top_passwords: top.passwords,
             top_usernames: top.usernames,
+            reported_ips,
         })
     }
 
@@ -361,10 +384,7 @@ impl Dashboard {
     }
 
     /// Most recently-ended sessions with a command count.
-    pub async fn recent_sessions(
-        &self,
-        limit: i64,
-    ) -> Result<Vec<EndedSessionRow>, sqlx::Error> {
+    pub async fn recent_sessions(&self, limit: i64) -> Result<Vec<EndedSessionRow>, sqlx::Error> {
         sqlx::query_as::<_, EndedSessionRow>(
             r#"
             SELECT
@@ -388,6 +408,57 @@ impl Dashboard {
         .bind(limit)
         .fetch_all(&self.pool)
         .await
+    }
+
+    /// All reported IPs, newest report first.
+    pub async fn reported_ips(&self) -> Result<Vec<ReportedIp>, sqlx::Error> {
+        sqlx::query_as::<_, ReportedIp>(
+            r#"
+            SELECT host(ip) AS ip, reported_at, notes
+            FROM reported_ips
+            ORDER BY reported_at DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Flag an IP as reported, storing free-form notes. Re-reporting an IP
+    /// refreshes its timestamp and notes (upsert). Returns the row as stored.
+    pub async fn add_reported_ip(&self, ip: &str, notes: &str) -> Result<ReportedIp, sqlx::Error> {
+        sqlx::query_as::<_, ReportedIp>(
+            r#"
+            INSERT INTO reported_ips (ip, notes)
+            VALUES ($1::inet, $2)
+            ON CONFLICT (ip) DO UPDATE SET
+                reported_at = NOW(),
+                notes = EXCLUDED.notes
+            RETURNING host(ip) AS ip, reported_at, notes
+            "#,
+        )
+        .bind(ip)
+        .bind(notes)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    /// Remove the reported-IP flag for `ip` (no-op if it was not flagged).
+    pub async fn remove_reported_ip(&self, ip: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM reported_ips WHERE ip = $1::inet")
+            .bind(ip)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Update only the notes for an already-reported IP.
+    pub async fn update_reported_ip_notes(&self, ip: &str, notes: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE reported_ips SET notes = $2 WHERE ip = $1::inet")
+            .bind(ip)
+            .bind(notes)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// Top source IPs by auth-attempt count (cached with a TTL).

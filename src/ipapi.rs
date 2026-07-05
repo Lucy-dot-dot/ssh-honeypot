@@ -1,13 +1,13 @@
+use crate::db::{get_ipapi_check, record_ipapi_check};
+use chrono::{DateTime, Duration, Utc};
+use reqwest::tls::Version;
+use reqwest::{Certificate, Method, StatusCode};
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc, Duration};
-use reqwest::{Certificate, Method, StatusCode};
-use reqwest::tls::Version;
-use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use webpki_root_certs::TLS_SERVER_ROOT_CERTS;
-use crate::db::{record_ipapi_check, get_ipapi_check};
 
 const DEFAULT_CACHE_TTL_HOURS: u8 = 24;
 
@@ -73,9 +73,11 @@ pub struct IpApiResponse {
 
 impl Client {
     pub fn new(pool: PgPool, cache_ttl_hours: Option<u8>) -> Self {
-        let certs = TLS_SERVER_ROOT_CERTS.iter().map(|cert| Certificate::from_der(cert).unwrap()).collect::<Vec<Certificate>>();
+        let certs = TLS_SERVER_ROOT_CERTS
+            .iter()
+            .map(|cert| Certificate::from_der(cert).unwrap())
+            .collect::<Vec<Certificate>>();
         Self {
-
             client: reqwest::Client::builder()
                 .min_tls_version(Version::TLS_1_2)
                 .deflate(true)
@@ -100,41 +102,47 @@ impl Client {
             }
         }
         drop(cache); // Release read lock
-        
+
         // Check database cache
         match get_ipapi_check(&self.pool, ip_address, self.cache_ttl_hours).await {
             Ok(Some((timestamp, response))) => {
                 log::debug!("IPAPI database cache hit for IP: {}", ip_address);
-                
+
                 // Update memory cache
                 let mut cache = self.memory_cache.write().await;
-                cache.insert(ip_address.to_string(), CachedResult {
-                    response: response.clone(),
-                    cached_at: timestamp,
-                });
-                
+                cache.insert(
+                    ip_address.to_string(),
+                    CachedResult {
+                        response: response.clone(),
+                        cached_at: timestamp,
+                    },
+                );
+
                 return Ok(response);
-            },
+            }
             Ok(None) => {
                 // No cache entry or expired - continue to API call
-            },
+            }
             Err(e) => {
                 log::error!("Failed to query IPAPI cache: {}", e);
                 // Continue to API call on database error
             }
         }
-        
+
         // Cache miss or expired, make API call
         log::debug!("IPAPI cache miss for IP: {}, making API call", ip_address);
         let response = self.check_ip_api(ip_address).await?;
-        
+
         // Update memory cache
         let mut cache = self.memory_cache.write().await;
         let now = Utc::now();
-        cache.insert(ip_address.to_string(), CachedResult {
-            response: response.clone(),
-            cached_at: now,
-        });
+        cache.insert(
+            ip_address.to_string(),
+            CachedResult {
+                response: response.clone(),
+                cached_at: now,
+            },
+        );
         drop(cache);
 
         let json_serialized_response = match serde_json::to_string(&response) {
@@ -142,7 +150,7 @@ impl Client {
             Err(e) => {
                 log::error!("Failed to serialize IPAPI response: {}", e);
                 log::error!("Unable to cache IPAPI result: {:?}", response);
-                return Ok(response)
+                return Ok(response);
             }
         };
 
@@ -164,10 +172,12 @@ impl Client {
             Some(response.org.clone()),
             Some(response.r#as.clone()),
             json_serialized_response,
-        ).await {
+        )
+        .await
+        {
             log::error!("Failed to cache IPAPI result in database: {}", e);
         }
-        
+
         Ok(response)
     }
 
@@ -175,8 +185,9 @@ impl Client {
         // Apparently ip-api.com doesn't support https for free requests. Wtf.
         // FIXME: Use a different API provider
         let url = format!("http://ip-api.com/json/{}", ip_address);
-        let res = self.client.
-            request(Method::GET, url)
+        let res = self
+            .client
+            .request(Method::GET, url)
             .header("Accept", "application/json")
             .send()
             .await
@@ -189,7 +200,11 @@ impl Client {
 
         // Check for other HTTP errors
         if !res.status().is_success() {
-            return Err(IpApiError::Other(format!("HTTP {}: {}", res.status(), res.status().canonical_reason().unwrap_or("Unknown error"))));
+            return Err(IpApiError::Other(format!(
+                "HTTP {}: {}",
+                res.status(),
+                res.status().canonical_reason().unwrap_or("Unknown error")
+            )));
         }
 
         res.json().await.map_err(IpApiError::NetworkError)

@@ -1,13 +1,18 @@
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use ssh_honeypot::db::initialize_database_pool;
-use ssh_honeypot::report::{ReportGenerator, ReportFormat};
+use ssh_honeypot::report::{ReportFormat, ReportGenerator};
 use std::path::PathBuf;
-
 
 #[derive(ClapArgs, Debug, Clone)]
 pub struct CommonArgs {
     /// Report format (text, html, markdown)
-    #[arg(short, long, default_value = "text", env = "REPORT_FORMAT", global = true)]
+    #[arg(
+        short,
+        long,
+        default_value = "text",
+        env = "REPORT_FORMAT",
+        global = true
+    )]
     format: ReportFormat,
 
     /// Output file path (if not specified, prints to stdout)
@@ -15,7 +20,13 @@ pub struct CommonArgs {
     output: Option<PathBuf>,
 
     /// PostgreSQL database connection URL
-    #[arg(short, long, env = "DATABASE_URL", default_value = "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot", global = true)]
+    #[arg(
+        short,
+        long,
+        env = "DATABASE_URL",
+        default_value = "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot",
+        global = true
+    )]
     database_url: String,
 
     /// Include geolocation, network and threat-intelligence sections in IP text reports
@@ -38,14 +49,18 @@ pub enum ReportMode {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "SSH Honeypot Report Generator", long_about = "Generate reports for SSH honeypot data based on IP addresses or passwords")]
+#[command(
+    version,
+    about = "SSH Honeypot Report Generator",
+    long_about = "Generate reports for SSH honeypot data based on IP addresses or passwords"
+)]
 struct Args {
     /// Report mode (ip or password)
     #[command(subcommand)]
     mode: ReportMode,
 
     #[command(flatten)]
-    args: CommonArgs
+    args: CommonArgs,
 }
 
 #[tokio::main]
@@ -68,7 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?
         }
         ReportMode::Password { password } => {
-            generator.generate_password_report(&password, &args.args.format).await?
+            generator
+                .generate_password_report(&password, &args.args.format)
+                .await?
         }
     };
 

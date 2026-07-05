@@ -85,10 +85,10 @@ println!("Retrieved File: {:?}", file);
 
 This module creates a lightweight simulation of a file system, enabling basic operations such as navigation, file creation, and directory management.
 */
-use std::io::{Error, ErrorKind, Read};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use flate2::read::GzDecoder;
+use std::collections::{HashMap, HashSet};
+use std::io::{Error, ErrorKind, Read};
+use std::sync::Arc;
 use tar::Archive;
 
 #[derive(Default, Copy, Clone, Debug)]
@@ -162,7 +162,6 @@ impl FileEntryView {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub enum FileContent {
     Directory(Vec<DirEntry>),
@@ -229,13 +228,15 @@ impl FileSystem {
 
     /// Get a reference to inode data
     fn get_inode(&self, inode_number: u64) -> std::io::Result<&InodeData> {
-        self.inodes.get(&inode_number)
+        self.inodes
+            .get(&inode_number)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, "Inode not found"))
     }
 
     /// Get a mutable reference to inode data
     fn get_inode_mut(&mut self, inode_number: u64) -> std::io::Result<&mut InodeData> {
-        self.inodes.get_mut(&inode_number)
+        self.inodes
+            .get_mut(&inode_number)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, "Inode not found"))
     }
 
@@ -297,10 +298,7 @@ impl FileSystem {
             return Ok(self.root_inode);
         }
 
-        let components: Vec<&str> = sanitized
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect();
+        let components: Vec<&str> = sanitized.split('/').filter(|s| !s.is_empty()).collect();
 
         let mut current_inode = self.root_inode;
         let mut current_path = String::new();
@@ -308,8 +306,7 @@ impl FileSystem {
         for (i, component) in components.iter().enumerate() {
             // Follow symlinks on current_inode before component lookup (skip root)
             if i > 0 {
-                current_inode =
-                    self.resolve_symlink_at(current_inode, &current_path, visited)?;
+                current_inode = self.resolve_symlink_at(current_inode, &current_path, visited)?;
             }
 
             let inode_data = self.get_inode(current_inode)?;
@@ -550,7 +547,10 @@ impl FileSystem {
         };
 
         if file_name.is_empty() {
-            return Err(Error::new(ErrorKind::InvalidInput, "File name cannot be empty"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "File name cannot be empty",
+            ));
         }
 
         // Validate parent exists, is a directory, and entry doesn't already exist
@@ -703,12 +703,11 @@ impl FileSystem {
                         target.clone()
                     } else {
                         // Handle relative paths by combining with parent directory
-                        let parent = current_path.rsplit_once('/').map(|(p, _)| p)
-                            .unwrap_or("");
+                        let parent = current_path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
                         let parent = if parent.is_empty() { "/" } else { parent };
                         self.resolve_absolute_path(&format!("{}/{}", parent, target))
                     };
-                },
+                }
                 _ => return Ok(entry), // Found non-symlink entry
             }
         }
@@ -728,7 +727,10 @@ impl FileSystem {
 
         // Check if destination already exists
         if self.get_file(&sanitized_dest).is_ok() {
-            return Err(Error::new(ErrorKind::AlreadyExists, "Destination already exists"));
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                "Destination already exists",
+            ));
         }
 
         // Resolve source inode (follow symlinks)
@@ -743,7 +745,12 @@ impl FileSystem {
                 let parent_path = if parent.is_empty() { "/" } else { parent };
                 (parent_path.to_string(), name.to_string())
             }
-            None => return Err(Error::new(ErrorKind::InvalidInput, "Invalid destination path")),
+            None => {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Invalid destination path",
+                ));
+            }
         };
 
         // Add entry to destination parent
@@ -777,7 +784,10 @@ impl FileSystem {
         }
 
         if sanitized_source == "/" {
-            return Err(Error::new(ErrorKind::InvalidInput, "Cannot move root directory"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Cannot move root directory",
+            ));
         }
 
         self.copy_file(&sanitized_source, &sanitized_dest)?;
@@ -799,7 +809,10 @@ impl FileSystem {
         }
 
         if self.get_file(&sanitized_link).is_ok() {
-            return Err(Error::new(ErrorKind::AlreadyExists, "Link path already exists"));
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                "Link path already exists",
+            ));
         }
 
         // Get target inode number (follow symlinks to the real target)
@@ -1002,7 +1015,12 @@ impl FileSystem {
                         log::trace!("Created hard link: {} -> {}", path_str, target);
                     }
                     Err(err) => {
-                        log::warn!("Failed to create hard link {} -> {}: {}", path_str, target, err);
+                        log::warn!(
+                            "Failed to create hard link {} -> {}: {}",
+                            path_str,
+                            target,
+                            err
+                        );
                     }
                 }
             } else {
@@ -1033,7 +1051,10 @@ impl FileSystem {
         self.inodes = snapshot.inodes.clone();
         self.next_inode = snapshot.next_inode;
         self.root_inode = snapshot.root_inode;
-        log::debug!("Filesystem restored from snapshot ({} inodes)", self.inodes.len());
+        log::debug!(
+            "Filesystem restored from snapshot ({} inodes)",
+            self.inodes.len()
+        );
         Ok(())
     }
 }
@@ -1322,7 +1343,7 @@ mod tests {
         match &link.file_content {
             Some(FileContent::SymbolicLink(target)) => {
                 assert_eq!(target, "/target.txt");
-            },
+            }
             _ => {
                 assert!(false, "Should be a symbolic link");
             }
@@ -1345,7 +1366,7 @@ mod tests {
         match &symlink.file_content {
             Some(FileContent::SymbolicLink(target)) => {
                 assert_eq!(target, "/etc/passwd");
-            },
+            }
             _ => {
                 assert!(false, "Should be a symbolic link");
             }
@@ -1395,10 +1416,13 @@ mod tests {
         let copy = fs.get_file("/copy.txt").unwrap();
 
         match (&original.file_content, &copy.file_content) {
-            (Some(FileContent::RegularFile(orig_data)), Some(FileContent::RegularFile(copy_data))) => {
+            (
+                Some(FileContent::RegularFile(orig_data)),
+                Some(FileContent::RegularFile(copy_data)),
+            ) => {
                 assert_eq!(orig_data, copy_data);
                 assert_eq!(copy.name, "copy.txt");
-            },
+            }
             _ => panic!("Files should be regular files"),
         }
     }
@@ -1424,7 +1448,7 @@ mod tests {
                 assert_eq!(entries.len(), 2);
                 assert!(entries.iter().any(|e| e.name == "file1.txt"));
                 assert!(entries.iter().any(|e| e.name == "file2.txt"));
-            },
+            }
             _ => panic!("Should be a directory"),
         }
     }
@@ -1495,7 +1519,7 @@ mod tests {
             Some(FileContent::Directory(entries)) => {
                 assert_eq!(entries.len(), 1);
                 assert_eq!(entries[0].name, "file.txt");
-            },
+            }
             _ => panic!("Should be a directory"),
         }
     }
@@ -1593,10 +1617,13 @@ mod tests {
         let link = fs.get_file("/link.txt").unwrap();
 
         match (&original.file_content, &link.file_content) {
-            (Some(FileContent::RegularFile(orig_data)), Some(FileContent::RegularFile(link_data))) => {
+            (
+                Some(FileContent::RegularFile(orig_data)),
+                Some(FileContent::RegularFile(link_data)),
+            ) => {
                 assert_eq!(orig_data, link_data);
                 assert_eq!(orig_data.as_slice(), b"Hello, Hard Links!");
-            },
+            }
             _ => panic!("Both should be regular files"),
         }
 
@@ -1624,7 +1651,7 @@ mod tests {
         match &file2.file_content {
             Some(FileContent::RegularFile(data)) => {
                 assert_eq!(data.as_slice(), b"Modified content");
-            },
+            }
             _ => panic!("Should be a regular file"),
         }
     }
@@ -1649,7 +1676,7 @@ mod tests {
         match &file2.file_content {
             Some(FileContent::RegularFile(data)) => {
                 assert_eq!(data.as_slice(), b"Test data");
-            },
+            }
             _ => panic!("Should be a regular file"),
         }
 

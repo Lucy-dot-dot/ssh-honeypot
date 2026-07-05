@@ -1,7 +1,7 @@
-use async_trait::async_trait;
 use super::command_trait::{Command, CommandError, CommandResult};
 use super::context::CommandContext;
 use crate::shell::filesystem::fs2::FileContent;
+use async_trait::async_trait;
 
 /// The shell `test` / `[` builtin. Returns success (Ok) when the condition is
 /// true, `SilentFailure` (exit 1, no output) when false.
@@ -45,7 +45,9 @@ async fn eval_test(a: &[String], context: &mut CommandContext) -> bool {
             "-z" => a[1].is_empty(),
             "-n" => !a[1].is_empty(),
             "!" => !eval_inner_sync(&a[1..]),
-            "-e" | "-f" | "-d" | "-r" | "-s" | "-w" | "-x" => path_check(&a[0], &a[1], context).await,
+            "-e" | "-f" | "-d" | "-r" | "-s" | "-w" | "-x" => {
+                path_check(&a[0], &a[1], context).await
+            }
             _ => false,
         },
         3 => {
@@ -76,8 +78,10 @@ fn eval_inner_sync(a: &[String]) -> bool {
     match a.len() {
         0 => false,
         1 => !a[0].is_empty(),
-        2 => matches!(a[0].as_str(), "-z") && a[1].is_empty()
-            || matches!(a[0].as_str(), "-n") && !a[1].is_empty(),
+        2 => {
+            matches!(a[0].as_str(), "-z") && a[1].is_empty()
+                || matches!(a[0].as_str(), "-n") && !a[1].is_empty()
+        }
         3 => {
             let (l, op, r) = (&a[0], &a[1], &a[2]);
             match op.as_str() {

@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use directories::ProjectDirs;
 use std::fs;
+use std::path::PathBuf;
 
 /// Centralized path management for the SSH honeypot
 /// Handles XDG directories and fallbacks consistently across the application
@@ -27,15 +27,21 @@ impl PathManager {
 
             // Test if we can actually create the directories
             if let Err(_) = fs::create_dir_all(&config_dir) {
-                log::warn!("Cannot create XDG config directory {config_dir:?}, falling back to current directory");
+                log::warn!(
+                    "Cannot create XDG config directory {config_dir:?}, falling back to current directory"
+                );
                 return Self::new_fallback();
             }
             if let Err(_) = fs::create_dir_all(&data_dir) {
-                log::warn!("Cannot create XDG data directory {data_dir:?}, falling back to current directory");
+                log::warn!(
+                    "Cannot create XDG data directory {data_dir:?}, falling back to current directory"
+                );
                 return Self::new_fallback();
             }
             if let Err(_) = fs::create_dir_all(&key_dir) {
-                log::warn!("Cannot create XDG key directory {key_dir:?}, falling back to current directory");
+                log::warn!(
+                    "Cannot create XDG key directory {key_dir:?}, falling back to current directory"
+                );
                 return Self::new_fallback();
             }
 
@@ -61,7 +67,7 @@ impl PathManager {
         let config_dir = base_dir.clone();
         let data_dir = base_dir.clone();
         let key_dir = base_dir.join("keys");
-        
+
         Self {
             _base_dir: base_dir,
             config_dir,
@@ -69,7 +75,7 @@ impl PathManager {
             data_dir,
         }
     }
-    
+
     /// Get the default configuration file path
     pub fn config_file(&self) -> PathBuf {
         self.config_dir.join("config.toml")
@@ -79,7 +85,7 @@ impl PathManager {
     pub fn base_tar_gz_file(&self) -> PathBuf {
         self.data_dir.join("base.tar.gz")
     }
-    
+
     /// Log the current directory configuration
     pub fn log_paths(&self) {
         log::info!("Path configuration:");
@@ -95,4 +101,3 @@ impl Default for PathManager {
         Self::new()
     }
 }
-

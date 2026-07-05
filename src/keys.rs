@@ -1,8 +1,8 @@
+use crate::app::App;
+use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PrivateKey};
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
-use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PrivateKey};
-use crate::app::App;
 
 pub struct Keys {
     pub ed25519: PrivateKey,
@@ -15,17 +15,28 @@ pub fn load_or_generate_keys(app: &App) -> Keys {
     let ed_path = key_dir.join("ed25519");
     let rsa_path = key_dir.join("rsa");
     let ecdsa_path = key_dir.join("ecdsa");
-    
-    log::debug!("Loading keys from: {}, {}, {}", 
-        ed_path.display(), 
-        rsa_path.display(), 
+
+    log::debug!(
+        "Loading keys from: {}, {}, {}",
+        ed_path.display(),
+        rsa_path.display(),
         ecdsa_path.display()
     );
 
     let ed_key = load_or_create_key(ed_path, Algorithm::Ed25519);
-    let rsa_key = load_or_create_key(rsa_path, Algorithm::Rsa { hash: Some(HashAlg::Sha512) });
-    let ecdsa_key = load_or_create_key(ecdsa_path, Algorithm::Ecdsa { curve: EcdsaCurve::NistP521 });
-    
+    let rsa_key = load_or_create_key(
+        rsa_path,
+        Algorithm::Rsa {
+            hash: Some(HashAlg::Sha512),
+        },
+    );
+    let ecdsa_key = load_or_create_key(
+        ecdsa_path,
+        Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP521,
+        },
+    );
+
     Keys {
         ed25519: ed_key,
         rsa: rsa_key,
@@ -34,47 +45,53 @@ pub fn load_or_generate_keys(app: &App) -> Keys {
 }
 
 fn load_or_create_key(key_file_path: PathBuf, algorithm: Algorithm) -> PrivateKey {
-    log::debug!("Loading key from: {} with algorithm {}", key_file_path.display(), algorithm);
+    log::debug!(
+        "Loading key from: {} with algorithm {}",
+        key_file_path.display(),
+        algorithm
+    );
     match OpenOptions::new().read(true).open(key_file_path.clone()) {
-        Ok(mut keyfile) => {
-            match keyfile.metadata() {
-                Ok(metadata) => {
-                    let size = metadata.len();
-                    if size == 0 {
-                        log::warn!("Key file '{}' is empty", key_file_path.display());
-                        let key = PrivateKey::random(&mut rand::rng(), algorithm).unwrap();
-                        match std::fs::write(key_file_path, key.to_bytes().unwrap()) {
-                            Ok(_) => log::debug!("Wrote key to file"),
-                            Err(err) => log::warn!("Error when writing key to file: {err}")
-                        };
-                        key
-                    } else {
-                        let mut buffer = Vec::with_capacity(size as usize);
-                        match keyfile.read_to_end(&mut buffer) {
-                            Ok(_) => {
-                                let key = match PrivateKey::from_bytes(buffer.as_slice()) {
-                                    Ok(key) => key,
-                                    Err(err) => {
-                                        log::warn!("Error when reading key file: {err}. Creating ephemeral key");
-                                        PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
-                                    }
-                                };
-                                log::debug!("Loaded key");
-                                key
-                            }
-                            Err(err) => {
-                                log::warn!("Error when reading key file: {err}. Creating ephemeral key");
-                                PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
-                            }
+        Ok(mut keyfile) => match keyfile.metadata() {
+            Ok(metadata) => {
+                let size = metadata.len();
+                if size == 0 {
+                    log::warn!("Key file '{}' is empty", key_file_path.display());
+                    let key = PrivateKey::random(&mut rand::rng(), algorithm).unwrap();
+                    match std::fs::write(key_file_path, key.to_bytes().unwrap()) {
+                        Ok(_) => log::debug!("Wrote key to file"),
+                        Err(err) => log::warn!("Error when writing key to file: {err}"),
+                    };
+                    key
+                } else {
+                    let mut buffer = Vec::with_capacity(size as usize);
+                    match keyfile.read_to_end(&mut buffer) {
+                        Ok(_) => {
+                            let key = match PrivateKey::from_bytes(buffer.as_slice()) {
+                                Ok(key) => key,
+                                Err(err) => {
+                                    log::warn!(
+                                        "Error when reading key file: {err}. Creating ephemeral key"
+                                    );
+                                    PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
+                                }
+                            };
+                            log::debug!("Loaded key");
+                            key
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "Error when reading key file: {err}. Creating ephemeral key"
+                            );
+                            PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
                         }
                     }
                 }
-                Err(err) => {
-                    log::warn!("Error when reading key file: {err}. Creating ephemeral key");
-                    PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
-                }
             }
-        }
+            Err(err) => {
+                log::warn!("Error when reading key file: {err}. Creating ephemeral key");
+                PrivateKey::random(&mut rand::rng(), algorithm).unwrap()
+            }
+        },
         Err(err) => {
             match err.kind() {
                 ErrorKind::PermissionDenied => {
@@ -87,9 +104,9 @@ fn load_or_create_key(key_file_path: PathBuf, algorithm: Algorithm) -> PrivateKe
                     let key = PrivateKey::random(&mut rand::rng(), algorithm).unwrap();
                     match std::fs::write(key_file_path, key.to_bytes().unwrap()) {
                         Ok(_) => log::debug!("Wrote key to new file"),
-                        Err(err) => log::warn!("Error when writing key to file: {err}")
+                        Err(err) => log::warn!("Error when writing key to file: {err}"),
                     };
-                    return key
+                    return key;
                 }
                 _ => {
                     log::warn!("Error when opening key file: {err}. Creating ephemeral key");

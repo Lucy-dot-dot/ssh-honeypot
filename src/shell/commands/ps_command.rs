@@ -1,8 +1,8 @@
-use async_trait::async_trait;
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
+use async_trait::async_trait;
 use chrono::{DateTime, Duration, Local};
-use rand::{rng, RngExt};
+use rand::{RngExt, rng};
 
 /// Categorizes a simulated process so its randomized resource usage looks realistic.
 #[derive(Clone, Copy)]
@@ -143,7 +143,8 @@ impl Command for PsCommand {
         -t, --tty               show processes attached to specified terminals\n\
         -x, --no-tty            show processes not attached to a terminal\n\
         --help                  display this help and exit\n\
-        --version               output version information and exit\n".to_string()
+        --version               output version information and exit\n"
+            .to_string()
     }
 
     fn version(&self) -> String {
@@ -182,7 +183,12 @@ impl PsCommand {
             (2, "root", "[kthreadd]", ProcessType::KernelThread),
             (3, "root", "[rcu_gp]", ProcessType::KernelThread),
             (4, "root", "[rcu_par_gp]", ProcessType::KernelThread),
-            (6, "root", "[kworker/0:0H-kblockd]", ProcessType::KernelThread),
+            (
+                6,
+                "root",
+                "[kworker/0:0H-kblockd]",
+                ProcessType::KernelThread,
+            ),
             (8, "root", "[mm_percpu_wq]", ProcessType::KernelThread),
             (9, "root", "[ksoftirqd/0]", ProcessType::KernelThread),
             (10, "root", "[rcu_tasks_rude_]", ProcessType::KernelThread),
@@ -194,7 +200,12 @@ impl PsCommand {
             (16, "root", "[idle_inject/1]", ProcessType::KernelThread),
             (17, "root", "[migration/1]", ProcessType::KernelThread),
             (18, "root", "[ksoftirqd/1]", ProcessType::KernelThread),
-            (20, "root", "[kworker/1:0H-kblockd]", ProcessType::KernelThread),
+            (
+                20,
+                "root",
+                "[kworker/1:0H-kblockd]",
+                ProcessType::KernelThread,
+            ),
             (22, "root", "[kdevtmpfs]", ProcessType::KernelThread),
             (23, "root", "[netns]", ProcessType::KernelThread),
             (24, "root", "[rcu_tasks_kthre]", ProcessType::KernelThread),
@@ -233,11 +244,36 @@ impl PsCommand {
             (191, "root", "[ext4-rsv-conver]", ProcessType::KernelThread),
             (192, "root", "[ipv6_addrconf]", ProcessType::KernelThread),
             // --- Core systemd / early-boot daemons ---
-            (260, "root", "/lib/systemd/systemd-journald", ProcessType::SystemdDaemon),
-            (275, "root", "/lib/systemd/systemd-udevd", ProcessType::SystemdDaemon),
-            (285, "systemd+", "/lib/systemd/systemd-resolved", ProcessType::SystemdDaemon),
-            (290, "systemd+", "/lib/systemd/systemd-networkd", ProcessType::SystemdDaemon),
-            (300, "systemd+", "/lib/systemd/systemd-timesyncd", ProcessType::SystemdDaemon),
+            (
+                260,
+                "root",
+                "/lib/systemd/systemd-journald",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                275,
+                "root",
+                "/lib/systemd/systemd-udevd",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                285,
+                "systemd+",
+                "/lib/systemd/systemd-resolved",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                290,
+                "systemd+",
+                "/lib/systemd/systemd-networkd",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                300,
+                "systemd+",
+                "/lib/systemd/systemd-timesyncd",
+                ProcessType::SystemdDaemon,
+            ),
             (305, "root", "/usr/sbin/cron -f", ProcessType::SystemdDaemon),
             (
                 310,
@@ -245,31 +281,136 @@ impl PsCommand {
                 "/usr/bin/dbus-daemon --system --address=systemd --nofork --nopidfile",
                 ProcessType::SystemdDaemon,
             ),
-            (315, "root", "/lib/systemd/systemd-logind", ProcessType::SystemdDaemon),
-            (320, "syslog", "/usr/sbin/rsyslogd -n -iNONE", ProcessType::SystemdDaemon),
-            (325, "root", "/usr/sbin/irqbalance --foreground", ProcessType::SystemdDaemon),
-            (330, "root", "/usr/lib/accountsservice/accounts-daemon", ProcessType::SystemdDaemon),
-            (335, "root", "/usr/sbin/NetworkManager --no-daemon", ProcessType::SystemdDaemon),
-            (340, "root", "/usr/lib/policykit-1/polkitd --no-debug", ProcessType::SystemdDaemon),
-            (345, "root", "/usr/sbin/thermald --systemd", ProcessType::SystemdDaemon),
-            (350, "root", "/usr/lib/snapd/snapd", ProcessType::SystemdDaemon),
+            (
+                315,
+                "root",
+                "/lib/systemd/systemd-logind",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                320,
+                "syslog",
+                "/usr/sbin/rsyslogd -n -iNONE",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                325,
+                "root",
+                "/usr/sbin/irqbalance --foreground",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                330,
+                "root",
+                "/usr/lib/accountsservice/accounts-daemon",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                335,
+                "root",
+                "/usr/sbin/NetworkManager --no-daemon",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                340,
+                "root",
+                "/usr/lib/policykit-1/polkitd --no-debug",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                345,
+                "root",
+                "/usr/sbin/thermald --systemd",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                350,
+                "root",
+                "/usr/lib/snapd/snapd",
+                ProcessType::SystemdDaemon,
+            ),
             (355, "root", "/usr/sbin/sshd -D", ProcessType::SystemdDaemon),
             (360, "root", "/usr/sbin/atd -f", ProcessType::SystemdDaemon),
-            (365, "root", "/lib/systemd/systemd-machined", ProcessType::SystemdDaemon),
-            (370, "root", "/sbin/multipathd -d -s", ProcessType::SystemdDaemon),
-            (375, "root", "/usr/libexec/fwupd/fwupd", ProcessType::SystemdDaemon),
-            (380, "root", "/usr/sbin/ModemManager", ProcessType::SystemdDaemon),
-            (385, "root", "/lib/systemd/systemd-networkd-wait-online", ProcessType::SystemdDaemon),
+            (
+                365,
+                "root",
+                "/lib/systemd/systemd-machined",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                370,
+                "root",
+                "/sbin/multipathd -d -s",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                375,
+                "root",
+                "/usr/libexec/fwupd/fwupd",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                380,
+                "root",
+                "/usr/sbin/ModemManager",
+                ProcessType::SystemdDaemon,
+            ),
+            (
+                385,
+                "root",
+                "/lib/systemd/systemd-networkd-wait-online",
+                ProcessType::SystemdDaemon,
+            ),
             // --- Long-running service daemons ---
-            (500, "root", "/usr/sbin/apache2 -k start", ProcessType::ServiceDaemon),
-            (501, "www-data", "/usr/sbin/apache2 -k start", ProcessType::ServiceDaemon),
-            (502, "www-data", "/usr/sbin/apache2 -k start", ProcessType::ServiceDaemon),
-            (503, "www-data", "/usr/sbin/apache2 -k start", ProcessType::ServiceDaemon),
-            (504, "www-data", "/usr/sbin/apache2 -k start", ProcessType::ServiceDaemon),
-            (505, "www-data", "/usr/sbin/apache2 -k start", ProcessType::ServiceDaemon),
+            (
+                500,
+                "root",
+                "/usr/sbin/apache2 -k start",
+                ProcessType::ServiceDaemon,
+            ),
+            (
+                501,
+                "www-data",
+                "/usr/sbin/apache2 -k start",
+                ProcessType::ServiceDaemon,
+            ),
+            (
+                502,
+                "www-data",
+                "/usr/sbin/apache2 -k start",
+                ProcessType::ServiceDaemon,
+            ),
+            (
+                503,
+                "www-data",
+                "/usr/sbin/apache2 -k start",
+                ProcessType::ServiceDaemon,
+            ),
+            (
+                504,
+                "www-data",
+                "/usr/sbin/apache2 -k start",
+                ProcessType::ServiceDaemon,
+            ),
+            (
+                505,
+                "www-data",
+                "/usr/sbin/apache2 -k start",
+                ProcessType::ServiceDaemon,
+            ),
             (510, "mysql", "/usr/sbin/mysqld", ProcessType::ServiceDaemon),
-            (520, "redis", "redis-server 127.0.0.1:6379", ProcessType::ServiceDaemon),
-            (530, "root", "/usr/bin/containerd", ProcessType::ServiceDaemon),
+            (
+                520,
+                "redis",
+                "redis-server 127.0.0.1:6379",
+                ProcessType::ServiceDaemon,
+            ),
+            (
+                530,
+                "root",
+                "/usr/bin/containerd",
+                ProcessType::ServiceDaemon,
+            ),
             (
                 531,
                 "root",
@@ -330,7 +471,9 @@ impl PsCommand {
 
     fn format_process_list(processes: &[Process], args: &[String]) -> String {
         let mut result = String::new();
-        let show_all = args.iter().any(|a| a == "-e" || a == "-A" || a == "--everyone");
+        let show_all = args
+            .iter()
+            .any(|a| a == "-e" || a == "-A" || a == "--everyone");
         let full_format = args.iter().any(|a| a == "-f" || a == "--full");
 
         if full_format {

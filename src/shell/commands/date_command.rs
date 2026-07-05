@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
+use async_trait::async_trait;
 use chrono::{Local, Utc};
 
 /// Date command implementation using the new trait system
@@ -11,7 +11,7 @@ impl Command for DateCommand {
     fn name(&self) -> &'static str {
         "date"
     }
-    
+
     fn help(&self) -> String {
         "Usage: date [OPTION]... [+FORMAT]\n\
         Display the current time in the given FORMAT, or set the system date.\n\
@@ -45,16 +45,18 @@ impl Command for DateCommand {
         %y     last two digits of year (00..99)\n\
         %Y     year\n\
         %z     +hhmm numeric time zone (e.g., -0400)\n\
-        %Z     alphabetic time zone abbreviation (e.g., EDT)\n".to_string()
+        %Z     alphabetic time zone abbreviation (e.g., EDT)\n"
+            .to_string()
     }
-    
+
     fn version(&self) -> String {
         "date (GNU coreutils) 8.32\n\
         License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
         This is free software: you are free to change and redistribute it.\n\
-        There is NO WARRANTY, to the extent permitted by law.\n".to_string()
+        There is NO WARRANTY, to the extent permitted by law.\n"
+            .to_string()
     }
-    
+
     async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
         // Default settings
         let mut utc_time = false;
@@ -72,9 +74,17 @@ impl Command for DateCommand {
                 print_version = true;
             } else if arg == "--utc" || arg == "-u" || arg == "--universal" {
                 utc_time = true;
-            } else if arg == "--iso-8601" || arg == "-I" || arg.starts_with("--iso-8601=") || arg.starts_with("-I") {
+            } else if arg == "--iso-8601"
+                || arg == "-I"
+                || arg.starts_with("--iso-8601=")
+                || arg.starts_with("-I")
+            {
                 iso_format = true;
-            } else if arg == "--rfc-3339" || arg == "-R" || arg == "--rfc-2822" || arg.starts_with("--rfc-3339=") {
+            } else if arg == "--rfc-3339"
+                || arg == "-R"
+                || arg == "--rfc-2822"
+                || arg.starts_with("--rfc-3339=")
+            {
                 rfc_format = true;
             } else if let Some(fmt) = arg.strip_prefix('+') {
                 custom_format = Some(fmt.to_string());
@@ -88,13 +98,13 @@ impl Command for DateCommand {
         if print_version {
             return Ok(self.version());
         }
-        
+
         // Get the current time
         let now = if utc_time {
             Utc::now().format("%a %b %e %H:%M:%S UTC %Y").to_string()
         } else {
             let local_now = Local::now();
-            
+
             if iso_format {
                 local_now.format("%Y-%m-%d").to_string()
             } else if rfc_format {
@@ -102,31 +112,31 @@ impl Command for DateCommand {
             } else if let Some(format) = custom_format {
                 // Convert common format specifiers
                 let format = format
-                    .replace("%a", "%a")  // Short weekday
-                    .replace("%A", "%A")  // Full weekday
-                    .replace("%b", "%b")  // Short month
-                    .replace("%B", "%B")  // Full month
-                    .replace("%c", "%a %b %e %H:%M:%S %Y")  // Complete date/time
-                    .replace("%d", "%d")  // Day of month (01-31)
-                    .replace("%D", "%m/%d/%y")  // Date as mm/dd/yy
-                    .replace("%H", "%H")  // Hour (00-23)
-                    .replace("%I", "%I")  // Hour (01-12)
-                    .replace("%m", "%m")  // Month (01-12)
-                    .replace("%M", "%M")  // Minute (00-59)
-                    .replace("%S", "%S")  // Second (00-60)
-                    .replace("%T", "%H:%M:%S")  // Time as HH:MM:SS
-                    .replace("%y", "%y")  // Year without century (00-99)
-                    .replace("%Y", "%Y")  // Year with century
-                    .replace("%z", "%z")  // Timezone offset (+HHMM)
-                    .replace("%Z", "%Z");  // Timezone name
-                
+                    .replace("%a", "%a") // Short weekday
+                    .replace("%A", "%A") // Full weekday
+                    .replace("%b", "%b") // Short month
+                    .replace("%B", "%B") // Full month
+                    .replace("%c", "%a %b %e %H:%M:%S %Y") // Complete date/time
+                    .replace("%d", "%d") // Day of month (01-31)
+                    .replace("%D", "%m/%d/%y") // Date as mm/dd/yy
+                    .replace("%H", "%H") // Hour (00-23)
+                    .replace("%I", "%I") // Hour (01-12)
+                    .replace("%m", "%m") // Month (01-12)
+                    .replace("%M", "%M") // Minute (00-59)
+                    .replace("%S", "%S") // Second (00-60)
+                    .replace("%T", "%H:%M:%S") // Time as HH:MM:SS
+                    .replace("%y", "%y") // Year without century (00-99)
+                    .replace("%Y", "%Y") // Year with century
+                    .replace("%z", "%z") // Timezone offset (+HHMM)
+                    .replace("%Z", "%Z"); // Timezone name
+
                 local_now.format(&format).to_string()
             } else {
                 // Default format: "Wed Jan 20 14:35:46 EST 2021"
                 local_now.format("%a %b %e %H:%M:%S %Z %Y").to_string()
             }
         };
-        
+
         Ok(format!("{}\r\n", now))
     }
 }

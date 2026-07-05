@@ -1,7 +1,7 @@
-use async_trait::async_trait;
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
-use rand::{rng, RngExt};
+use async_trait::async_trait;
+use rand::{RngExt, rng};
 
 /// Represents simulated system memory usage
 struct MemoryStats {
@@ -12,9 +12,9 @@ struct MemoryStats {
     buff_cache_mem: u64, // Buffer/cache memory in KB
     available_mem: u64,  // Available memory in KB
 
-    total_swap: u64,     // Total swap in KB
-    used_swap: u64,      // Used swap in KB
-    free_swap: u64,      // Free swap in KB
+    total_swap: u64, // Total swap in KB
+    used_swap: u64,  // Used swap in KB
+    free_swap: u64,  // Free swap in KB
 }
 
 impl MemoryStats {
@@ -65,7 +65,7 @@ impl Command for FreeCommand {
     fn name(&self) -> &'static str {
         "free"
     }
-    
+
     fn help(&self) -> String {
         "Usage: free [OPTIONS]\n\
         Display amount of free and used memory in the system\n\
@@ -83,93 +83,110 @@ impl Command for FreeCommand {
         -c, --count N       repeat printing N times, then exit\n\
         -w, --wide          wide output\n\
         --help              display this help and exit\n\
-        --version           output version information and exit\n".to_string()
+        --version           output version information and exit\n"
+            .to_string()
     }
-    
+
     fn version(&self) -> String {
         "free from procps-ng 3.3.15\n".to_string()
     }
-    
+
     async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
         let memory_stats = MemoryStats::generate();
-        
+
         // Handle help and version flags
         if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
-        
+
         if args.iter().any(|a| a == "--version") {
             return Ok(self.version());
         }
-        
+
         // Default to kilobytes if no flags specified
         let mut show_human_readable = false;
         let mut show_total = false;
         let mut show_wide = false;
         let mut unit_divisor = 1; // Default is kilobytes (divisor=1)
         let mut unit_label = "kB";
-        
+
         for part in args {
             match part.as_str() {
                 "-h" | "--human" => {
                     show_human_readable = true;
                     unit_divisor = 1024; // Will adjust dynamically during formatting
-                },
+                }
                 "-b" | "--bytes" => {
                     unit_divisor = 1;
                     unit_label = "B";
-                },
+                }
                 "-k" | "--kilo" => {
                     unit_divisor = 1;
                     unit_label = "kB";
-                },
+                }
                 "-m" | "--mega" => {
                     unit_divisor = 1024;
                     unit_label = "MB";
-                },
+                }
                 "-g" | "--giga" => {
                     unit_divisor = 1024 * 1024;
                     unit_label = "GB";
-                },
+                }
                 "--tera" => {
                     unit_divisor = 1024 * 1024 * 1024;
                     unit_label = "TB";
-                },
+                }
                 "-t" | "--total" => {
                     show_total = true;
-                },
+                }
                 "-w" | "--wide" => {
                     show_wide = true;
-                },
+                }
                 _ => {}
             }
         }
-        
+
         // Format output based on flags
         let output = if show_human_readable {
             Self::format_human_readable(&memory_stats, show_total, show_wide)
         } else {
-            Self::format_with_unit(&memory_stats, unit_divisor, unit_label, show_total, show_wide)
+            Self::format_with_unit(
+                &memory_stats,
+                unit_divisor,
+                unit_label,
+                show_total,
+                show_wide,
+            )
         };
-        
+
         Ok(output)
     }
 }
 
 impl FreeCommand {
     /// Format memory values with a specific unit
-    fn format_with_unit(stats: &MemoryStats, divisor: u64, unit_label: &str, show_total: bool, wide: bool) -> String {
+    fn format_with_unit(
+        stats: &MemoryStats,
+        divisor: u64,
+        unit_label: &str,
+        show_total: bool,
+        wide: bool,
+    ) -> String {
         let mut result = String::new();
-        
+
         // Column headers based on wide flag
         if wide {
-            result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
-                                     "", "total", "used", "free", "shared", "buff/cache", "available"));
+            result.push_str(&format!(
+                "{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
+                "", "total", "used", "free", "shared", "buff/cache", "available"
+            ));
         } else {
-            result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
-                                     "", "total", "used", "free", "shared", "buff/cache", "available"));
+            result.push_str(&format!(
+                "{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
+                "", "total", "used", "free", "shared", "buff/cache", "available"
+            ));
         }
-        
+
         // Format values with the given unit
         let format_value = |value: u64| -> String {
             if divisor == 1 {
@@ -178,52 +195,59 @@ impl FreeCommand {
                 format!("{} {}", value / divisor, unit_label)
             }
         };
-        
+
         // Memory line
-        result.push_str(&format!("{:<16}{:>10}{:>12}{:>12}{:>12}{:>12}{:>12}\r\n",
-                                 "Mem:",
-                                 format_value(stats.total_mem),
-                                 format_value(stats.used_mem),
-                                 format_value(stats.free_mem),
-                                 format_value(stats.shared_mem),
-                                 format_value(stats.buff_cache_mem),
-                                 format_value(stats.available_mem)
+        result.push_str(&format!(
+            "{:<16}{:>10}{:>12}{:>12}{:>12}{:>12}{:>12}\r\n",
+            "Mem:",
+            format_value(stats.total_mem),
+            format_value(stats.used_mem),
+            format_value(stats.free_mem),
+            format_value(stats.shared_mem),
+            format_value(stats.buff_cache_mem),
+            format_value(stats.available_mem)
         ));
-        
+
         // Swap line
-        result.push_str(&format!("{:<16}{:>10}{:>12}{:>12}\r\n",
-                                 "Swap:",
-                                 format_value(stats.total_swap),
-                                 format_value(stats.used_swap),
-                                 format_value(stats.free_swap)
+        result.push_str(&format!(
+            "{:<16}{:>10}{:>12}{:>12}\r\n",
+            "Swap:",
+            format_value(stats.total_swap),
+            format_value(stats.used_swap),
+            format_value(stats.free_swap)
         ));
-        
+
         // Total line (optional)
         if show_total {
-            result.push_str(&format!("{:<16}{:>10}{:>12}{:>12}\r\n",
-                                     "Total:",
-                                     format_value(stats.total_mem + stats.total_swap),
-                                     format_value(stats.used_mem + stats.used_swap),
-                                     format_value(stats.free_mem + stats.free_swap)
+            result.push_str(&format!(
+                "{:<16}{:>10}{:>12}{:>12}\r\n",
+                "Total:",
+                format_value(stats.total_mem + stats.total_swap),
+                format_value(stats.used_mem + stats.used_swap),
+                format_value(stats.free_mem + stats.free_swap)
             ));
         }
-        
+
         result
     }
-    
+
     /// Format memory values in human-readable format (with appropriate units)
     fn format_human_readable(stats: &MemoryStats, show_total: bool, wide: bool) -> String {
         let mut result = String::new();
-        
+
         // Column headers based on wide flag
         if wide {
-            result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
-                                     "", "total", "used", "free", "shared", "buff/cache", "available"));
+            result.push_str(&format!(
+                "{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
+                "", "total", "used", "free", "shared", "buff/cache", "available"
+            ));
         } else {
-            result.push_str(&format!("{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
-                                     "", "total", "used", "free", "shared", "buff/cache", "available"));
+            result.push_str(&format!(
+                "{:16}{:16}{:16}{:16}{:16}{:16}{:16}\r\n",
+                "", "total", "used", "free", "shared", "buff/cache", "available"
+            ));
         }
-        
+
         // Helper to format values in human-readable form
         let format_human = |value_kb: u64| -> String {
             if value_kb < 1024 {
@@ -234,36 +258,39 @@ impl FreeCommand {
                 format!("{:.1}G", value_kb as f64 / (1024.0 * 1024.0))
             }
         };
-        
+
         // Memory line
-        result.push_str(&format!("{:<16}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}\r\n",
-                                 "Mem:",
-                                 format_human(stats.total_mem),
-                                 format_human(stats.used_mem),
-                                 format_human(stats.free_mem),
-                                 format_human(stats.shared_mem),
-                                 format_human(stats.buff_cache_mem),
-                                 format_human(stats.available_mem)
+        result.push_str(&format!(
+            "{:<16}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}\r\n",
+            "Mem:",
+            format_human(stats.total_mem),
+            format_human(stats.used_mem),
+            format_human(stats.free_mem),
+            format_human(stats.shared_mem),
+            format_human(stats.buff_cache_mem),
+            format_human(stats.available_mem)
         ));
-        
+
         // Swap line
-        result.push_str(&format!("{:<16}{:>8}{:>12}{:>12}\r\n",
-                                 "Swap:",
-                                 format_human(stats.total_swap),
-                                 format_human(stats.used_swap),
-                                 format_human(stats.free_swap)
+        result.push_str(&format!(
+            "{:<16}{:>8}{:>12}{:>12}\r\n",
+            "Swap:",
+            format_human(stats.total_swap),
+            format_human(stats.used_swap),
+            format_human(stats.free_swap)
         ));
-        
+
         // Total line (optional)
         if show_total {
-            result.push_str(&format!("{:<16}{:>8}{:>12}{:>12}\r\n",
-                                     "Total:",
-                                     format_human(stats.total_mem + stats.total_swap),
-                                     format_human(stats.used_mem + stats.used_swap),
-                                     format_human(stats.free_mem + stats.free_swap)
+            result.push_str(&format!(
+                "{:<16}{:>8}{:>12}{:>12}\r\n",
+                "Total:",
+                format_human(stats.total_mem + stats.total_swap),
+                format_human(stats.used_mem + stats.used_swap),
+                format_human(stats.free_mem + stats.free_swap)
             ));
         }
-        
+
         result
     }
 }

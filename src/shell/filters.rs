@@ -61,7 +61,10 @@ pub async fn apply_filter(
         "cut" => Some(cut_cmd(args, input, context).await),
         "tr" => Some(tr_cmd(args, input)),
         "rev" => Some((per_line(input, |l| l.chars().rev().collect()), true)),
-        "tac" => Some((input.lines().rev().collect::<Vec<_>>().join("\n") + "\n", true)),
+        "tac" => Some((
+            input.lines().rev().collect::<Vec<_>>().join("\n") + "\n",
+            true,
+        )),
         "nl" => Some((nl_cmd(input), true)),
         "base64" => Some(base64_cmd(args, input, context).await),
         "strings" => Some(strings_cmd(args, input, context).await),
@@ -233,10 +236,7 @@ fn strip_regex_anchors(pattern: &str, _fixed: bool) -> String {
 
 fn line_matches(line: &str, opts: &GrepOpts) -> bool {
     let (haystack, needle) = if opts.ignore_case {
-        (
-            line.to_lowercase(),
-            opts.pattern.to_lowercase(),
-        )
+        (line.to_lowercase(), opts.pattern.to_lowercase())
     } else {
         (line.to_string(), opts.pattern.clone())
     };
@@ -252,11 +252,10 @@ fn word_boundary_match(haystack: &str, needle: &str) -> bool {
     let mut start = 0;
     while let Some(idx) = haystack[start..].find(&needle) {
         let abs = start + idx;
-        let before_ok = abs == 0
-            || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        let before_ok = abs == 0 || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
         let after = abs + needle.len();
-        let after_ok = after >= haystack.len()
-            || !haystack.as_bytes()[after].is_ascii_alphanumeric();
+        let after_ok =
+            after >= haystack.len() || !haystack.as_bytes()[after].is_ascii_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -268,7 +267,12 @@ fn word_boundary_match(haystack: &str, needle: &str) -> bool {
     false
 }
 
-async fn grep(name: &str, args: &[String], input: &str, context: &CommandContext) -> (String, bool) {
+async fn grep(
+    name: &str,
+    args: &[String],
+    input: &str,
+    context: &CommandContext,
+) -> (String, bool) {
     let opts = match parse_grep(name, args) {
         Ok(o) => o,
         Err((msg, succ)) => return (format!("{}", msg.replace('\n', "\r\n")), succ),
@@ -358,7 +362,11 @@ async fn head_tail(
     is_head: bool,
 ) -> (String, bool) {
     let n = parse_numeric_count(args, 10, 'n');
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
     let lines: Vec<&str> = source.lines().collect();
     let chosen: Vec<&str> = if is_head {
@@ -378,7 +386,11 @@ async fn sort_cmd(args: &[String], input: &str, context: &CommandContext) -> (St
     let reverse = flag_present(args, 'r', "--reverse");
     let numeric = flag_present(args, 'n', "--numeric-sort");
     let unique = flag_present(args, 'u', "--unique");
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
     let mut lines: Vec<&str> = source.lines().collect();
     lines.sort_by(|a, b| {
@@ -389,11 +401,7 @@ async fn sort_cmd(args: &[String], input: &str, context: &CommandContext) -> (St
         } else {
             a.cmp(b)
         };
-        if reverse {
-            ord.reverse()
-        } else {
-            ord
-        }
+        if reverse { ord.reverse() } else { ord }
     });
     if unique {
         lines.dedup();
@@ -409,7 +417,11 @@ async fn uniq_cmd(args: &[String], input: &str, context: &CommandContext) -> (St
     let count = flag_present(args, 'c', "--count");
     let only_dup = flag_present(args, 'd', "--repeated");
     let only_uniq = flag_present(args, 'u', "--unique");
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
     let lines: Vec<&str> = source.lines().collect();
 
@@ -447,7 +459,11 @@ async fn wc_cmd(args: &[String], input: &str, context: &CommandContext) -> (Stri
     let want_chars = flag_present(args, 'c', "--bytes");
     let any = want_lines || want_words || want_chars;
 
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
     let lines = source.lines().count();
     let words = source.split_whitespace().count();
@@ -534,7 +550,11 @@ fn parse_field_list(spec: &str) -> Vec<usize> {
 fn tr_cmd(args: &[String], input: &str) -> (String, bool) {
     let delete = flag_present(args, 'd', "--delete");
     let squeeze = flag_present(args, 's', "--squeeze-repeats");
-    let operands: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let operands: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
 
     if delete && !operands.is_empty() {
         let set1: Vec<char> = expand_set(&operands[0]);
@@ -623,7 +643,11 @@ fn per_line<F: Fn(&str) -> String>(input: &str, f: F) -> String {
 
 async fn base64_cmd(args: &[String], input: &str, context: &CommandContext) -> (String, bool) {
     let decode = flag_present(args, 'd', "--decode");
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
 
     if decode {
@@ -641,7 +665,11 @@ async fn strings_cmd(args: &[String], input: &str, context: &CommandContext) -> 
         .iter()
         .find_map(|a| a.strip_prefix("-n").and_then(|r| r.parse::<usize>().ok()))
         .unwrap_or(4);
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
 
     let mut out = String::new();
@@ -735,7 +763,11 @@ fn parse_subst(spec: &str) -> Option<(String, String, String)> {
     let rest = &spec[delim.len_utf8()..];
     let parts: Vec<&str> = rest.splitn(3, delim).collect();
     if parts.len() == 3 {
-        Some((parts[0].to_string(), parts[1].to_string(), parts[2].to_string()))
+        Some((
+            parts[0].to_string(),
+            parts[1].to_string(),
+            parts[2].to_string(),
+        ))
     } else {
         None
     }
@@ -743,7 +775,11 @@ fn parse_subst(spec: &str) -> Option<(String, String, String)> {
 
 fn subst_once_or_all(line: &str, pat: &str, rep: &str, global: bool, ignore_case: bool) -> String {
     let (haystack, needle, restore) = if ignore_case {
-        (line.to_lowercase(), pat.to_lowercase(), Some(line.to_string()))
+        (
+            line.to_lowercase(),
+            pat.to_lowercase(),
+            Some(line.to_string()),
+        )
     } else {
         (line.to_string(), pat.to_string(), None)
     };
@@ -772,9 +808,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 async fn awk_cmd(args: &[String], input: &str, context: &CommandContext) -> (String, bool) {
@@ -826,11 +860,7 @@ fn extract_print_spec(program: &str) -> Option<Vec<String>> {
     let trimmed = program.trim().trim_start_matches('{').trim_end_matches('}');
     let body = trimmed.trim();
     let body = body.strip_prefix("print ").unwrap_or(body);
-    Some(
-        body.split(',')
-            .map(|s| s.trim().to_string())
-            .collect(),
-    )
+    Some(body.split(',').map(|s| s.trim().to_string()).collect())
 }
 
 fn eval_print(spec: &str, fields: &[&str]) -> String {
@@ -842,7 +872,11 @@ fn eval_print(spec: &str, fields: &[&str]) -> String {
             return fields.len().to_string();
         }
         if let Ok(n) = rest.parse::<usize>() {
-            return fields.get(n.wrapping_sub(1)).copied().unwrap_or("").to_string();
+            return fields
+                .get(n.wrapping_sub(1))
+                .copied()
+                .unwrap_or("")
+                .to_string();
         }
     }
     spec.trim_matches('"').trim_matches('\'').to_string()
@@ -850,9 +884,16 @@ fn eval_print(spec: &str, fields: &[&str]) -> String {
 
 async fn column_cmd(args: &[String], input: &str, context: &CommandContext) -> (String, bool) {
     let table = flag_present(args, 't', "--table");
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
-    let lines: Vec<Vec<&str>> = source.lines().map(|l| l.split_whitespace().collect()).collect();
+    let lines: Vec<Vec<&str>> = source
+        .lines()
+        .map(|l| l.split_whitespace().collect())
+        .collect();
 
     if !table {
         let joined: Vec<String> = source
@@ -897,8 +938,16 @@ fn xargs_cmd(args: &[String], input: &str) -> (String, bool) {
     (words.join(" ") + "\n", true)
 }
 
-async fn hash_cmd<D: Digest + Send>(args: &[String], input: &str, context: &CommandContext) -> (String, bool) {
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+async fn hash_cmd<D: Digest + Send>(
+    args: &[String],
+    input: &str,
+    context: &CommandContext,
+) -> (String, bool) {
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
     let mut hasher = D::new();
     hasher.update(source.as_bytes());
@@ -909,7 +958,11 @@ async fn hash_cmd<D: Digest + Send>(args: &[String], input: &str, context: &Comm
 }
 
 async fn md5_stub(args: &[String], input: &str, context: &CommandContext) -> String {
-    let files: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    let files: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .collect();
     let source = gather_input(&files, input, context).await;
     let mut hasher = Sha256::new();
     hasher.update(source.as_bytes());
@@ -925,14 +978,11 @@ async fn md5_stub(args: &[String], input: &str, context: &CommandContext) -> Str
 fn flag_present(args: &[String], short: char, long: &str) -> bool {
     args.iter().any(|a| {
         a == long
-            || (a.starts_with('-')
-                && !a.starts_with("--")
-                && a.chars().skip(1).any(|c| c == short))
+            || (a.starts_with('-') && !a.starts_with("--") && a.chars().skip(1).any(|c| c == short))
     })
 }
 
-const B64_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn base64_encode(input: &[u8]) -> String {
     let mut out = String::new();
@@ -971,8 +1021,12 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     for chunk in bytes.chunks(4) {
         let v0 = rev[chunk[0] as usize];
         let v1 = rev[chunk[1] as usize];
-        let v2 = chunk.get(2).map_or(0, |&b| if b == b'=' { 0 } else { rev[b as usize] });
-        let v3 = chunk.get(3).map_or(0, |&b| if b == b'=' { 0 } else { rev[b as usize] });
+        let v2 = chunk
+            .get(2)
+            .map_or(0, |&b| if b == b'=' { 0 } else { rev[b as usize] });
+        let v3 = chunk
+            .get(3)
+            .map_or(0, |&b| if b == b'=' { 0 } else { rev[b as usize] });
         out.push(((v0 << 2) | (v1 >> 4)) as u8);
         if chunk.len() > 2 && chunk[2] != b'=' {
             out.push((((v1 & 0x0f) << 4) | (v2 >> 2)) as u8);

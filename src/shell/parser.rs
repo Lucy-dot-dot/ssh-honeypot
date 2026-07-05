@@ -326,8 +326,16 @@ fn scan(input: &str) -> Vec<Span> {
                     flush_text(&mut spans, &mut cur);
                     let (target, next) = read_word(&chars, i + 2);
                     let tgt = target_to_enum(target);
-                    spans.push(Span::Redir(Redirect { fd: 1, append: false, target: tgt.clone() }));
-                    spans.push(Span::Redir(Redirect { fd: 2, append: false, target: tgt }));
+                    spans.push(Span::Redir(Redirect {
+                        fd: 1,
+                        append: false,
+                        target: tgt.clone(),
+                    }));
+                    spans.push(Span::Redir(Redirect {
+                        fd: 2,
+                        append: false,
+                        target: tgt,
+                    }));
                     i = next;
                     continue;
                 }
@@ -367,14 +375,22 @@ fn scan(input: &str) -> Vec<Span> {
                     }
                     if !num.is_empty() {
                         let m: u8 = num.parse().unwrap_or(0);
-                        spans.push(Span::Redir(Redirect { fd, append, target: RedirTarget::Fd(m) }));
+                        spans.push(Span::Redir(Redirect {
+                            fd,
+                            append,
+                            target: RedirTarget::Fd(m),
+                        }));
                         i = d;
                         continue;
                     }
                 }
                 let (target, next) = read_word(&chars, k + 1);
                 let tgt = target_to_enum(target);
-                spans.push(Span::Redir(Redirect { fd, append, target: tgt }));
+                spans.push(Span::Redir(Redirect {
+                    fd,
+                    append,
+                    target: tgt,
+                }));
                 i = next;
                 continue;
             }
@@ -511,11 +527,7 @@ fn expand_vars(s: &str, env: &HashMap<String, String>) -> String {
 fn expand_brace(inner: &str, env: &HashMap<String, String>) -> String {
     // `${#NAME}` -> string length of NAME's value.
     if let Some(rest) = inner.strip_prefix('#') {
-        if !rest.is_empty()
-            && rest
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
+        if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
             return env
                 .get(rest)
                 .map(|v| v.chars().count().to_string())
@@ -546,13 +558,25 @@ fn expand_brace(inner: &str, env: &HashMap<String, String>) -> String {
 
     // Two-char operators prefixed with ':'.
     if let Some(word) = rest.strip_prefix(":-") {
-        return if val.is_empty() { expand_vars(word, env) } else { val };
+        return if val.is_empty() {
+            expand_vars(word, env)
+        } else {
+            val
+        };
     }
     if let Some(word) = rest.strip_prefix(":+") {
-        return if !val.is_empty() { expand_vars(word, env) } else { String::new() };
+        return if !val.is_empty() {
+            expand_vars(word, env)
+        } else {
+            String::new()
+        };
     }
     if let Some(word) = rest.strip_prefix(":=") {
-        return if val.is_empty() { expand_vars(word, env) } else { val };
+        return if val.is_empty() {
+            expand_vars(word, env)
+        } else {
+            val
+        };
     }
     if rest.starts_with(":?") {
         return if val.is_empty() { String::new() } else { val };
@@ -562,7 +586,11 @@ fn expand_brace(inner: &str, env: &HashMap<String, String>) -> String {
         return if !is_set { expand_vars(word, env) } else { val };
     }
     if let Some(word) = rest.strip_prefix('+') {
-        return if is_set { expand_vars(word, env) } else { String::new() };
+        return if is_set {
+            expand_vars(word, env)
+        } else {
+            String::new()
+        };
     }
     if let Some(word) = rest.strip_prefix('=') {
         return if !is_set { expand_vars(word, env) } else { val };
@@ -657,7 +685,9 @@ fn assemble_until(tokens: &[Tok], terms: &[&str]) -> (CommandList, usize, Option
             }
             if !pipeline.is_empty() {
                 list.items.push(AndOrItem {
-                    pipeline: Pipeline { commands: std::mem::take(&mut pipeline) },
+                    pipeline: Pipeline {
+                        commands: std::mem::take(&mut pipeline),
+                    },
                     op: AndOp::Then,
                 });
             }
@@ -703,7 +733,9 @@ fn assemble_until(tokens: &[Tok], terms: &[&str]) -> (CommandList, usize, Option
                         _ => AndOp::Then,
                     };
                     list.items.push(AndOrItem {
-                        pipeline: Pipeline { commands: std::mem::take(&mut pipeline) },
+                        pipeline: Pipeline {
+                            commands: std::mem::take(&mut pipeline),
+                        },
                         op,
                     });
                 }
@@ -729,8 +761,7 @@ fn assemble_until(tokens: &[Tok], terms: &[&str]) -> (CommandList, usize, Option
 /// Keywords that terminate a plain command sequence (they begin or end a
 /// compound command).
 const STRUCTURE_TERMS: &[&str] = &[
-    "if", "then", "elif", "else", "fi", "for", "in", "do", "done", "while", "until", "case",
-    "esac",
+    "if", "then", "elif", "else", "fi", "for", "in", "do", "done", "while", "until", "case", "esac",
 ];
 
 /// Build a script (list of nodes) from a token stream, recognising compound
@@ -849,7 +880,9 @@ impl<'a> ScriptBuilder<'a> {
         loop {
             // Condition: up to `then` at depth 0.
             let cond_slice_end = find_terminator(&self.tokens[self.pos..], &["then"]);
-            let cond_end = cond_slice_end.map(|(i, _)| i).unwrap_or(self.tokens.len() - self.pos);
+            let cond_end = cond_slice_end
+                .map(|(i, _)| i)
+                .unwrap_or(self.tokens.len() - self.pos);
             let cond_nodes = build_script(&self.tokens[self.pos..self.pos + cond_end]);
             self.pos += cond_end;
             if self.at_word("then") {
@@ -890,7 +923,10 @@ impl<'a> ScriptBuilder<'a> {
             }
         }
 
-        Some(Node::If { branches, else_body })
+        Some(Node::If {
+            branches,
+            else_body,
+        })
     }
 
     /// Parse `for VAR [in WORDS...]; do BODY; done`.
@@ -933,7 +969,11 @@ impl<'a> ScriptBuilder<'a> {
         if self.at_word("done") {
             self.pos += 1;
         }
-        Some(Node::For { var, words, body: body_nodes })
+        Some(Node::For {
+            var,
+            words,
+            body: body_nodes,
+        })
     }
 
     /// Parse `while/until COND; do BODY; done`.
@@ -955,16 +995,16 @@ impl<'a> ScriptBuilder<'a> {
         if self.at_word("done") {
             self.pos += 1;
         }
-        Some(Node::While { cond: cond_nodes, body: body_nodes, until })
+        Some(Node::While {
+            cond: cond_nodes,
+            body: body_nodes,
+            until,
+        })
     }
 }
 
 /// Parse a full command line into an executable AST.
-pub fn parse_command_line(
-    input: &str,
-    env: &HashMap<String, String>,
-    home: &str,
-) -> CommandList {
+pub fn parse_command_line(input: &str, env: &HashMap<String, String>, home: &str) -> CommandList {
     let spans = scan(input);
     let tokens = tokenize(&spans, env, home);
     assemble(tokens)
@@ -1025,7 +1065,9 @@ pub fn parse_script(input: &str, env: &HashMap<String, String>, home: &str) -> S
     let normalised = normalize_newlines(input);
     let spans = scan(&normalised);
     let tokens = tokenize(&spans, env, home);
-    Script { nodes: build_script(&tokens) }
+    Script {
+        nodes: build_script(&tokens),
+    }
 }
 
 /// Analyse `text` for block balance: counts compound-command keywords
@@ -1216,9 +1258,7 @@ fn arith_tokens(expr: &str) -> Vec<ATok> {
             }
             a if a.is_ascii_alphabetic() || a == '_' => {
                 let mut name = String::new();
-                while i < chars.len()
-                    && (chars[i].is_ascii_alphanumeric() || chars[i] == '_')
-                {
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
                     name.push(chars[i]);
                     i += 1;
                 }
@@ -1358,11 +1398,14 @@ mod tests {
     fn semicolon_sequences() {
         let list = parse_command_line("ls; echo hi; pwd", &env(), "/home/root");
         let cmds = names(&list);
-        assert_eq!(cmds, vec![
-            ("ls".to_string(), vec![]),
-            ("echo".to_string(), vec!["hi".to_string()]),
-            ("pwd".to_string(), vec![]),
-        ]);
+        assert_eq!(
+            cmds,
+            vec![
+                ("ls".to_string(), vec![]),
+                ("echo".to_string(), vec!["hi".to_string()]),
+                ("pwd".to_string(), vec![]),
+            ]
+        );
         assert!(list.items.iter().all(|i| i.op == AndOp::Then));
     }
 
@@ -1389,7 +1432,10 @@ mod tests {
         let list = parse_command_line("echo \"hello   world\" 'a|b'", &env(), "/home/root");
         let cmds = names(&list);
         assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].1, vec!["hello   world".to_string(), "a|b".to_string()]);
+        assert_eq!(
+            cmds[0].1,
+            vec!["hello   world".to_string(), "a|b".to_string()]
+        );
     }
 
     #[test]
@@ -1403,7 +1449,10 @@ mod tests {
     fn env_var_expansion() {
         let list = parse_command_line("echo $HOME ${USER} $MISSING", &env(), "/home/root");
         let cmds = names(&list);
-        assert_eq!(cmds[0].1, vec!["/home/root".to_string(), "root".to_string(), "".to_string()]);
+        assert_eq!(
+            cmds[0].1,
+            vec!["/home/root".to_string(), "root".to_string(), "".to_string()]
+        );
     }
 
     #[test]
@@ -1463,13 +1512,24 @@ mod tests {
             .iter()
             .flat_map(|item| item.pipeline.commands.iter().map(|c| c.name.clone()))
             .collect();
-        assert!(all_names.iter().any(|n| n == "nproc"), "names: {:?}", all_names);
-        assert!(all_names.iter().any(|n| n == "head"), "names: {:?}", all_names);
+        assert!(
+            all_names.iter().any(|n| n == "nproc"),
+            "names: {:?}",
+            all_names
+        );
+        assert!(
+            all_names.iter().any(|n| n == "head"),
+            "names: {:?}",
+            all_names
+        );
     }
 
     #[test]
     fn assignment_detection() {
-        assert_eq!(parse_assignment("FOO=bar"), Some(("FOO".into(), "bar".into())));
+        assert_eq!(
+            parse_assignment("FOO=bar"),
+            Some(("FOO".into(), "bar".into()))
+        );
         assert_eq!(parse_assignment("_x=1"), Some(("_x".into(), "1".into())));
         assert_eq!(parse_assignment("9k=v"), None);
         assert_eq!(parse_assignment("echo"), None);
@@ -1523,7 +1583,10 @@ mod tests {
         let script = parse_script("if true; then echo a; fi", &e, "/home/root");
         assert_eq!(script.nodes.len(), 1);
         match &script.nodes[0] {
-            Node::If { branches, else_body } => {
+            Node::If {
+                branches,
+                else_body,
+            } => {
                 assert_eq!(branches.len(), 1);
                 assert!(else_body.is_none());
                 assert_eq!(first_cmd_name(&branches[0].0), Some("true".to_string()));
@@ -1536,13 +1599,12 @@ mod tests {
     #[test]
     fn parse_if_else_structure() {
         let e = env();
-        let script = parse_script(
-            "if false; then echo a; else echo b; fi",
-            &e,
-            "/home/root",
-        );
+        let script = parse_script("if false; then echo a; else echo b; fi", &e, "/home/root");
         match &script.nodes[0] {
-            Node::If { branches, else_body } => {
+            Node::If {
+                branches,
+                else_body,
+            } => {
                 assert_eq!(branches.len(), 1);
                 assert!(else_body.is_some());
                 assert_eq!(
@@ -1557,11 +1619,7 @@ mod tests {
     #[test]
     fn parse_multiline_if() {
         let e = env();
-        let script = parse_script(
-            "if [ -z \"$x\" ]; then\necho hi\nfi",
-            &e,
-            "/home/root",
-        );
+        let script = parse_script("if [ -z \"$x\" ]; then\necho hi\nfi", &e, "/home/root");
         assert_eq!(script.nodes.len(), 1);
         assert!(matches!(script.nodes[0], Node::If { .. }));
     }

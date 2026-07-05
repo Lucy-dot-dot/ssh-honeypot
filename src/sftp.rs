@@ -1,11 +1,13 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
-use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode, Status, Handle, Name, File, Version, Data, Attrs};
+use russh_sftp::protocol::{
+    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode, Version,
+};
 use russh_sftp::server::Handler;
 use sha2::{Digest, Sha256};
-use tokio::sync::{mpsc, RwLock};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{RwLock, mpsc};
 
 use crate::db::DbMessage;
 use crate::shell::filesystem::fs2::{FileContent, FileSystem};
@@ -21,12 +23,12 @@ pub struct HoneypotSftpSession {
 }
 
 impl HoneypotSftpSession {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, fs: Arc<RwLock<FileSystem>>, auth_id: String) -> Self {
-        Self {
-            db_tx,
-            fs,
-            auth_id,
-        }
+    pub fn new(
+        db_tx: mpsc::Sender<DbMessage>,
+        fs: Arc<RwLock<FileSystem>>,
+        auth_id: String,
+    ) -> Self {
+        Self { db_tx, fs, auth_id }
     }
 
     /// Detect MIME type from file extension
@@ -82,11 +84,14 @@ impl HoneypotSftpSession {
     }
 
     /// Analyze uploaded file with magic detection and entropy analysis
-    fn analyze_file(data: &[u8], filepath: &str) -> (Option<String>, Option<String>, bool, Option<f64>) {
+    fn analyze_file(
+        data: &[u8],
+        filepath: &str,
+    ) -> (Option<String>, Option<String>, bool, Option<f64>) {
         let claimed_mime = Self::get_mime_from_extension(filepath);
         let detected_mime = infer::get(data).map(|kind| kind.mime_type().to_string());
         let entropy = Some(Self::calculate_entropy(data));
-        
+
         // Check for format mismatch
         let format_mismatch = match (&claimed_mime, &detected_mime) {
             (Some(claimed), Some(detected)) => {
@@ -98,21 +103,26 @@ impl HoneypotSftpSession {
 
         // Log interesting findings
         if format_mismatch {
-            log::warn!("File format mismatch detected: {} claimed as '{}' but detected as '{}'", 
-                      filepath, 
-                      claimed_mime.as_deref().unwrap_or("unknown"), 
-                      detected_mime.as_deref().unwrap_or("unknown"));
+            log::warn!(
+                "File format mismatch detected: {} claimed as '{}' but detected as '{}'",
+                filepath,
+                claimed_mime.as_deref().unwrap_or("unknown"),
+                detected_mime.as_deref().unwrap_or("unknown")
+            );
         }
 
         if let Some(ent) = entropy {
             if ent > 7.5 {
-                log::warn!("High entropy file detected: {} (entropy: {:.2}) - possible packed/encrypted content", filepath, ent);
+                log::warn!(
+                    "High entropy file detected: {} (entropy: {:.2}) - possible packed/encrypted content",
+                    filepath,
+                    ent
+                );
             }
         }
 
         (claimed_mime, detected_mime, format_mismatch, entropy)
     }
-
 }
 
 #[async_trait]
@@ -123,35 +133,61 @@ impl Handler for HoneypotSftpSession {
         StatusCode::OpUnsupported
     }
 
-    fn init(&mut self, _version: u32, _extensions: HashMap<String, String>) -> impl Future<Output = Result<Version, Self::Error>> + Send {
+    fn init(
+        &mut self,
+        _version: u32,
+        _extensions: HashMap<String, String>,
+    ) -> impl Future<Output = Result<Version, Self::Error>> + Send {
         async {
             log::info!("SFTP session initialized for auth_id: {}", self.auth_id);
             Ok(Version::new())
         }
     }
 
-    fn open(&mut self, id: u32, path: String, flags: OpenFlags, _attrs: FileAttributes) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
+    fn open(
+        &mut self,
+        id: u32,
+        path: String,
+        flags: OpenFlags,
+        _attrs: FileAttributes,
+    ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
         let path = path;
         let fs = self.fs.clone();
-        
+
         async move {
-            log::debug!("SFTP open request: id={}, path={}, flags={:?}", id, path, flags);
-            
+            log::debug!(
+                "SFTP open request: id={}, path={}, flags={:?}",
+                id,
+                path,
+                flags
+            );
+
             // For simplicity, always create a handle for honeypot purposes
-            let handle = format!("handle_{}_{}", id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-            
+            let handle = format!(
+                "handle_{}_{}",
+                id,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+
             // If it's a write operation, we'll track it for file upload logging
             if flags.contains(OpenFlags::CREATE) || flags.contains(OpenFlags::WRITE) {
                 // Ensure parent directories exist in filesystem
                 let mut fs_guard = fs.write().await;
                 let _ = fs_guard.create_file(&path);
             }
-            
+
             Ok(Handle { id, handle })
         }
     }
 
-    fn close(&mut self, id: u32, handle: String) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+    fn close(
+        &mut self,
+        id: u32,
+        handle: String,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let handle = handle;
         async move {
             log::debug!("SFTP close request: id={}, handle={}", id, handle);
@@ -164,42 +200,65 @@ impl Handler for HoneypotSftpSession {
         }
     }
 
-    fn read(&mut self, id: u32, handle: String, offset: u64, len: u32) -> impl Future<Output = Result<Data, Self::Error>> + Send {
+    fn read(
+        &mut self,
+        id: u32,
+        handle: String,
+        offset: u64,
+        len: u32,
+    ) -> impl Future<Output = Result<Data, Self::Error>> + Send {
         let handle = handle;
         let _fs = self.fs.clone();
-        
+
         async move {
-            log::debug!("SFTP read request: id={}, handle={}, offset={}, len={}", id, handle, offset, len);
-            
+            log::debug!(
+                "SFTP read request: id={}, handle={}, offset={}, len={}",
+                id,
+                handle,
+                offset,
+                len
+            );
+
             // For honeypot, return empty data or fake content
-            Ok(Data { 
-                id, 
-                data: vec![0; std::cmp::min(len as usize, 1024)] // Return zeros or fake data
+            Ok(Data {
+                id,
+                data: vec![0; std::cmp::min(len as usize, 1024)], // Return zeros or fake data
             })
         }
     }
 
-    fn write(&mut self, id: u32, handle: String, offset: u64, data: Vec<u8>) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+    fn write(
+        &mut self,
+        id: u32,
+        handle: String,
+        offset: u64,
+        data: Vec<u8>,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let handle = handle;
         let fs = self.fs.clone();
         let db_tx = self.db_tx.clone();
         let auth_id = self.auth_id.clone();
-        
+
         async move {
-            log::info!("SFTP write: {} bytes to handle {} at offset {}", data.len(), handle, offset);
-            
+            log::info!(
+                "SFTP write: {} bytes to handle {} at offset {}",
+                data.len(),
+                handle,
+                offset
+            );
+
             // Record the file upload
             let filename = format!("sftp_upload_{}", handle);
             let filepath = format!("/tmp/{}", filename);
-            
+
             // Calculate SHA256 hash
             let hasher = Sha256::digest(&data);
             let file_hash = hex::encode(hasher.as_slice());
 
             // Analyze file with magic detection and entropy
-            let (claimed_mime, detected_mime, format_mismatch, file_entropy) = 
+            let (claimed_mime, detected_mime, format_mismatch, file_entropy) =
                 HoneypotSftpSession::analyze_file(&data, &filepath);
-            
+
             // Store in filesystem
             {
                 let mut fs_guard = fs.write().await;
@@ -219,27 +278,30 @@ impl Handler for HoneypotSftpSession {
                     }
                 }
             }
-            
+
             // Record in database with enhanced analysis
             let file_size = data.len() as u64;
-            
-            match db_tx.send(DbMessage::RecordFileUpload {
-                auth_id,
-                timestamp: Utc::now(),
-                filename,
-                filepath,
-                file_size,
-                file_hash,
-                claimed_mime_type: claimed_mime,
-                detected_mime_type: detected_mime,
-                format_mismatch,
-                file_entropy,
-                binary_data: data,
-            }).await {
+
+            match db_tx
+                .send(DbMessage::RecordFileUpload {
+                    auth_id,
+                    timestamp: Utc::now(),
+                    filename,
+                    filepath,
+                    file_size,
+                    file_hash,
+                    claimed_mime_type: claimed_mime,
+                    detected_mime_type: detected_mime,
+                    format_mismatch,
+                    file_entropy,
+                    binary_data: data,
+                })
+                .await
+            {
                 Ok(_) => log::debug!("Successfully queued file upload record"),
                 Err(e) => log::error!("Failed to queue file upload record: {}", e),
             }
-            
+
             Ok(Status {
                 id,
                 status_code: StatusCode::Ok,
@@ -249,23 +311,38 @@ impl Handler for HoneypotSftpSession {
         }
     }
 
-    fn opendir(&mut self, id: u32, path: String) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
+    fn opendir(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<Handle, Self::Error>> + Send {
         let path = path;
-        
+
         async move {
             log::debug!("SFTP opendir request: id={}, path={}", id, path);
-            let handle = format!("dir_handle_{}_{}", id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+            let handle = format!(
+                "dir_handle_{}_{}",
+                id,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
             Ok(Handle { id, handle })
         }
     }
 
-    fn readdir(&mut self, id: u32, handle: String) -> impl Future<Output = Result<Name, Self::Error>> + Send {
+    fn readdir(
+        &mut self,
+        id: u32,
+        handle: String,
+    ) -> impl Future<Output = Result<Name, Self::Error>> + Send {
         let handle = handle;
         let _fs = self.fs.clone();
-        
+
         async move {
             log::debug!("SFTP readdir request: id={}, handle={}", id, handle);
-            
+
             // Return some fake directory entries for honeypot
             let files = vec![
                 File::new(".", FileAttributes::default()),
@@ -273,16 +350,23 @@ impl Handler for HoneypotSftpSession {
                 File::new("config", FileAttributes::default()),
                 File::new("data", FileAttributes::default()),
             ];
-            
+
             Ok(Name { id, files })
         }
     }
 
-    fn remove(&mut self, id: u32, path: String) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+    fn remove(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let path = path;
 
         async move {
-            log::info!("SFTP remove request: {} (honeypot - not actually removing)", path);
+            log::info!(
+                "SFTP remove request: {} (honeypot - not actually removing)",
+                path
+            );
             Ok(Status {
                 id,
                 status_code: StatusCode::Ok,
@@ -292,7 +376,12 @@ impl Handler for HoneypotSftpSession {
         }
     }
 
-    fn mkdir(&mut self, id: u32, path: String, _attrs: FileAttributes) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+    fn mkdir(
+        &mut self,
+        id: u32,
+        path: String,
+        _attrs: FileAttributes,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let path = path;
         let fs = self.fs.clone();
 
@@ -312,16 +401,23 @@ impl Handler for HoneypotSftpSession {
                     status_code: StatusCode::Failure,
                     error_message: "Failed to create directory".to_string(),
                     language_tag: "".to_string(),
-                })
+                }),
             }
         }
     }
 
-    fn rmdir(&mut self, id: u32, path: String) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+    fn rmdir(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let path = path;
 
         async move {
-            log::info!("SFTP rmdir request: {} (honeypot - not actually removing)", path);
+            log::info!(
+                "SFTP rmdir request: {} (honeypot - not actually removing)",
+                path
+            );
             Ok(Status {
                 id,
                 status_code: StatusCode::Ok,
@@ -331,7 +427,11 @@ impl Handler for HoneypotSftpSession {
         }
     }
 
-    fn realpath(&mut self, id: u32, path: String) -> impl Future<Output = Result<Name, Self::Error>> + Send {
+    fn realpath(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<Name, Self::Error>> + Send {
         let path = path;
 
         async move {
@@ -348,7 +448,11 @@ impl Handler for HoneypotSftpSession {
         }
     }
 
-    fn stat(&mut self, id: u32, path: String) -> impl Future<Output = Result<Attrs, Self::Error>> + Send {
+    fn stat(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<Attrs, Self::Error>> + Send {
         let path = path;
         let fs = self.fs.clone();
 
@@ -381,12 +485,21 @@ impl Handler for HoneypotSftpSession {
         }
     }
 
-    fn rename(&mut self, id: u32, old_path: String, new_path: String) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+    fn rename(
+        &mut self,
+        id: u32,
+        old_path: String,
+        new_path: String,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let old_path = old_path;
         let new_path = new_path;
-        
+
         async move {
-            log::info!("SFTP rename request: {} -> {} (honeypot - not actually renaming)", old_path, new_path);
+            log::info!(
+                "SFTP rename request: {} -> {} (honeypot - not actually renaming)",
+                old_path,
+                new_path
+            );
             Ok(Status {
                 id,
                 status_code: StatusCode::Ok,

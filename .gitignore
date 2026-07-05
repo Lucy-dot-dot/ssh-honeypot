@@ -2,4 +2,5 @@
 /honeypot.db
 .idea
 /config.toml
+/dashboard.toml
 /db

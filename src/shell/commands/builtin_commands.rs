@@ -1,7 +1,7 @@
-use async_trait::async_trait;
-use super::command_trait::{Command, StatefulCommand, CommandResult, CommandError};
+use super::command_trait::{Command, CommandError, CommandResult, StatefulCommand};
 use super::context::CommandContext;
 use crate::shell::filesystem::fs2::FileContent;
+use async_trait::async_trait;
 
 /// PWD command - print working directory
 pub struct PwdCommand;
@@ -11,7 +11,7 @@ impl Command for PwdCommand {
     fn name(&self) -> &'static str {
         "pwd"
     }
-    
+
     async fn execute(&self, _args: &[String], context: &mut CommandContext) -> CommandResult {
         Ok(format!("{}\r\n", context.cwd))
     }
@@ -25,7 +25,7 @@ impl Command for WhoamiCommand {
     fn name(&self) -> &'static str {
         "whoami"
     }
-    
+
     async fn execute(&self, _args: &[String], context: &mut CommandContext) -> CommandResult {
         Ok(format!("{}\r\n", context.username))
     }
@@ -39,7 +39,7 @@ impl Command for IdCommand {
     fn name(&self) -> &'static str {
         "id"
     }
-    
+
     fn help(&self) -> String {
         "Usage: id [OPTION]... [USER]\n\
         Print user and group information for the specified USER,\n\
@@ -51,18 +51,19 @@ impl Command for IdCommand {
         -r, --real     print the real ID instead of the effective ID, with -ugG\n\
         -u, --user     print only the effective user ID\n\
         --help         display this help and exit\n\
-        --version      output version information and exit\n".to_string()
+        --version      output version information and exit\n"
+            .to_string()
     }
-    
+
     async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
         if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
-        
+
         if args.iter().any(|a| a == "--version") {
             return Ok("id (GNU coreutils) 8.32\n".to_string());
         }
-        
+
         // Simple implementation - just return fake but realistic ID info
         let username = &context.username;
         Ok(format!(
@@ -80,13 +81,14 @@ impl Command for CdCommand {
     fn name(&self) -> &'static str {
         "cd"
     }
-    
+
     fn help(&self) -> String {
         "Usage: cd [DIRECTORY]\n\
         Change the current directory to DIRECTORY.\n\
-        If no DIRECTORY is given, change to the home directory.\n".to_string()
+        If no DIRECTORY is given, change to the home directory.\n"
+            .to_string()
     }
-    
+
     async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
         // This shouldn't be called for stateful commands - redirect to stateful version
         self.execute_with_state_change(args, context).await
@@ -95,14 +97,21 @@ impl Command for CdCommand {
 
 #[async_trait]
 impl StatefulCommand for CdCommand {
-    
-    async fn execute_with_state_change(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
+    async fn execute_with_state_change(
+        &self,
+        args: &[String],
+        context: &mut CommandContext,
+    ) -> CommandResult {
         if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
-        
+
         // Determine target directory
-        let raw = args.iter().find(|a| !a.starts_with('-')).map(|s| s.as_str()).unwrap_or("");
+        let raw = args
+            .iter()
+            .find(|a| !a.starts_with('-'))
+            .map(|s| s.as_str())
+            .unwrap_or("");
         let target_dir = if raw.is_empty() || raw == "~" {
             // Go to home directory
             format!("/home/{}", context.username)
@@ -122,11 +131,11 @@ impl StatefulCommand for CdCommand {
                 format!("{}/{}", context.cwd, raw)
             }
         };
-        
+
         // Get filesystem and check if directory exists
         let fs = context.filesystem.read().await;
         let resolved = fs.resolve_absolute_path(&target_dir);
-        
+
         match fs.follow_symlink(&resolved) {
             Ok(entry) => {
                 match &entry.file_content {
@@ -135,21 +144,23 @@ impl StatefulCommand for CdCommand {
                         // Update the current working directory
                         context.set_cwd(resolved);
                         Ok(String::new()) // cd doesn't output anything on success
-                    },
+                    }
                     Some(FileContent::RegularFile(_)) => {
                         Ok(format!("bash: cd: {}: Not a directory\r\n", resolved))
-                    },
+                    }
                     Some(FileContent::SymbolicLink(_)) => {
                         Ok(format!("bash: cd: {}: Not a directory\r\n", resolved))
-                    },
-                    None => {
-                        Ok(format!("bash: cd: {}: No such file or directory\r\n", resolved))
                     }
+                    None => Ok(format!(
+                        "bash: cd: {}: No such file or directory\r\n",
+                        resolved
+                    )),
                 }
-            },
-            Err(_) => {
-                Ok(format!("bash: cd: {}: No such file or directory\r\n", resolved))
             }
+            Err(_) => Ok(format!(
+                "bash: cd: {}: No such file or directory\r\n",
+                resolved
+            )),
         }
     }
 }
@@ -162,22 +173,23 @@ impl Command for WgetCommand {
     fn name(&self) -> &'static str {
         "wget"
     }
-    
+
     fn help(&self) -> String {
         "Usage: wget [OPTION]... [URL]...\n\
         --help     display this help and exit\n\
-        --version  output version information and exit\n".to_string()
+        --version  output version information and exit\n"
+            .to_string()
     }
-    
+
     async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
         if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
-        
+
         if args.iter().any(|a| a == "--version") {
             return Ok("GNU Wget 1.20.3\n".to_string());
         }
-        
+
         Ok("wget: missing URL\r\nUsage: wget [OPTION]... [URL]...\r\n\r\nTry `wget --help' for more options.\r\n".to_string())
     }
 }
@@ -190,22 +202,23 @@ impl Command for CurlCommand {
     fn name(&self) -> &'static str {
         "curl"
     }
-    
+
     fn help(&self) -> String {
         "Usage: curl [options...] <url>\n\
         --help     Show help for all options\n\
-        --version  Show version\n".to_string()
+        --version  Show version\n"
+            .to_string()
     }
-    
+
     async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
         if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
-        
+
         if args.iter().any(|a| a == "--version") {
             return Ok("curl 7.68.0\n".to_string());
         }
-        
+
         Ok("curl: try 'curl --help' or 'curl --manual' for more information\r\n".to_string())
     }
 }
@@ -218,9 +231,12 @@ impl Command for SudoCommand {
     fn name(&self) -> &'static str {
         "sudo"
     }
-    
+
     async fn execute(&self, _args: &[String], context: &mut CommandContext) -> CommandResult {
-        Ok(format!("Sorry, user {} may not run sudo on {}.\r\n", context.username, context.hostname))
+        Ok(format!(
+            "Sorry, user {} may not run sudo on {}.\r\n",
+            context.username, context.hostname
+        ))
     }
 }
 
@@ -232,11 +248,11 @@ impl Command for ExitCommand {
     fn name(&self) -> &'static str {
         "exit"
     }
-    
+
     fn aliases(&self) -> Vec<&'static str> {
         vec!["logout"]
     }
-    
+
     async fn execute(&self, _args: &[String], _context: &mut CommandContext) -> CommandResult {
         // This will be handled specially by the server
         Ok(String::new())
@@ -299,10 +315,7 @@ impl Command for ExportCommand {
             if let Some(eq) = arg.find('=') {
                 let name = arg[..eq].to_string();
                 let value = arg[eq + 1..].to_string();
-                if !name.is_empty()
-                    && name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                if !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 {
                     context.set_env(name, value);
                 }

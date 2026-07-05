@@ -48,14 +48,24 @@ impl CommandDispatcher {
 
     /// Execute a full command line (handles parsing, pipes, sequencing, &&/||,
     /// command substitution, arithmetic, assignments and redirections).
-    pub async fn execute(&self, command_line: &str, context: &mut CommandContext) -> ExecutionOutcome {
+    pub async fn execute(
+        &self,
+        command_line: &str,
+        context: &mut CommandContext,
+    ) -> ExecutionOutcome {
         if command_line.trim().is_empty() {
-            return ExecutionOutcome { output: String::new(), exit_requested: false };
+            return ExecutionOutcome {
+                output: String::new(),
+                exit_requested: false,
+            };
         }
 
         let resolved = self.resolve_substitutions(command_line, context).await;
         if resolved.trim().is_empty() {
-            return ExecutionOutcome { output: String::new(), exit_requested: false };
+            return ExecutionOutcome {
+                output: String::new(),
+                exit_requested: false,
+            };
         }
 
         let home = context
@@ -68,7 +78,10 @@ impl CommandDispatcher {
         let mut output = stdout;
         output.push_str(&stderr);
 
-        ExecutionOutcome { output, exit_requested: exit }
+        ExecutionOutcome {
+            output,
+            exit_requested: exit,
+        }
     }
 
     /// Resolve `$(...)` command substitution and `$((...))` arithmetic (including
@@ -225,7 +238,10 @@ impl CommandDispatcher {
     ) -> (String, String, bool, bool) {
         match node {
             parser::Node::Seq(list) => self.run_command_list(list, context).await,
-            parser::Node::If { branches, else_body } => {
+            parser::Node::If {
+                branches,
+                else_body,
+            } => {
                 let mut stdout = String::new();
                 let mut stderr = String::new();
                 for (cond, body) in branches {
@@ -319,7 +335,11 @@ impl CommandDispatcher {
             }
 
             let is_first = idx == 0;
-            let stdin = if is_first { String::new() } else { stdout.clone() };
+            let stdin = if is_first {
+                String::new()
+            } else {
+                stdout.clone()
+            };
 
             // Bare variable assignment `VAR=value` (RHS already expanded).
             if let Some((var, val)) = parser::parse_assignment(&cmd.name) {
@@ -331,8 +351,9 @@ impl CommandDispatcher {
                 // `VAR=value command args`: set env var then run the real command.
                 let real_name = cmd.args[0].clone();
                 let real_args: Vec<String> = cmd.args[1..].to_vec();
-                let (mut out, mut err, succ) =
-                    self.dispatch_one(&real_name, &real_args, &stdin, is_first, context).await;
+                let (mut out, mut err, succ) = self
+                    .dispatch_one(&real_name, &real_args, &stdin, is_first, context)
+                    .await;
                 Self::apply_redirects(&mut out, &mut err, &cmd.redirects);
                 stdout = out;
                 stderr_acc.push_str(&err);
@@ -340,8 +361,9 @@ impl CommandDispatcher {
                 continue;
             }
 
-            let (mut out, mut err, succ) =
-                self.dispatch_one(&cmd.name, &cmd.args, &stdin, is_first, context).await;
+            let (mut out, mut err, succ) = self
+                .dispatch_one(&cmd.name, &cmd.args, &stdin, is_first, context)
+                .await;
             Self::apply_redirects(&mut out, &mut err, &cmd.redirects);
             stdout = out;
             stderr_acc.push_str(&err);
@@ -452,12 +474,16 @@ fn find_cmdsubst_end(chars: &[char], start: usize) -> (String, usize) {
     while i < chars.len() {
         let c = chars[i];
         if in_s {
-            if c == '\'' { in_s = false; }
+            if c == '\'' {
+                in_s = false;
+            }
             i += 1;
             continue;
         }
         if in_d {
-            if c == '"' { in_d = false; }
+            if c == '"' {
+                in_d = false;
+            }
             i += 1;
             continue;
         }
@@ -490,12 +516,16 @@ fn find_arith_end(chars: &[char], start: usize) -> (String, usize) {
     while i < chars.len() {
         let c = chars[i];
         if in_s {
-            if c == '\'' { in_s = false; }
+            if c == '\'' {
+                in_s = false;
+            }
             i += 1;
             continue;
         }
         if in_d {
-            if c == '"' { in_d = false; }
+            if c == '"' {
+                in_d = false;
+            }
             i += 1;
             continue;
         }
@@ -527,8 +557,8 @@ fn find_arith_end(chars: &[char], start: usize) -> (String, usize) {
 mod tests {
     use super::*;
     use crate::shell::commands::{
-        EchoCommand, CatCommand, DateCommand, UnameCommand, ExitCommand, TestCommand, LsCommand,
-        TrueCommand, FalseCommand, ColonCommand, ExportCommand, UnsetCommand,
+        CatCommand, ColonCommand, DateCommand, EchoCommand, ExitCommand, ExportCommand,
+        FalseCommand, LsCommand, TestCommand, TrueCommand, UnameCommand, UnsetCommand,
     };
     use crate::shell::filesystem::fs2::FileSystem;
     use std::sync::Arc;
@@ -553,7 +583,13 @@ mod tests {
 
     fn make_context() -> CommandContext {
         let fs = Arc::new(RwLock::new(FileSystem::default()));
-        CommandContext::new("/".to_string(), "root".to_string(), "host".to_string(), fs, "1".to_string())
+        CommandContext::new(
+            "/".to_string(),
+            "root".to_string(),
+            "host".to_string(),
+            fs,
+            "1".to_string(),
+        )
     }
 
     #[tokio::test]
@@ -569,7 +605,11 @@ mod tests {
         let d = make_dispatcher();
         let mut ctx = make_context();
         let out = d.execute("x=$(echo captured); echo GOT:$x", &mut ctx).await;
-        assert!(out.output.contains("GOT:captured"), "output was: {}", out.output);
+        assert!(
+            out.output.contains("GOT:captured"),
+            "output was: {}",
+            out.output
+        );
     }
 
     #[tokio::test]
@@ -584,7 +624,9 @@ mod tests {
     async fn and_or_short_circuit() {
         let d = make_dispatcher();
         let mut ctx = make_context();
-        let out = d.execute("false_cmd && echo nope || echo yes", &mut ctx).await;
+        let out = d
+            .execute("false_cmd && echo nope || echo yes", &mut ctx)
+            .await;
         assert!(out.output.contains("yes"));
         assert!(!out.output.contains("nope"));
     }
@@ -633,8 +675,15 @@ mod tests {
 
         // All nine fingerprint markers must be present.
         for marker in [
-            "UNAME:", "ARCH:", "UPTIME:", "CPUS:", "CPU_MODEL:", "GPU:", "CAT_HELP:",
-            "LS_HELP:", "LAST:",
+            "UNAME:",
+            "ARCH:",
+            "UPTIME:",
+            "CPUS:",
+            "CPU_MODEL:",
+            "GPU:",
+            "CAT_HELP:",
+            "LS_HELP:",
+            "LAST:",
         ] {
             assert!(
                 output.contains(marker),
@@ -745,8 +794,15 @@ echo "LAST:$last_output"
 
         // All nine fingerprint markers present.
         for marker in [
-            "UNAME:", "ARCH:", "UPTIME:", "CPUS:", "CPU_MODEL:", "GPU:", "CAT_HELP:",
-            "LS_HELP:", "LAST:",
+            "UNAME:",
+            "ARCH:",
+            "UPTIME:",
+            "CPUS:",
+            "CPU_MODEL:",
+            "GPU:",
+            "CAT_HELP:",
+            "LS_HELP:",
+            "LAST:",
         ] {
             assert!(
                 output.contains(marker),
@@ -768,12 +824,7 @@ echo "LAST:$last_output"
             "else: command not found",
             "export: command not found",
         ] {
-            assert!(
-                !output.contains(bad),
-                "leaked {:?}:\n{}",
-                bad,
-                output
-            );
+            assert!(!output.contains(bad), "leaked {:?}:\n{}", bad, output);
         }
     }
 }

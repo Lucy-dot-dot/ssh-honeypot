@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, query, Row, Error};
 use sqlx::types::uuid::Uuid;
+use sqlx::{Error, PgPool, Row, query};
 use tokio::sync::mpsc;
 
 // Database message types
@@ -58,12 +58,12 @@ pub enum DbMessage {
 // Database handler function that runs in its own task
 pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
     log::trace!("Starting PostgreSQL database handler");
-    
+
     // Verify database connection
     match pool.acquire().await {
         Ok(_) => {
             log::trace!("Database connection pool initialized successfully");
-        },
+        }
         Err(e) => {
             log::error!("Failed to acquire database connection: {}", e);
             log::error!("========================================");
@@ -77,9 +77,17 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
 
     // Process database messages
     while let Some(msg) = rx.recv().await {
-        log::trace!("Processing database message: {:?}", std::mem::discriminant(&msg));
+        log::trace!(
+            "Processing database message: {:?}",
+            std::mem::discriminant(&msg)
+        );
         match msg {
-            DbMessage::RecordConnect { timestamp, ip, port, local_port } => {
+            DbMessage::RecordConnect {
+                timestamp,
+                ip,
+                port,
+                local_port,
+            } => {
                 log::trace!("Recording connection from {} at {}", ip, timestamp);
 
                 match record_connect(&pool, timestamp, ip, port, local_port).await {
@@ -91,14 +99,40 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                     }
                 };
             }
-            DbMessage::RecordAuth { timestamp, ip, username, auth_type, password, public_key, successful, abuseipdb_data, ipapi_data, response_tx } => {
-                log::trace!("Recording {} auth attempt: user='{}' from {} (success={})", auth_type, username, ip, successful);
+            DbMessage::RecordAuth {
+                timestamp,
+                ip,
+                username,
+                auth_type,
+                password,
+                public_key,
+                successful,
+                abuseipdb_data,
+                ipapi_data,
+                response_tx,
+            } => {
+                log::trace!(
+                    "Recording {} auth attempt: user='{}' from {} (success={})",
+                    auth_type,
+                    username,
+                    ip,
+                    successful
+                );
 
                 let result = record_auth(
-                    &pool, timestamp, ip, username, auth_type,
-                    password, public_key, successful, abuseipdb_data, ipapi_data
-                ).await;
-                
+                    &pool,
+                    timestamp,
+                    ip,
+                    username,
+                    auth_type,
+                    password,
+                    public_key,
+                    successful,
+                    abuseipdb_data,
+                    ipapi_data,
+                )
+                .await;
+
                 let response = match result {
                     Ok(auth_id) => Ok(auth_id),
                     Err(e) => {
@@ -107,13 +141,21 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                     }
                 };
                 let _ = response_tx.send(response);
-            },
-            DbMessage::RecordCommand { auth_id, timestamp, command } => {
+            }
+            DbMessage::RecordCommand {
+                auth_id,
+                timestamp,
+                command,
+            } => {
                 if let Err(e) = record_command(&pool, auth_id, timestamp, command).await {
                     log::error!("Database error recording command: {}", e);
                 }
-            },
-            DbMessage::RecordSessionStart { auth_id, start_time, response_tx } => {
+            }
+            DbMessage::RecordSessionStart {
+                auth_id,
+                start_time,
+                response_tx,
+            } => {
                 let result = record_session_start(&pool, auth_id, start_time).await;
 
                 let response = match result {
@@ -124,17 +166,50 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                     }
                 };
                 let _ = response_tx.send(response);
-            },
-            DbMessage::RecordSessionEnd { session_id, end_time, duration_seconds } => {
-                if let Err(e) = record_session_end(&pool, session_id, end_time, duration_seconds).await {
+            }
+            DbMessage::RecordSessionEnd {
+                session_id,
+                end_time,
+                duration_seconds,
+            } => {
+                if let Err(e) =
+                    record_session_end(&pool, session_id, end_time, duration_seconds).await
+                {
                     log::error!("Database error recording session end: {}", e);
                 }
-            },
-            DbMessage::RecordFileUpload { auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data } => {
-                if let Err(e) = record_file_upload(&pool, auth_id, timestamp, filename, filepath, file_size, file_hash, claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data).await {
+            }
+            DbMessage::RecordFileUpload {
+                auth_id,
+                timestamp,
+                filename,
+                filepath,
+                file_size,
+                file_hash,
+                claimed_mime_type,
+                detected_mime_type,
+                format_mismatch,
+                file_entropy,
+                binary_data,
+            } => {
+                if let Err(e) = record_file_upload(
+                    &pool,
+                    auth_id,
+                    timestamp,
+                    filename,
+                    filepath,
+                    file_size,
+                    file_hash,
+                    claimed_mime_type,
+                    detected_mime_type,
+                    format_mismatch,
+                    file_entropy,
+                    binary_data,
+                )
+                .await
+                {
                     log::error!("Database error recording file upload: {}", e);
                 }
-            },
+            }
             DbMessage::Shutdown => {
                 log::info!("Database handler shutting down");
                 break;
@@ -144,7 +219,10 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
     log::trace!("Database handler stopped");
 }
 
-pub async fn connect_to_db_with_retry(database_url: &str, retry_interval_secs: u64) -> Result<PgPool, Error> {
+pub async fn connect_to_db_with_retry(
+    database_url: &str,
+    retry_interval_secs: u64,
+) -> Result<PgPool, Error> {
     const MAX_RETRIES: u8 = 100;
     let mut retry_count = 0;
 
@@ -155,10 +233,18 @@ pub async fn connect_to_db_with_retry(database_url: &str, retry_interval_secs: u
             }
             Err(err) => {
                 if retry_count >= MAX_RETRIES {
-                    log::error!("Failed to connect to database after {} retries", MAX_RETRIES);
+                    log::error!(
+                        "Failed to connect to database after {} retries",
+                        MAX_RETRIES
+                    );
                     return Err(err);
                 }
-                log::error!("Failed to connect to database (attempt {}/{}): {}", retry_count, MAX_RETRIES, err);
+                log::error!(
+                    "Failed to connect to database (attempt {}/{}): {}",
+                    retry_count,
+                    MAX_RETRIES,
+                    err
+                );
                 log::info!("Retrying in {} seconds", retry_interval_secs);
                 tokio::time::sleep(tokio::time::Duration::from_secs(retry_interval_secs)).await;
                 retry_count += 1;
@@ -168,11 +254,14 @@ pub async fn connect_to_db_with_retry(database_url: &str, retry_interval_secs: u
 }
 
 // Initialize database connection pool and run migrations
-pub async fn initialize_database_pool(database_url: &str, skip_migrations: bool) -> Result<PgPool, Error> {
+pub async fn initialize_database_pool(
+    database_url: &str,
+    skip_migrations: bool,
+) -> Result<PgPool, Error> {
     log::trace!("Connecting to PostgreSQL database");
-    
+
     let pool = connect_to_db_with_retry(database_url, 5).await?;
-    
+
     log::trace!("Running database migrations");
     if !skip_migrations {
         sqlx::migrate!("./migrations").run(&pool).await?;
@@ -247,10 +336,10 @@ async fn record_command(
     command: String,
 ) -> Result<(), Error> {
     log::trace!("Recording command: {}", command);
-    
+
     query(
         "INSERT INTO commands (auth_id, timestamp, command)
-         VALUES ($1::uuid, $2, $3)"
+         VALUES ($1::uuid, $2, $3)",
     )
     .bind(&auth_id)
     .bind(timestamp)
@@ -268,12 +357,16 @@ async fn record_session_start(
     auth_id: String,
     start_time: DateTime<Utc>,
 ) -> Result<String, Error> {
-    log::trace!("Recording session start: auth={} at {}", auth_id, start_time);
+    log::trace!(
+        "Recording session start: auth={} at {}",
+        auth_id,
+        start_time
+    );
 
     let row = query(
         "INSERT INTO sessions (auth_id, start_time)
          VALUES ($1::uuid, $2)
-         RETURNING id"
+         RETURNING id",
     )
     .bind(&auth_id)
     .bind(start_time)
@@ -292,12 +385,16 @@ async fn record_session_end(
     end_time: DateTime<Utc>,
     duration_seconds: i64,
 ) -> Result<(), Error> {
-    log::trace!("Recording session end: session={} duration {} seconds", session_id, duration_seconds);
+    log::trace!(
+        "Recording session end: session={} duration {} seconds",
+        session_id,
+        duration_seconds
+    );
 
     query(
         "UPDATE sessions
          SET end_time = $2, duration_seconds = $3
-         WHERE id = $1::uuid"
+         WHERE id = $1::uuid",
     )
     .bind(&session_id)
     .bind(end_time)
@@ -323,8 +420,12 @@ async fn record_file_upload(
     file_entropy: Option<f64>,
     binary_data: Vec<u8>,
 ) -> Result<(), Error> {
-    log::trace!("Recording file upload: {} ({} bytes)", filename, binary_data.len());
-    
+    log::trace!(
+        "Recording file upload: {} ({} bytes)",
+        filename,
+        binary_data.len()
+    );
+
     query(
         "INSERT INTO uploaded_files (auth_id, timestamp, filename, filepath, file_size, file_hash, 
                                    claimed_mime_type, detected_mime_type, format_mismatch, file_entropy, binary_data)
@@ -363,15 +464,18 @@ pub async fn record_abuse_ip_check(
         Ok(val) => {
             log::trace!("Decoded abuse ipdb json response from string");
             val
-        },
+        }
         Err(err) => {
-            log::error!("Failed to decode json. We do not save malformed json to db: {}", err);
-            return Ok(())
+            log::error!(
+                "Failed to decode json. We do not save malformed json to db: {}",
+                err
+            );
+            return Ok(());
         }
     };
-    
+
     log::trace!("Recording AbuseIPDB check for IP: {}", ip);
-    
+
     query(
         "INSERT INTO abuse_ip_cache (ip, timestamp, abuse_confidence_score, country_code, is_tor, is_whitelisted, total_reports, response_data)
          VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8)
@@ -404,34 +508,37 @@ pub async fn get_abuse_ip_check(
     ip: &str,
     cache_ttl_hours: u8,
 ) -> Result<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>, Error> {
-    
     let result = query(
         "SELECT timestamp, response_data 
          FROM abuse_ip_cache 
          WHERE ip = $1::inet
-           AND timestamp > NOW() - INTERVAL '1 hour' * $2"
+           AND timestamp > NOW() - INTERVAL '1 hour' * $2",
     )
     .bind(&ip.to_string())
     .bind(cache_ttl_hours as i32)
     .fetch_optional(pool)
     .await?;
-    
+
     match result {
         Some(row) => {
             let timestamp: DateTime<Utc> = row.get("timestamp");
             let response_data: serde_json::Value = row.get("response_data");
-            
+
             match serde_json::from_value::<crate::abuseipdb::CheckResponseData>(response_data) {
                 Ok(response) => {
                     log::debug!("AbuseIPDB cache hit from database for IP: {}", ip);
                     Ok(Some((timestamp, response)))
-                },
+                }
                 Err(e) => {
-                    log::error!("Failed to deserialize cached AbuseIPDB data for {}: {}", ip, e);
+                    log::error!(
+                        "Failed to deserialize cached AbuseIPDB data for {}: {}",
+                        ip,
+                        e
+                    );
                     Ok(None)
                 }
             }
-        },
+        }
         None => {
             log::debug!("No valid AbuseIPDB cache entry found for IP: {}", ip);
             Ok(None)
@@ -462,15 +569,18 @@ pub async fn record_ipapi_check(
         Ok(val) => {
             log::trace!("Decoded abuse ip-api json response from string");
             val
-        },
+        }
         Err(err) => {
-            log::error!("Failed to decode json. We do not save malformed json to db: {}", err);
-            return Ok(())
+            log::error!(
+                "Failed to decode json. We do not save malformed json to db: {}",
+                err
+            );
+            return Ok(());
         }
     };
-    
+
     log::trace!("Recording IPAPI check for IP: {}", ip);
-    
+
     query(
         "INSERT INTO ipapi_cache (ip, timestamp, country, country_code, region, region_name, city, zip, lat, lon, timezone, isp, org, as_info, response_data)
          VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
@@ -517,34 +627,33 @@ pub async fn get_ipapi_check(
     ip: &str,
     cache_ttl_hours: u8,
 ) -> Result<Option<(DateTime<Utc>, crate::ipapi::IpApiResponse)>, Error> {
-    
     let result = query(
         "SELECT timestamp, response_data 
          FROM ipapi_cache 
          WHERE ip = $1::inet
-           AND timestamp > NOW() - INTERVAL '1 hour' * $2"
+           AND timestamp > NOW() - INTERVAL '1 hour' * $2",
     )
     .bind(&ip.to_string())
     .bind(cache_ttl_hours as i32)
     .fetch_optional(pool)
     .await?;
-    
+
     match result {
         Some(row) => {
             let timestamp: DateTime<Utc> = row.get("timestamp");
             let response_data: serde_json::Value = row.get("response_data");
-            
+
             match serde_json::from_value::<crate::ipapi::IpApiResponse>(response_data) {
                 Ok(response) => {
                     log::debug!("IPAPI cache hit from database for IP: {}", ip);
                     Ok(Some((timestamp, response)))
-                },
+                }
                 Err(e) => {
                     log::error!("Failed to deserialize cached IPAPI data for {}: {}", ip, e);
                     Ok(None)
                 }
             }
-        },
+        }
         None => {
             log::debug!("No valid IPAPI cache entry found for IP: {}", ip);
             Ok(None)

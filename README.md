@@ -1,287 +1,198 @@
-# SSH Honeypot Server
+# SSH Honeypot
 
-## About
+A high-interaction SSH honeypot written in Rust that **pretends to be an Ubuntu server** to lure in attackers — then records everything they do, without ever running a single command for real.
 
-A sophisticated SSH honeypot server written in Rust that simulates an Ubuntu-like environment to capture and log malicious activities. The server accepts or rejects SSH authentication attempts and provides a fake shell interface without executing any actual commands, making it safe for security research and threat intelligence gathering.
+It hands attackers a believable shell (with a fake filesystem, fake processes, fake `ls`/`cat`/`ps`/`free` output), captures their credentials, keystrokes, and SFTP uploads, and ships it all into PostgreSQL. Pair it with the bundled **live dashboard** and you can watch intruders poke around your fake box in real time.
 
-## Features
+> No attacker command is ever executed. Every shell response is fabricated, so the honeypot can't be turned against the host it runs on.
 
-### Core Honeypot Functionality
-- **Safe Command Simulation**: Mimics Ubuntu environment without executing real commands
-- **Flexible Authentication**: Can accept all attempts (honeypot mode) or reject all (logging mode)
-- **Session Recording**: Tracks complete SSH sessions with timing and command history
-- **SFTP Support**: Captures uploaded files with comprehensive threat analysis
-- **Tarpit Mode**: Optional slow response mode to delay and frustrate attackers
+---
 
-### IP Intelligence Integration
-- **AbuseIPDB Integration**: Automatic threat intelligence lookup with confidence scoring
-- **IPAPI Geolocation**: Geographic and ISP information for connecting IPs
-- **Dual-Layer Caching**: Memory + database caching for both services (24h TTL)
-- **Rate Limit Handling**: Graceful handling of API rate limits with retry logic
+## Why this one?
 
-### Advanced Monitoring
-- **File Upload Analysis**: SFTP uploads analyzed for file type, entropy, and threats
-- **Session Tracking**: Complete session lifecycle with start/end times and duration
-- **Command Logging**: All entered commands logged with session correlation
-- **Connection Tracking**: Basic connection attempt logging
+There are lots of SSH honeypots. This one aims to be the one you actually want to use:
 
-### Database Features
-- **PostgreSQL Backend**: Professional-grade database with proper indexing
-- **Enriched Views**: `auth_enriched` view combining authentication with IP intelligence
-- **Automatic Cache Cleanup**: Configurable cleanup of expired cache entries
-- **Migration Support**: Structured database schema evolution
+- **Believable sessions.** A Debian/Ubuntu-flavoured fake filesystem (loaded from `base.tar.gz`) plus simulated `ls`, `cat`, `echo`, `date`, `free`, `ps`, `uname` and friends — pipes, redirects, `&&`/`||`, command substitution and all. Attackers waste real time exploring.
+- **Everything is logged.** Every connection, auth attempt, command, session, and uploaded file ends up queryable in PostgreSQL.
+- **Built-in analysis tools.** A real-time desktop **dashboard**, a **report viewer**, and a CLI **report generator** ship in the same crate.
+- **Threat intel, on by default.** Automatic [AbuseIPDB](https://www.abuseipdb.com/) lookups (abuse-confidence scores, Tor-exit detection) and [IPAPI](https://ip-api.com/) geolocation/ISP data, cached in memory + DB.
+- **Malware-aware file capture.** SFTP uploads get magic-byte MIME detection, Shannon-entropy scoring, claimed-vs-detected format-mismatch flagging, and hashing.
+- **Modern crypto.** Supports post-quantum key exchange (`mlkem768x25519-sha256`) alongside the usual curve25519/DH suites, and accepts password, public-key, and keyboard-interactive auth (so you capture all of them).
+- **Safe to deploy.** Ships as a hardened Docker image (`USER 1000`, `cap_drop: ALL`, `no-new-privileges`) built from a `FROM scratch` final layer.
 
-## Usage
+---
 
-### Basic Operation
-```bash
-# Run with default settings (accepts all auth, listens on 0.0.0.0:2222 and [::]:2222)
-cargo run
+## What you get
 
-# Show all available options
-cargo run -- --help
+Three programs build from this repo:
 
-# Run in reject-all mode (logs attempts but denies access)
-cargo run -- --reject-all-auth
+| Binary | What it does |
+|--------|--------------|
+| `ssh-honeypot` | The honeypot server itself. Listens for SSH, fakes the shell, writes to PostgreSQL. |
+| `dashboard-gui` | A live-activity desktop GUI (egui). Shows live sessions, recent auths/connections, top IPs/passwords/usernames, and updates in real time via Postgres `LISTEN`/`NOTIFY`. Double-click any IP/password/session to drill in. |
+| `report-gui` | A desktop GUI for generating on-demand IP and password reports against the database. |
+| `report-generator` | A CLI for the same reports, output as `text`, `markdown`, or `html` (via bundled MiniJinja templates). |
 
-# Enable tarpit mode to slow down attackers
-cargo run -- --tarpit
-```
+The dashboard is the fun part — point it at the honeypot's database and watch the attacks roll in.
 
-### Configuration File
-```bash
-# Use custom config file
-cargo run -- --config /path/to/config.toml
+---
 
-# See config.toml.example for full configuration options
-```
+## Quick start (Docker)
 
-### Advanced Options
-```bash
-# Custom interface and database
-cargo run -- --interface 127.0.0.1:2223 --database-url postgresql://user:pass@host/db
-
-# Enable AbuseIPDB integration
-cargo run -- --abuse-ip-db-api-key YOUR_API_KEY
-
-# Disable IPAPI geolocation (if you don't want HTTP requests)
-cargo run -- --disable-ipapi
-
-# Custom SSH keys directory
-cargo run -- --key-folder /secure/keys
-
-# Disable SFTP support
-cargo run -- --disable-sftp
-```
-
-## Command-Line Options
-
-| Flag | Description | Environment Variable |
-|------|-------------|---------------------|
-| `-f, --config` | Configuration file path | `CONFIG_FILE` |
-| `-i, --interface` | Listen addresses/ports | `INTERFACE` |
-| `-d, --database-url` | PostgreSQL connection URL | `DATABASE_URL` |
-| `-c, --disable-cli-interface` | Only log auth, no shell simulation | `DISABLE_CLI_INTERFACE` |
-| `-a, --authentication-banner` | Custom SSH banner text | `AUTHENTICATION_BANNER` |
-| `-t, --tarpit` | Enable slow response mode | `TARPIT` |
-| `-g, --disable-base-tar-gz-loading` | Skip filesystem loading | `DISABLE_BASE_TAR_GZ_LOADING` |
-| `-b, --base-tar-gz-path` | Custom filesystem archive path | `BASE_TAR_GZ_PATH` |
-| `-k, --key-folder` | SSH keys directory | `KEY_FOLDER` |
-| `--enable-sftp` | Enable SFTP subsystem (disabled by default) | `ENABLE_SFTP` |
-| `--abuse-ip-db-api-key` | AbuseIPDB API key | `ABUSE_IP_DB_API_KEY` |
-| `--abuse-ip-cache-cleanup-hours` | Cache cleanup interval | `ABUSE_IP_CACHE_CLEANUP_HOURS` |
-| `--reject-all-auth` | Reject all authentication attempts | `REJECT_ALL_AUTH` |
-| `--disable-ipapi` | Disable IPAPI geolocation | `DISABLE_IPAPI` |
-
-## Configuration
-
-### Directory Structure
-```
-~/.config/ssh-honeypot/          # Configuration directory (XDG compliant)
-├── config.toml                  # Main configuration file
-└── keys/                        # SSH server keys
-    ├── ed25519
-    ├── rsa  
-    └── ecdsa
-
-~/.local/share/ssh-honeypot/     # Data directory
-└── base.tar.gz                  # Filesystem archive
-```
-
-### Configuration Precedence
-1. Command-line arguments (highest priority)
-2. Configuration file values
-3. Environment variables
-4. XDG directory defaults
-5. Hard-coded defaults (lowest priority)
-
-## Database Schema
-
-### Core Tables
-- **`auth`**: All SSH authentication attempts with credentials
-- **`commands`**: Commands entered during SSH sessions
-- **`sessions`**: Session metadata with start/end times
-- **`uploaded_files`**: SFTP uploads with threat analysis
-- **`conn_track`**: Basic connection attempt logging
-
-### Cache Tables
-- **`abuse_ip_cache`**: AbuseIPDB threat intelligence cache
-- **`ipapi_cache`**: IPAPI geolocation data cache
-
-### Views
-- **`auth_enriched`**: Comprehensive view merging authentication attempts with IP intelligence from both AbuseIPDB and IPAPI, with AbuseIPDB taking precedence for overlapping fields
-
-## Security Features
-
-### Threat Detection
-- **File Upload Analysis**: Magic-based MIME detection, entropy analysis, format mismatch detection
-- **IP Reputation**: Automatic AbuseIPDB lookups with confidence scoring
-- **Tor Detection**: Identifies Tor exit nodes via AbuseIPDB
-- **Geographic Profiling**: Country and ISP identification via IPAPI
-
-### Configuration Security
-- **XDG Compliance**: Uses standard system directories with proper permissions
-- **Key Management**: SSH keys stored securely in dedicated directory
-- **No Secret Exposure**: Configuration files don't contain sensitive data
-- **Path Validation**: All file paths validated and resolved safely
-
-### Operational Modes
-- **Honeypot Mode** (default): Accepts all authentication, provides interactive shell
-- **Logging Mode** (`--reject-all-auth`): Rejects all authentication, logs attempts only
-- **Tarpit Mode** (`--tarpit`): Deliberately slow responses to waste attacker time
-
-## Requirements
-
-- **Rust 1.70+**: Modern Rust toolchain
-- **PostgreSQL**: Database backend for storing honeypot data
-- **Network Access**: For IP intelligence APIs (optional)
-- **Elevated Privileges**: For binding to ports < 1000 (use `setcap cap_net_bind_service`)
-
-## Installation
+The easiest path. This runs the honeypot plus a PostgreSQL instance:
 
 ```bash
-# Clone the repo
-git clone <repository-url>
-
-# Change directory to the repo root
+git clone https://github.com/Lucy-dot-dot/ssh-honeypot.git
 cd ssh-honeypot
-
-# Create configuration file from the example (edit as needed)
-cp config.toml.example config.toml
-
-# Pull the current image
+cp config.toml.example config.toml      # edit if you like
 docker compose pull
-
-# Run the server
 docker compose up -d && docker compose logs -f ssh-honeypot
 ```
 
-### IPv6 Support
+The compose file publishes the honeypot on ports **22** and **2222** of the host, and exposes Postgres on `127.0.0.1:5432` (so the GUIs can connect locally). By default it runs in **logging mode** (`DISABLE_CLI_INTERFACE=true`): it accepts logins and records credentials, but doesn't hand out a shell. Flip that off in `config.toml` to give attackers the full fake-shell experience.
 
-The default `config.toml.example` enables both IPv4 (`0.0.0.0`) and IPv6 (`[::]`) listeners. If the container or host does not have IPv6 enabled, binding the `[::]` interfaces will fail with a logged error — **this is harmless**, the server continues running on the IPv4 interfaces only.
+A prebuilt image is published automatically to `ghcr.io/lucy-dot-dot/ssh-honeypot:master` on every push to `main`/`master`.
 
-To enable proper IPv6 inside Docker you need two things:
+### Want the live dashboard?
 
-**1. Update `/etc/docker/daemon.json` on the host:**
-```json
-{
-  "ipv6": true,
-  "fixed-cidr-v6": "fd00:1::/64"
-}
-```
-Then restart the Docker daemon (`sudo systemctl restart docker`).
+Build and run the GUI against the same database:
 
-**2. Uncomment the network block at the bottom of `docker-compose.yml`:**
-```yaml
-networks:
-  default:
-    enable_ipv6: true
-    ipam:
-      config:
-        - subnet: 172.21.0.0/16
-        - subnet: fd00:2::/64
-```
-
-Without both changes, Docker containers cannot receive IPv6 traffic regardless of what the honeypot binds to.
-
-## Development
-
-### Build Commands
 ```bash
-cargo build              # Debug build
-cargo build --release    # Optimized build
-cargo check              # Quick compilation check
-cargo run -- --help     # Show all options
+cargo run --release --bin dashboard-gui
+# defaults to postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot
+```
+
+Then double-click IPs, passwords, and sessions to dig into them.
+
+---
+
+## How to run it
+
+### Three modes
+
+- **Honeypot mode (default):** accepts every login and drops the attacker into the fake shell.
+- **Logging mode (`--reject-all-auth` or `reject_all_auth = true`):** rejects every login but still records every attempt. Lowest-risk.
+- **Tarpit mode (`--tarpit`):** answers _veeeerrry_ slowly to burn attacker time.
+
+### Common flags
+
+```bash
+# Accept logins and give a fake shell (full honeypot)
+cargo run --release
+
+# Reject everyone, just harvest credentials
+cargo run --release -- --reject-all-auth
+
+# Slow the attackers down
+cargo run --release -- --tarpit
+
+# Add AbuseIPDB threat intel (free key from abuseipdb.com/api)
+cargo run --release -- --abuse-ip-db-api-key YOUR_KEY
+
+# Custom listen ports (needs CAP_NET_BIND_SERVICE for ports < 1024)
+cargo run --release -- --interface 0.0.0.0:22 --interface [::]:22
+
+# Don't hand out a shell — log auth only, then disconnect
+cargo run --release -- --disable-cli-interface
 ```
 
 ### Configuration
-See `config.toml.example` for a fully documented configuration file with all available options.
 
-### Database Migrations
-- `001_initial_schema.sql`: Core tables (auth, commands, sessions, uploaded_files, abuse_ip_cache)
-- `002_conn_track.sql`: Connection tracking table
-- `003_ipapi_cache.sql`: IPAPI geolocation cache table  
-- `004_auth_enriched_view.sql`: Enriched authentication view
+Every option can be set via **CLI flag**, **environment variable**, or **TOML config file**, in that order of precedence. Copy `config.toml.example` to `config.toml` for the full, documented set. A few worth knowing:
 
-## Architecture
+| Option (flag / env / config key) | What it controls |
+|----------------------------------|------------------|
+| `--interface` / `INTERFACE` / `interfaces` | Listen addresses, e.g. `0.0.0.0:2222`, `[::]:22` |
+| `--database-url` / `DATABASE_URL` / `database_url` | PostgreSQL connection URL |
+| `--disable-cli-interface` / `DISABLE_CLI_INTERFACE` | No fake shell — log auth only |
+| `--disable-exec` / `DISABLE_EXEC` | Ignore `ssh user@host "cmd"` exec requests (still logged) |
+| `--tarpit` / `TARPIT` | Slow responses |
+| `--reject-all-auth` / `REJECT_ALL_AUTH` | Deny every login |
+| `--enable-sftp` / `ENABLE_SFTP` | Enable SFTP capture (off by default) |
+| `--abuse-ip-db-api-key` / `ABUSE_IP_DB_API_KEY` | Enable AbuseIPDB lookups |
+| `--disable-ipapi` / `DISABLE_IPAPI` | Disable IPAPI geolocation (free tier is HTTP-only) |
+| `--server-id` / `SERVER_ID` | The SSH version string attackers see |
+| `--welcome-message` / `WELCOME_MESSAGE` | The MOTD-style banner |
+| `--hostname` / `HOSTNAME` | Hostname shown in the fake shell prompt |
+| `--authentication-banner` / `AUTHENTICATION_BANNER` | Pre-auth banner text |
+| `--base-tar-gz-path` / `BASE_TAR_GZ_PATH` | Custom fake-filesystem archive |
+| `--key-folder` / `KEY_FOLDER` | SSH server key directory |
 
-### Core Components
-1. **SSH Server** (`src/server.rs`): Handles SSH connections and authentication
-2. **Database Layer** (`src/db.rs`): Async message-based database operations
-3. **SFTP Handler** (`src/sftp.rs`): File upload capture and analysis
-4. **Shell Simulation** (`src/shell/`): Virtual filesystem and command responses
-5. **IP Intelligence** (`src/abuseipdb.rs`, `src/ipapi.rs`): Threat and geolocation APIs
-6. **Configuration** (`src/app.rs`): Multi-layer configuration system
+The `config.toml.example` file lists every option with comments and the full set of env-var equivalents.
 
-### Key Design Patterns
-- **Async Architecture**: Tokio-based async handling
-- **Message Passing**: Database operations via mpsc channels
-- **Virtual Filesystem**: Loads from base.tar.gz for realistic content
-- **Dual Caching**: Memory + database caching for API responses
-- **XDG Compliance**: Standard directory structure with fallbacks
+---
 
-## API Integration
+## The reports
 
-### AbuseIPDB
-- **Purpose**: Threat intelligence and abuse confidence scoring
-- **Caching**: 24-hour TTL with memory + database layers
-- **Rate Limiting**: Graceful handling with retry-after logic
-- **Data**: Confidence scores, country codes, Tor detection, report counts
+Generate an IP or password report from the command line:
 
-### IPAPI
-- **Purpose**: Geographic and ISP information  
-- **Caching**: 24-hour TTL with memory + database layers
-- **Note**: Free tier uses HTTP (no HTTPS) - disable with `--disable-ipapi`, `DISABLE_IPAPI` environment variable or `disable_ipapi = true` in the toml config file
-- **Data**: Country, region, city, coordinates, timezone, ISP, organization
+```bash
+# Everything we know about an attacker IP (text, with geo + threat intel)
+cargo run --release --bin report-generator -- ip 203.0.113.42 --format text --extended-info
 
-## Security Considerations
+# Where has this password been seen?
+cargo run --release --bin report-generator -- password "root" --format markdown -o root.md
+```
 
-This is a honeypot designed for **defensive security research**. The code deliberately simulates vulnerability while maintaining actual system security by never executing real commands.
+An IP report includes connection history, geolocation, ISP/AS, AbuseIPDB abuse-confidence score and Tor flag, total/unique auth attempts, top usernames & passwords, recent attempts, and any commands that IP ran. Password reports show every IP and username that tried that password. Templates live in `templates/` if you want to tweak the output.
 
-### Data Privacy
-- All captured data (credentials, commands, files) should be handled according to applicable privacy laws
-- Consider data retention policies and secure disposal procedures
-- Ensure compliance with local regulations regarding data collection
+The `report-gui` binary is the click-and-point version of the same thing.
 
-### Network Security  
-- Deploy in isolated network segments when possible
-- Monitor for unusual traffic patterns that might indicate compromise
-- Regularly review logs for unexpected behavior
+---
 
-## Legal Disclaimer
+## What gets stored
 
-This software is provided "as-is" without any warranty or guarantee of any kind, either expressed or implied. The author(s) of this honeypot SSH server are not liable for any damages, attacks, security breaches, data loss, system compromises, or other negative consequences that may arise from using this software.
+All data lands in PostgreSQL. The core tables:
 
-By installing and using this software, you acknowledge that:
+- **`auth`** — every login attempt (username, password, public key, auth type, success), plus point-in-time AbuseIPDB/IPAPI snapshots for that IP
+- **`commands`** — every command typed in a session
+- **`sessions`** — session lifecycle, including **live** (in-progress) sessions
+- **`uploaded_files`** — SFTP uploads with hash, MIME, entropy, and binary blob
+- **`conn_track`** — raw connection attempts (source/destination ports)
+- **`abuse_ip_cache`** / **`ipapi_cache`** — 24-hour threat-intel caches
 
-1. You are using this software at your own risk
-2. The author(s) bear no responsibility for any security vulnerabilities that may exist in the code  
-3. The author(s) are not responsible for any attacks directed at your systems as a result of using this software
-4. No fitness for a particular purpose is guaranteed
-5. The author(s) are not liable for any misuse of the collected data
+Plus a couple of ready-made views that join auth attempts with geo + threat intel (`auth_enriched`, `auth_password_enriched`). Migrations are plain SQL files under `migrations/` and run automatically on startup.
 
-This tool is intended for security research and educational purposes only. Users are responsible for deploying it in compliance with all applicable laws and regulations in their jurisdiction.
+---
+
+## Building from source
+
+Requirements: a recent Rust toolchain (edition 2024), and PostgreSQL if you're not using the Docker setup.
+
+```bash
+git clone https://github.com/Lucy-dot-dot/ssh-honeypot.git
+cd ssh-honeypot
+
+cargo build --release                       # builds all four binaries
+cargo run --release -- --help               # honeypot options
+cargo run --release --bin dashboard-gui     # the live dashboard
+```
+
+To bind ports below 1024 without root, grant the capability once:
+
+```bash
+sudo setcap cap_net_bind_service=+ep target/release/ssh-honeypot
+```
+
+### IPv6
+
+The default listeners include `[::]` (IPv6). If IPv6 isn't available, the honeypot logs a harmless bind error and keeps serving IPv4. To actually receive IPv6 traffic inside Docker you need both `ipv6` enabled in the host's `/etc/docker/daemon.json` **and** the `networks:` block at the bottom of `docker-compose.yml` uncommented — see the comments in that file.
+
+---
+
+## Safety & responsibility
+
+This is a **defensive** research tool. A few things to keep in mind:
+
+- **It doesn't execute attacker code.** Shell output is fabricated from a virtual filesystem; nothing an attacker types is ever run for real.
+- **Captured data is sensitive.** You'll be collecting credentials, malware samples, and network metadata. Handle retention and disposal per your local laws.
+- **Isolate the deployment.** Put it on a network segment that can't reach anything you care about, and monitor it like you would any exposed service.
+- **Malware samples are stored in the DB.** SFTP uploads (including binaries) are persisted as `BYTEA`. Treat the database as untrusted.
+
+---
 
 ## License
 
-Dual licensed under MIT and UNLICENSE - choose whatever license your lawyer is happy with.
+Dual-licensed under **MIT** and **The Unlicense** — pick whichever works for you. See [`LICENSE.MIT`](LICENSE.MIT) and [`LICENSE`](LICENSE).
+
+This software is provided as-is, without warranty of any kind. The authors are not liable for any damage, compromise, or misuse arising from running it. Use it lawfully and responsibly.

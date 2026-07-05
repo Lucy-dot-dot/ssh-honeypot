@@ -1,25 +1,26 @@
+use crate::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
+use crate::db::DbMessage;
+use crate::ipapi;
+use crate::sftp::HoneypotSftpSession;
+use crate::shell::commands::{
+    CatCommand, CdCommand, ColonCommand, CommandContext, CommandDispatcher, CurlCommand,
+    DateCommand, EchoCommand, ExitCommand, ExportCommand, FalseCommand, FreeCommand, IdCommand,
+    LsCommand, PsCommand, PwdCommand, SudoCommand, TestCommand, TrueCommand, UnameCommand,
+    UnsetCommand, WgetCommand, WhoamiCommand,
+};
+use crate::shell::filesystem::fs2::FileSystem;
+use async_trait::async_trait;
+use chrono::{DateTime, Local, Utc};
+use rand::{Rng, RngExt, rng};
+use russh::keys::{HashAlg, PublicKey};
+use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session};
+use russh::{Channel, ChannelId, ChannelMsg, Error, server};
+use ssh_encoding::Error as SshEncodingError;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use async_trait::async_trait;
-use chrono::{DateTime, Local, Utc};
-use russh::{server, Channel, ChannelId, ChannelMsg, Error};
-use russh::keys::{HashAlg, PublicKey};
-use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session};
-use ssh_encoding::Error as SshEncodingError;
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
-use rand::{rng, Rng, RngExt};
-use crate::db::DbMessage;
-use crate::shell::commands::{
-	CommandDispatcher, CommandContext,
-	EchoCommand, CatCommand, DateCommand, FreeCommand, PsCommand, UnameCommand, LsCommand,
-	PwdCommand, WhoamiCommand, IdCommand, CdCommand, WgetCommand, CurlCommand, SudoCommand, ExitCommand,
-	TestCommand, TrueCommand, FalseCommand, ColonCommand, ExportCommand, UnsetCommand
-};use crate::shell::filesystem::fs2::FileSystem;
-use crate::sftp::HoneypotSftpSession;
-use crate::abuseipdb::{Client as AbuseIpClient, AbuseIpError};
-use crate::ipapi;
+use tokio::sync::mpsc;
 
 #[derive(Clone, Default)]
 // Store session data
@@ -52,7 +53,7 @@ pub struct SshHandler {
     enable_sftp: bool,
     abuse_ip_client: Option<Arc<AbuseIpClient>>,
     reject_all_auth: bool,
-	command_dispatcher: CommandDispatcher,
+    command_dispatcher: CommandDispatcher,
     welcome_message: String,
     ip_api_client: Option<Arc<ipapi::Client>>,
 }
@@ -77,7 +78,12 @@ impl Handler for SshHandler {
 
             // We'll get the actual UUID back from the database
 
-            log::info!("Password auth attempt - Username: {}, Password: {}, IP: {}", user, password, peer_str);
+            log::info!(
+                "Password auth attempt - Username: {}, Password: {}, IP: {}",
+                user,
+                password,
+                peer_str
+            );
 
             // Check IP with AbuseIPDB if client is available and get the data
             let abuseipdb_data = self.check_abuse_ip_db().await;
@@ -87,33 +93,37 @@ impl Handler for SshHandler {
 
             // Record authentication attempt in database and get the UUID back
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            match self.db_tx.send(DbMessage::RecordAuth {
-                timestamp: Utc::now(),
-                ip: peer_str,
-                username: user.to_string(),
-                auth_type: "password".to_string(),
-                password: Some(password.to_string()),
-                public_key: None,
-                successful: !self.reject_all_auth, // Accept/reject based on flag
-                abuseipdb_data,
-                ipapi_data,
-                response_tx,
-            }).await {
-                Ok(_) => {
-                    match response_rx.await {
-                        Ok(Ok(auth_id)) => {
-                            log::trace!("Recorded auth with UUID: {}", auth_id);
-                            self.auth_id = Some(auth_id);
-                        },
-                        Ok(Err(e)) => {
-                            log::error!("Database error recording auth: {}", e);
-                        },
-                        Err(e) => {
-                            log::error!("Failed to receive auth response: {}", e);
-                        }
+            match self
+                .db_tx
+                .send(DbMessage::RecordAuth {
+                    timestamp: Utc::now(),
+                    ip: peer_str,
+                    username: user.to_string(),
+                    auth_type: "password".to_string(),
+                    password: Some(password.to_string()),
+                    public_key: None,
+                    successful: !self.reject_all_auth, // Accept/reject based on flag
+                    abuseipdb_data,
+                    ipapi_data,
+                    response_tx,
+                })
+                .await
+            {
+                Ok(_) => match response_rx.await {
+                    Ok(Ok(auth_id)) => {
+                        log::trace!("Recorded auth with UUID: {}", auth_id);
+                        self.auth_id = Some(auth_id);
+                    }
+                    Ok(Err(e)) => {
+                        log::error!("Database error recording auth: {}", e);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to receive auth response: {}", e);
                     }
                 },
-                Err(err) => { log::error!("Failed to send RecordAuth to db task: {}", err) },
+                Err(err) => {
+                    log::error!("Failed to send RecordAuth to db task: {}", err)
+                }
             };
 
             // Simulate a small delay like a real SSH server
@@ -122,7 +132,10 @@ impl Handler for SshHandler {
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             if self.reject_all_auth {
                 log::debug!("Rejected authentication attempt");
-                Ok(Auth::Reject { proceed_with_methods: None, partial_success: false })
+                Ok(Auth::Reject {
+                    proceed_with_methods: None,
+                    partial_success: false,
+                })
             } else {
                 log::debug!("Accepted new connection");
                 Ok(Auth::Accept)
@@ -147,7 +160,12 @@ impl Handler for SshHandler {
 
             // We'll get the actual UUID back from the database
 
-            log::info!("Public key auth attempt - Username: {}, Key: {}, IP: {}", user, key_str, peer_str);
+            log::info!(
+                "Public key auth attempt - Username: {}, Key: {}, IP: {}",
+                user,
+                key_str,
+                peer_str
+            );
 
             // Check IP with AbuseIPDB if client is available and get the data
             let abuseipdb_data = self.check_abuse_ip_db().await;
@@ -157,33 +175,37 @@ impl Handler for SshHandler {
 
             // Record authentication attempt in database and get the UUID back
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            match self.db_tx.send(DbMessage::RecordAuth {
-                timestamp: Utc::now(),
-                ip: peer_str,
-                username: user.to_string(),
-                auth_type: "publickey".to_string(),
-                password: None,
-                public_key: Some(key_str),
-                successful: !self.reject_all_auth, // Accept/reject based on flag
-                abuseipdb_data,
-                ipapi_data,
-                response_tx,
-            }).await {
-                Ok(_) => {
-                    match response_rx.await {
-                        Ok(Ok(auth_id)) => {
-                            log::trace!("Recorded auth with UUID: {}", auth_id);
-                            self.auth_id = Some(auth_id);
-                        },
-                        Ok(Err(e)) => {
-                            log::error!("Database error recording auth: {}", e);
-                        },
-                        Err(e) => {
-                            log::error!("Failed to receive auth response: {}", e);
-                        }
+            match self
+                .db_tx
+                .send(DbMessage::RecordAuth {
+                    timestamp: Utc::now(),
+                    ip: peer_str,
+                    username: user.to_string(),
+                    auth_type: "publickey".to_string(),
+                    password: None,
+                    public_key: Some(key_str),
+                    successful: !self.reject_all_auth, // Accept/reject based on flag
+                    abuseipdb_data,
+                    ipapi_data,
+                    response_tx,
+                })
+                .await
+            {
+                Ok(_) => match response_rx.await {
+                    Ok(Ok(auth_id)) => {
+                        log::trace!("Recorded auth with UUID: {}", auth_id);
+                        self.auth_id = Some(auth_id);
+                    }
+                    Ok(Err(e)) => {
+                        log::error!("Database error recording auth: {}", e);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to receive auth response: {}", e);
                     }
                 },
-                Err(err) => { log::error!("Failed to send RecordAuth to db task: {}", err) },
+                Err(err) => {
+                    log::error!("Failed to send RecordAuth to db task: {}", err)
+                }
             };
 
             // Simulate a small delay like a real SSH server
@@ -193,7 +215,10 @@ impl Handler for SshHandler {
 
             if self.reject_all_auth {
                 log::debug!("Rejected authentication attempt");
-                Ok(Auth::Reject { proceed_with_methods: None, partial_success: false })
+                Ok(Auth::Reject {
+                    proceed_with_methods: None,
+                    partial_success: false,
+                })
             } else {
                 log::debug!("Accepted new connection");
                 Ok(Auth::Accept)
@@ -205,12 +230,19 @@ impl Handler for SshHandler {
         &mut self,
     ) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send {
         async move {
-            log::trace!("Displaying banner: {:?}", self.authentication_banner.as_ref());
+            log::trace!(
+                "Displaying banner: {:?}",
+                self.authentication_banner.as_ref()
+            );
             Ok(self.authentication_banner.clone())
         }
     }
 
-    fn channel_eof(&mut self, channel: ChannelId, session: &mut Session) -> impl Future<Output=Result<(), Self::Error>> + Send {
+    fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
             log::debug!("Channel EOF on channel: {}, closing channel", channel);
             session.close(channel)?;
@@ -225,7 +257,11 @@ impl Handler for SshHandler {
         _session: &mut Session,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
-            log::debug!("Open session on channel: {} for ip {}", channel.id(), self.peer.ip());
+            log::debug!(
+                "Open session on channel: {} for ip {}",
+                channel.id(),
+                self.peer.ip()
+            );
             if let (Some(user), Some(auth_id)) = (&self.user, &self.auth_id) {
                 let start_time = Utc::now();
 
@@ -266,7 +302,7 @@ impl Handler for SshHandler {
                     session_id,
                     commands: Vec::new(),
                     start_time,
-                    prompt: format!("{}@{}:~$ ", user, self.hostname)
+                    prompt: format!("{}@{}:~$ ", user, self.hostname),
                 };
                 self.session_data = data.clone();
 
@@ -304,14 +340,25 @@ impl Handler for SshHandler {
             if self.disable_cli_interface {
                 log::debug!("Cli interface is disabled");
                 session.channel_failure(channel)?;
-                return Ok(())
+                return Ok(());
             }
 
             if data[0] == 4 {
                 log::debug!("Client requested closing of connection");
-                match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
-                    Ok(_) => { log::trace!("Send closing connection text to client") },
-                    Err(err) => { log::error!("Failed to send closing connection to client: {}", err) },
+                match self
+                    .tarpit_data(
+                        session,
+                        channel,
+                        "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        log::trace!("Send closing connection text to client")
+                    }
+                    Err(err) => {
+                        log::error!("Failed to send closing connection to client: {}", err)
+                    }
                 };
                 return Err(Error::Disconnect);
             }
@@ -322,15 +369,23 @@ impl Handler for SshHandler {
                 if self.current_cmd.is_empty() {
                     log::trace!("current cmd is empty, so why are you still backspacing?");
                     match self.tarpit_data(session, channel, &[7u8]).await {
-                        Ok(_) => { log::trace!("Sent bell code to client") },
-                        Err(err) => { log::error!("Failed to send bell code to client: {}", err) },
+                        Ok(_) => {
+                            log::trace!("Sent bell code to client")
+                        }
+                        Err(err) => {
+                            log::error!("Failed to send bell code to client: {}", err)
+                        }
                     };
                     return Ok(());
                 }
 
                 match self.tarpit_data(session, channel, &[8u8, 32u8, 8u8]).await {
-                    Ok(_) => { log::trace!("Send backspace code to client") },
-                    Err(err) =>  { log::error!("Failed to send backspace code to client: {}", err) },
+                    Ok(_) => {
+                        log::trace!("Send backspace code to client")
+                    }
+                    Err(err) => {
+                        log::error!("Failed to send backspace code to client: {}", err)
+                    }
                 };
                 self.current_cmd.pop();
                 return Ok(());
@@ -342,12 +397,15 @@ impl Handler for SshHandler {
                 self.current_cmd = String::new();
                 let prompt = format!("\r\n{}", self.session_data.prompt);
                 match self.tarpit_data(session, channel, prompt.as_bytes()).await {
-                    Ok(_) => { log::trace!("Send prompt to client") },
-                    Err(err) => { log::error!("Failed to send prompt to client: {}", err) },
+                    Ok(_) => {
+                        log::trace!("Send prompt to client")
+                    }
+                    Err(err) => {
+                        log::error!("Failed to send prompt to client: {}", err)
+                    }
                 }
                 return Ok(());
             }
-
 
             if let Ok(cmd) = String::from_utf8(data.to_vec()) {
                 log::trace!("data: '{}' ({:?})", cmd, data);
@@ -356,21 +414,43 @@ impl Handler for SshHandler {
                     self.session_data.commands.push(self.current_cmd.clone());
 
                     // Record command in database
-                    match self.db_tx.send(DbMessage::RecordCommand {
-                        auth_id: self.session_data.auth_id.clone(),
-                        timestamp: Utc::now(),
-                        command: self.current_cmd.clone(),
-                    }).await {
-                        Ok(_) => { log::trace!("Send record command to db task") },
-                        Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+                    match self
+                        .db_tx
+                        .send(DbMessage::RecordCommand {
+                            auth_id: self.session_data.auth_id.clone(),
+                            timestamp: Utc::now(),
+                            command: self.current_cmd.clone(),
+                        })
+                        .await
+                    {
+                        Ok(_) => {
+                            log::trace!("Send record command to db task")
+                        }
+                        Err(err) => {
+                            log::error!("Failed to send record command to db: {}", err)
+                        }
                     };
 
                     if self.current_cmd == "exit" || self.current_cmd == "logout" {
-                        log::debug!("Closing session {} due to exit command", self.session_data.auth_id);
+                        log::debug!(
+                            "Closing session {} due to exit command",
+                            self.session_data.auth_id
+                        );
                         // Send goodbye message
-                        match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
-                            Ok(_) => { log::trace!("Sent closing connection to client") },
-                            Err(err) => { log::error!("Failed to send closing connection to client: {}", err) },
+                        match self
+                            .tarpit_data(
+                                session,
+                                channel,
+                                "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
+                            )
+                            .await
+                        {
+                            Ok(_) => {
+                                log::trace!("Sent closing connection to client")
+                            }
+                            Err(err) => {
+                                log::error!("Failed to send closing connection to client: {}", err)
+                            }
                         };
                         // Close the channel
                         return Err(Error::Disconnect);
@@ -388,8 +468,12 @@ impl Handler for SshHandler {
                     if crate::shell::parser::is_incomplete_block(&self.pending_block) {
                         self.current_cmd = String::new();
                         match self.tarpit_data(session, channel, b"\r\n> ".as_ref()).await {
-                            Ok(_) => { log::trace!("Sent secondary (continuation) prompt to client") },
-                            Err(err) => { log::error!("Failed to send secondary prompt to client: {}", err) },
+                            Ok(_) => {
+                                log::trace!("Sent secondary (continuation) prompt to client")
+                            }
+                            Err(err) => {
+                                log::error!("Failed to send secondary prompt to client: {}", err)
+                            }
                         }
                         return Ok(());
                     }
@@ -401,36 +485,71 @@ impl Handler for SshHandler {
 
                     // Send the response
                     match self.tarpit_data(session, channel, "\r\n".as_bytes()).await {
-                        Ok(_) => { log::trace!("Sent newline for command execution to client") },
-                        Err(err) => { log::error!("Failed to send newline to client: {}", err) },
+                        Ok(_) => {
+                            log::trace!("Sent newline for command execution to client")
+                        }
+                        Err(err) => {
+                            log::error!("Failed to send newline to client: {}", err)
+                        }
                     };
-                    match self.tarpit_data(session, channel, response.as_bytes()).await {
-                        Ok(_) => { log::trace!("Sent command result data to client") },
-                        Err(err) => { log::error!("Failed to send command result data to client: {}", err) },
+                    match self
+                        .tarpit_data(session, channel, response.as_bytes())
+                        .await
+                    {
+                        Ok(_) => {
+                            log::trace!("Sent command result data to client")
+                        }
+                        Err(err) => {
+                            log::error!("Failed to send command result data to client: {}", err)
+                        }
                     };
 
                     if exit_requested {
-                        log::debug!("Closing session {} due to exit command in pipeline", self.session_data.auth_id);
-                        match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
-                            Ok(_) => { log::trace!("Sent closing connection to client") },
-                            Err(err) => { log::error!("Failed to send closing connection to client: {}", err) },
+                        log::debug!(
+                            "Closing session {} due to exit command in pipeline",
+                            self.session_data.auth_id
+                        );
+                        match self
+                            .tarpit_data(
+                                session,
+                                channel,
+                                "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
+                            )
+                            .await
+                        {
+                            Ok(_) => {
+                                log::trace!("Sent closing connection to client")
+                            }
+                            Err(err) => {
+                                log::error!("Failed to send closing connection to client: {}", err)
+                            }
                         };
                         return Err(Error::Disconnect);
                     }
 
                     let prompt = format!("\r\n{} ", self.session_data.prompt);
                     match self.tarpit_data(session, channel, prompt.as_bytes()).await {
-                        Ok(_) => { log::trace!("Sent prompt to client") },
-                        Err(err) => { log::error!("Failed to send prompt to client after command execution: {}", err) },
+                        Ok(_) => {
+                            log::trace!("Sent prompt to client")
+                        }
+                        Err(err) => {
+                            log::error!(
+                                "Failed to send prompt to client after command execution: {}",
+                                err
+                            )
+                        }
                     };
-
                 } else {
                     log::trace!("Appending to command: {}", cmd);
                     if !cmd.is_empty() {
                         self.current_cmd += &*cmd;
                         match self.tarpit_data(session, channel, cmd.as_bytes()).await {
-                            Ok(_) => { log::trace!("Sent character back to client") },
-                            Err(err) => { log::error!("Failed to send character back to client: {}", err) },
+                            Ok(_) => {
+                                log::trace!("Sent character back to client")
+                            }
+                            Err(err) => {
+                                log::error!("Failed to send character back to client: {}", err)
+                            }
                         };
                     }
                 }
@@ -440,9 +559,20 @@ impl Handler for SshHandler {
                 // Check for CTRL+D (ASCII 4) in raw data
                 if data.contains(&4) {
                     // Send goodbye message and close connection
-                    match self.tarpit_data(session, channel, "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes()).await {
-                        Ok(_) => { log::trace!("Sent logout message to client") },
-                        Err(err) => { log::error!("Failed to send logout message to client: {}", err) },
+                    match self
+                        .tarpit_data(
+                            session,
+                            channel,
+                            "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            log::trace!("Sent logout message to client")
+                        }
+                        Err(err) => {
+                            log::error!("Failed to send logout message to client: {}", err)
+                        }
                     };
                     return Err(Error::Disconnect);
                 }
@@ -461,22 +591,30 @@ impl Handler for SshHandler {
             if self.disable_cli_interface {
                 log::debug!("Cli interface is disabled");
                 session.channel_failure(channel)?;
-                return Ok(())
+                return Ok(());
             }
 
             // Send a welcome message
             let welcome = Self::generate_welcome_message(&self.welcome_message);
 
             match self.tarpit_data(session, channel, welcome.as_bytes()).await {
-                Ok(_) => { log::trace!("Send welcome message to client") },
-                Err(err) => { log::error!("Failed to send welcome message to client: {}", err) },
+                Ok(_) => {
+                    log::trace!("Send welcome message to client")
+                }
+                Err(err) => {
+                    log::error!("Failed to send welcome message to client: {}", err)
+                }
             };
 
             // Send prompt
             let prompt = self.session_data.prompt.clone();
             match self.tarpit_data(session, channel, prompt.as_bytes()).await {
-                Ok(_) => { log::trace!("Sent prompt to client") },
-                Err(err) => { log::error!("Failed to send prompt to client: {}", err) },
+                Ok(_) => {
+                    log::trace!("Sent prompt to client")
+                }
+                Err(err) => {
+                    log::error!("Failed to send prompt to client: {}", err)
+                }
             };
 
             Ok(())
@@ -484,17 +622,30 @@ impl Handler for SshHandler {
     }
 
     /// This is ssh user@host "command", data should be UTf-8
-    fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> impl Future<Output=Result<(), Self::Error>> + Send {
+    fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
             let command = String::from_utf8_lossy(data);
             // Record command in database
-            match self.db_tx.send(DbMessage::RecordCommand {
-                auth_id: self.session_data.auth_id.clone(),
-                timestamp: Utc::now(),
-                command: command.to_string(),
-            }).await {
-                Ok(_) => { log::trace!("Send record command to db task") },
-                Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+            match self
+                .db_tx
+                .send(DbMessage::RecordCommand {
+                    auth_id: self.session_data.auth_id.clone(),
+                    timestamp: Utc::now(),
+                    command: command.to_string(),
+                })
+                .await
+            {
+                Ok(_) => {
+                    log::trace!("Send record command to db task")
+                }
+                Err(err) => {
+                    log::error!("Failed to send record command to db: {}", err)
+                }
             };
 
             if self.disable_exec {
@@ -503,10 +654,14 @@ impl Handler for SshHandler {
                 return Ok(());
             }
 
-            let answer = format!("You thought I'm going to execute '{}'. But jokes on you. You are now my slave.", command);
+            let answer = format!(
+                "You thought I'm going to execute '{}'. But jokes on you. You are now my slave.",
+                command
+            );
             log::debug!("Exec request received: {}", command);
             log::debug!("Answering with: {}", answer);
-            self.tarpit_data(session, channel, answer.as_bytes()).await?;
+            self.tarpit_data(session, channel, answer.as_bytes())
+                .await?;
             session.channel_failure(channel)?;
             Ok(())
         }
@@ -523,7 +678,10 @@ impl Handler for SshHandler {
 
             if name == "sftp" {
                 if !self.enable_sftp {
-                    log::info!("SFTP subsystem request denied (SFTP disabled): auth_id: {:?}", self.auth_id);
+                    log::info!(
+                        "SFTP subsystem request denied (SFTP disabled): auth_id: {:?}",
+                        self.auth_id
+                    );
                     session.channel_failure(channel)?;
                     return Ok(());
                 }
@@ -561,7 +719,6 @@ impl Handler for SshHandler {
             Ok(())
         }
     }
-
 }
 
 /*impl Drop for SshHandler {
@@ -600,7 +757,6 @@ impl SshHandler {
         (outcome.output, outcome.exit_requested)
     }
 
-
     /// Handles the transmission of data over the provided session and channel, with an optional "tarpit" mode
     /// to delay the data flow intentionally.
     ///
@@ -633,7 +789,12 @@ impl SshHandler {
     /// - The tarpit mechanism is often used to slow down malicious clients or as a defensive mechanism.
     /// - The randomness of the delay is determined by a helper function `rng().random_range(500..2000)`,
     ///   which should be ensured to return consistent results within the given range.
-    async fn tarpit_data(&mut self, session: &mut Session, channel: ChannelId, data: &[u8]) -> Result<(), russh::Error> {
+    async fn tarpit_data(
+        &mut self,
+        session: &mut Session,
+        channel: ChannelId,
+        data: &[u8],
+    ) -> Result<(), russh::Error> {
         log::trace!("Tarpitting: {}, data len: {}", self.tarpit, data.len());
         if self.tarpit {
             for datum in data.iter() {
@@ -654,7 +815,7 @@ impl SshHandler {
         match fs2.create_directory(&self.cwd) {
             Ok(_) => {
                 log::debug!("Created user home directory: {}", self.cwd);
-            },
+            }
             Err(err) => {
                 log::warn!("Failed to create user home directory: {}", err);
             }
@@ -677,25 +838,43 @@ impl SshHandler {
                 let country = response.data.country_code.as_deref().unwrap_or("Unknown");
                 let is_tor = response.data.is_tor;
                 log::trace!("AbuseIPDB response: {:?}", response.data);
-                log::info!("AbuseIPDB check for {}: Confidence: {}%, Country: {}, Tor: {}, Reports: {}",
-                             ip, score, country, is_tor, response.data.total_reports);
+                log::info!(
+                    "AbuseIPDB check for {}: Confidence: {}%, Country: {}, Tor: {}, Reports: {}",
+                    ip,
+                    score,
+                    country,
+                    is_tor,
+                    response.data.total_reports
+                );
                 log::trace!("Completed AbuseIPDB check for {}", ip);
                 serde_json::to_value(&response.data).ok()
-            },
+            }
             Err(AbuseIpError::RateLimitExceeded(info)) => {
                 log::trace!("AbuseIPDB rate limit encountered for {}", ip);
                 if let Some(retry_after) = info.retry_after_seconds {
-                    log::warn!("AbuseIPDB daily rate limit exceeded for {}. Retry after {} seconds", ip, retry_after);
+                    log::warn!(
+                        "AbuseIPDB daily rate limit exceeded for {}. Retry after {} seconds",
+                        ip,
+                        retry_after
+                    );
                 } else if let Some(reset_timestamp) = info.reset_timestamp {
                     let now = Utc::now().timestamp() as u64;
-                    let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
-                    log::warn!("AbuseIPDB daily rate limit exceeded for {}. Resets in {} seconds", ip, wait_seconds);
+                    let wait_seconds = if reset_timestamp > now {
+                        reset_timestamp - now
+                    } else {
+                        0
+                    };
+                    log::warn!(
+                        "AbuseIPDB daily rate limit exceeded for {}. Resets in {} seconds",
+                        ip,
+                        wait_seconds
+                    );
                 } else {
                     log::warn!("AbuseIPDB daily rate limit exceeded for {}", ip);
                 }
                 log::trace!("Completed AbuseIPDB check for {}", ip);
                 None
-            },
+            }
             Err(e) => {
                 log::warn!("AbuseIPDB check failed for {}: {}", ip, e);
                 log::trace!("Completed AbuseIPDB check for {}", ip);
@@ -726,30 +905,38 @@ impl SshHandler {
     /// Generate a welcome message with randomized system statistics
     fn generate_welcome_message(system_description: &str) -> String {
         let mut rng = rand::rng();
-        
+
         // Randomize system load (0.01 to 2.50)
         let system_load = rng.random_range(0.01..2.50);
-        
+
         // Randomize usage of / (15% to 95%)
         let disk_usage = rng.random_range(15.0..95.0);
         let disk_size = rng.random_range(25.0..120.0);
-        
+
         // Randomize memory usage (20% to 85%)
         let memory_usage = rng.random_range(20..85);
-        
+
         // Randomize swap usage (0% to 25%)
         let swap_usage = rng.random_range(0..25);
-        
+
         // Randomize number of processes (80 to 250)
         let processes = rng.random_range(80..250);
-        
+
         // Randomize users logged in (1 to 5)
         let users_logged_in = rng.random_range(1..6);
-        
+
         // Generate random IP addresses
-        let eth0_ip = format!("10.0.{}.{}", rng.random_range(1..255), rng.random_range(1..255));
-        let docker_ip = format!("172.17.{}.{}", rng.random_range(0..255), rng.random_range(1..255));
-        
+        let eth0_ip = format!(
+            "10.0.{}.{}",
+            rng.random_range(1..255),
+            rng.random_range(1..255)
+        );
+        let docker_ip = format!(
+            "172.17.{}.{}",
+            rng.random_range(0..255),
+            rng.random_range(1..255)
+        );
+
         format!(
             "\n\nWelcome to {}\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n * Support:        https://ubuntu.com/advantage\r\n\r\n  System information as of {}\r\n\r\n  System load:  {:.2}              Users logged in:        {}\r\n  Usage of /:   {:.1}% of {:.2}GB  IP address for eth0:    {}\r\n  Memory usage: {}%               IP address for docker0:  {}\r\n  Swap usage:   {}%                \r\n  Processes:    {}\r\n\r\nLast login: {} from 192.168.1.5\r\n",
             system_description,
@@ -803,18 +990,33 @@ impl server::Server for SshServerHandler {
                     Ok(response) => {
                         log::debug!("Background AbuseIPDB lookup completed for {}", ip_clone);
                         log::debug!("{}", response.data);
-                    },
+                    }
                     Err(AbuseIpError::RateLimitExceeded(info)) => {
                         if let Some(retry_after) = info.retry_after_seconds {
-                            log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Retry after {} seconds", ip_clone, retry_after);
+                            log::debug!(
+                                "Background AbuseIPDB lookup hit daily rate limit for {}. Retry after {} seconds",
+                                ip_clone,
+                                retry_after
+                            );
                         } else if let Some(reset_timestamp) = info.reset_timestamp {
                             let now = Utc::now().timestamp() as u64;
-                            let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
-                            log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}. Resets in {} seconds", ip_clone, wait_seconds);
+                            let wait_seconds = if reset_timestamp > now {
+                                reset_timestamp - now
+                            } else {
+                                0
+                            };
+                            log::debug!(
+                                "Background AbuseIPDB lookup hit daily rate limit for {}. Resets in {} seconds",
+                                ip_clone,
+                                wait_seconds
+                            );
                         } else {
-                            log::debug!("Background AbuseIPDB lookup hit daily rate limit for {}", ip_clone);
+                            log::debug!(
+                                "Background AbuseIPDB lookup hit daily rate limit for {}",
+                                ip_clone
+                            );
                         }
-                    },
+                    }
                     Err(e) => {
                         log::debug!("Background AbuseIPDB lookup failed for {}: {}", ip_clone, e);
                     }
@@ -841,8 +1043,15 @@ impl server::Server for SshServerHandler {
                         let confidence = data.abuse_confidence_score.unwrap_or(0);
                         let is_tor = data.is_tor;
 
-                        log::info!("New connection from: {} [Country: {}, ISP: {}, Usage: {}, Confidence: {}%, Tor: {}]",
-                                 peer_for_log, country, isp, usage_type, confidence, is_tor);
+                        log::info!(
+                            "New connection from: {} [Country: {}, ISP: {}, Usage: {}, Confidence: {}%, Tor: {}]",
+                            peer_for_log,
+                            country,
+                            isp,
+                            usage_type,
+                            confidence,
+                            is_tor
+                        );
                     } else {
                         log::info!("New connection from: {} (cache expired)", peer_for_log);
                     }
@@ -860,29 +1069,48 @@ impl server::Server for SshServerHandler {
                 log::trace!("Checking IP API for {}", ip);
                 let ipinfo = match client.check_ip_with_cache(&ip).await {
                     Ok(response) => {
-                        log::trace!("IP API lookup completed for {} with response: {:?}", ip, response);
+                        log::trace!(
+                            "IP API lookup completed for {} with response: {:?}",
+                            ip,
+                            response
+                        );
                         response
-                    },
+                    }
                     Err(e) => {
                         log::warn!("IP API lookup failed for {}: {}", ip, e);
                         return;
                     }
                 };
-                log::info!("Additional country info for {} - Country: {}, Region: {}, lat/lon: {}/{}, org: {}", ip, ipinfo.country, ipinfo.region, ipinfo.lat, ipinfo.lon, ipinfo.org);
+                log::info!(
+                    "Additional country info for {} - Country: {}, Region: {}, lat/lon: {}/{}, org: {}",
+                    ip,
+                    ipinfo.country,
+                    ipinfo.region,
+                    ipinfo.lat,
+                    ipinfo.lon,
+                    ipinfo.org
+                );
             });
         }
 
         let db_tx = self.db_tx.clone();
         let local_port = self.local_port;
         tokio::spawn(async move {
-            match db_tx.send(DbMessage::RecordConnect {
-                ip: peer_addr.ip().to_string(),
-                port: peer_addr.port(),
-                timestamp: Utc::now(),
-                local_port,
-            }).await {
-                Ok(_) => { log::trace!("Send record command to db task") },
-                Err(err)  => { log::error!("Failed to send record command to db: {}", err) },
+            match db_tx
+                .send(DbMessage::RecordConnect {
+                    ip: peer_addr.ip().to_string(),
+                    port: peer_addr.port(),
+                    timestamp: Utc::now(),
+                    local_port,
+                })
+                .await
+            {
+                Ok(_) => {
+                    log::trace!("Send record command to db task")
+                }
+                Err(err) => {
+                    log::error!("Failed to send record command to db: {}", err)
+                }
             };
         });
 
@@ -906,45 +1134,45 @@ impl server::Server for SshServerHandler {
             enable_sftp: self.enable_sftp,
             abuse_ip_client: self.abuse_ip_client.clone(),
             reject_all_auth: self.reject_all_auth,
-			command_dispatcher: Self::create_command_dispatcher(),
+            command_dispatcher: Self::create_command_dispatcher(),
             welcome_message: self.welcome_message.clone(),
             ip_api_client: self.ip_api_client.clone(),
-		}
+        }
     }
 
     fn handle_session_error(&mut self, error: <Self::Handler as Handler>::Error) {
-
         match error {
-            Error::Disconnect => {},
-            Error::IO(err) => {
-                match err.kind() {
-                    ErrorKind::UnexpectedEof => {
-                        let complaints = [
-                            "Session did not properly close. Bad bot.",
-                            "No goodbye? Rude.",
-                            "FIN/ACK without SSH disconnect? Half-assing it, I see.",
-                            "TCP teardown: ✓ SSH goodbye: ✗ Try harder.",
-                            "Your mother would be disappointed in your session handling.",
-                            "Closed the TCP socket but forgot there's an SSH session on top.",
-                            "Your mother would be disappointed in your connection handling.",
-                            "Tearing down TCP before SSH? Someone skipped the protocol docs.",
-                            "SSH session still open, TCP already gone. Pick a lane.",
-                            "Did you even read RFC 4253? Section 11.1 is right there.",
-                            "Abrupt TCP close detected. The SSH layer is crying.",
-                            "Layer 7 called, they want their proper disconnect back.",
-                            "SSH state machine in shambles. TCP doesn't care about your feelings.",
-                            "Graceful shutdown was an option. You chose violence.",
-                            "EOF on socket != SSH_MSG_DISCONNECT. Learn the difference.",
-                            "The SSH RFC authors are personally disappointed in you.",
-                        ];
-                        log::warn!("UnexpectedEof: {}", complaints[rng().random_range(0..complaints.len())]);
-                    }
-                    ErrorKind::ConnectionReset => {
-                        log::warn!("Session closed by remote peer. (TCP RST Packet)");
-                    }
-                    _ => {
-                        log::error!("I/O Session error: {:#?}", err);
-                    }
+            Error::Disconnect => {}
+            Error::IO(err) => match err.kind() {
+                ErrorKind::UnexpectedEof => {
+                    let complaints = [
+                        "Session did not properly close. Bad bot.",
+                        "No goodbye? Rude.",
+                        "FIN/ACK without SSH disconnect? Half-assing it, I see.",
+                        "TCP teardown: ✓ SSH goodbye: ✗ Try harder.",
+                        "Your mother would be disappointed in your session handling.",
+                        "Closed the TCP socket but forgot there's an SSH session on top.",
+                        "Your mother would be disappointed in your connection handling.",
+                        "Tearing down TCP before SSH? Someone skipped the protocol docs.",
+                        "SSH session still open, TCP already gone. Pick a lane.",
+                        "Did you even read RFC 4253? Section 11.1 is right there.",
+                        "Abrupt TCP close detected. The SSH layer is crying.",
+                        "Layer 7 called, they want their proper disconnect back.",
+                        "SSH state machine in shambles. TCP doesn't care about your feelings.",
+                        "Graceful shutdown was an option. You chose violence.",
+                        "EOF on socket != SSH_MSG_DISCONNECT. Learn the difference.",
+                        "The SSH RFC authors are personally disappointed in you.",
+                    ];
+                    log::warn!(
+                        "UnexpectedEof: {}",
+                        complaints[rng().random_range(0..complaints.len())]
+                    );
+                }
+                ErrorKind::ConnectionReset => {
+                    log::warn!("Session closed by remote peer. (TCP RST Packet)");
+                }
+                _ => {
+                    log::error!("I/O Session error: {:#?}", err);
                 }
             },
             Error::Elapsed(_) => {
@@ -953,16 +1181,14 @@ impl server::Server for SshServerHandler {
             Error::InactivityTimeout => {
                 log::warn!("Session timed out due to inactivity");
             }
-            Error::SshEncoding(err) => {
-                match err {
-                    SshEncodingError::Length => {
-                        log::warn!("Client send invalid length packet");
-                    }
-                    _ => {
-                        log::error!("SSH encoding error: {:#?}", err);
-                    }
+            Error::SshEncoding(err) => match err {
+                SshEncodingError::Length => {
+                    log::warn!("Client send invalid length packet");
                 }
-            }
+                _ => {
+                    log::error!("SSH encoding error: {:#?}", err);
+                }
+            },
             Error::InvalidConfig(err_msg) => {
                 log::error!("Invalid configuration: {}", err_msg);
             }
@@ -974,7 +1200,21 @@ impl server::Server for SshServerHandler {
 }
 
 impl SshServerHandler {
-    pub fn new(db_tx: mpsc::Sender<DbMessage>, disable_cli_interface: bool, disable_exec: bool, authentication_banner: Option<String>, tarpit: bool, fs2: Arc<RwLock<FileSystem>>, enable_sftp: bool, abuse_ip_client: Option<Arc<AbuseIpClient>>, reject_all_auth: bool, ip_api_client: Option<Arc<ipapi::Client>>, welcome_message: String, hostname: String, local_port: u16) -> SshServerHandler {
+    pub fn new(
+        db_tx: mpsc::Sender<DbMessage>,
+        disable_cli_interface: bool,
+        disable_exec: bool,
+        authentication_banner: Option<String>,
+        tarpit: bool,
+        fs2: Arc<RwLock<FileSystem>>,
+        enable_sftp: bool,
+        abuse_ip_client: Option<Arc<AbuseIpClient>>,
+        reject_all_auth: bool,
+        ip_api_client: Option<Arc<ipapi::Client>>,
+        welcome_message: String,
+        hostname: String,
+        local_port: u16,
+    ) -> SshServerHandler {
         Self {
             disable_cli_interface,
             disable_exec,
@@ -988,7 +1228,7 @@ impl SshServerHandler {
             ip_api_client,
             welcome_message,
             hostname,
-            local_port
+            local_port,
         }
     }
 
@@ -997,29 +1237,71 @@ impl SshServerHandler {
         let mut dispatcher = CommandDispatcher::new();
 
         // Register regular commands
-        dispatcher.registry_mut().register_command(Arc::new(EchoCommand));
-        dispatcher.registry_mut().register_command(Arc::new(CatCommand));
-        dispatcher.registry_mut().register_command(Arc::new(DateCommand));
-        dispatcher.registry_mut().register_command(Arc::new(FreeCommand));
-        dispatcher.registry_mut().register_command(Arc::new(PsCommand));
-        dispatcher.registry_mut().register_command(Arc::new(UnameCommand));
-        dispatcher.registry_mut().register_command(Arc::new(LsCommand));
-        dispatcher.registry_mut().register_command(Arc::new(PwdCommand));
-        dispatcher.registry_mut().register_command(Arc::new(WhoamiCommand));
-        dispatcher.registry_mut().register_command(Arc::new(IdCommand));
-        dispatcher.registry_mut().register_command(Arc::new(WgetCommand));
-        dispatcher.registry_mut().register_command(Arc::new(CurlCommand));
-        dispatcher.registry_mut().register_command(Arc::new(SudoCommand));
-        dispatcher.registry_mut().register_command(Arc::new(ExitCommand));
-        dispatcher.registry_mut().register_command(Arc::new(TestCommand));
-        dispatcher.registry_mut().register_command(Arc::new(TrueCommand));
-        dispatcher.registry_mut().register_command(Arc::new(FalseCommand));
-        dispatcher.registry_mut().register_command(Arc::new(ColonCommand));
-        dispatcher.registry_mut().register_command(Arc::new(ExportCommand));
-        dispatcher.registry_mut().register_command(Arc::new(UnsetCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(EchoCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(CatCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(DateCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(FreeCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(PsCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(UnameCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(LsCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(PwdCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(WhoamiCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(IdCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(WgetCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(CurlCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(SudoCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(ExitCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(TestCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(TrueCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(FalseCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(ColonCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(ExportCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(UnsetCommand));
 
         // Register stateful commands
-        dispatcher.registry_mut().register_stateful_command(Arc::new(CdCommand));
+        dispatcher
+            .registry_mut()
+            .register_stateful_command(Arc::new(CdCommand));
 
         dispatcher
     }
@@ -1056,7 +1338,13 @@ async fn handle_shell_session(
     let end_time = Utc::now();
     let duration = end_time - session_data.start_time;
 
-    log::info!("Session closed for {}. Session start {}, Session end: {}, Duration: {}", session_data.auth_id, session_data.start_time, end_time, duration);
+    log::info!(
+        "Session closed for {}. Session start {}, Session end: {}, Duration: {}",
+        session_data.auth_id,
+        session_data.start_time,
+        end_time,
+        duration
+    );
 
     // Close out the live session row if we have its id, otherwise we have
     // nothing to update (the start was never recorded).

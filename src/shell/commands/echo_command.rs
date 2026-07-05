@@ -10,7 +10,7 @@ impl Command for EchoCommand {
     fn name(&self) -> &'static str {
         "echo"
     }
-    
+
     fn help(&self) -> String {
         "Usage: echo [OPTION]... [STRING]...\n\
         Echo the STRING(s) to standard output.\n\
@@ -35,16 +35,18 @@ impl Command for EchoCommand {
         \\t     horizontal tab\n\
         \\v     vertical tab\n\
         \\0NNN  byte with octal value NNN (1 to 3 digits)\n\
-        \\xHH   byte with hexadecimal value HH (1 to 2 digits)\n".to_string()
+        \\xHH   byte with hexadecimal value HH (1 to 2 digits)\n"
+            .to_string()
     }
-    
+
     fn version(&self) -> String {
         "echo (GNU coreutils) 8.32\n\
         License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
         This is free software: you are free to change and redistribute it.\n\
-        There is NO WARRANTY, to the extent permitted by law.\n".to_string()
+        There is NO WARRANTY, to the extent permitted by law.\n"
+            .to_string()
     }
-    
+
     async fn execute(&self, args: &[String], _context: &mut CommandContext) -> CommandResult {
         let mut new_line = true;
         let mut enable_escapes = false;
@@ -126,7 +128,11 @@ impl Command for EchoCommand {
         let strings: &[String] = &args[idx..];
 
         if strings.is_empty() {
-            return Ok(if new_line { "\r\n".to_string() } else { String::new() });
+            return Ok(if new_line {
+                "\r\n".to_string()
+            } else {
+                String::new()
+            });
         }
 
         let mut processed: Vec<String> = Vec::with_capacity(strings.len());

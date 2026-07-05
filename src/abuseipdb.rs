@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::{RwLock, Notify};
-use chrono::{DateTime, Utc, Duration};
-use reqwest::{Certificate, Method, StatusCode};
+use crate::db::{get_abuse_ip_check, record_abuse_ip_check};
+use chrono::{DateTime, Duration, Utc};
 use reqwest::tls::Version;
-use webpki_root_certs::TLS_SERVER_ROOT_CERTS;
+use reqwest::{Certificate, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use crate::db::{record_abuse_ip_check, get_abuse_ip_check};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::{Notify, RwLock};
+use webpki_root_certs::TLS_SERVER_ROOT_CERTS;
 
 const DEFAULT_CACHE_TTL_HOURS: u8 = 24;
 const IN_FLIGHT_WAIT_TIMEOUT_MS: u64 = 500;
@@ -42,15 +42,27 @@ impl std::fmt::Display for AbuseIpError {
         match self {
             AbuseIpError::RateLimitExceeded(info) => {
                 if let Some(retry_after) = info.retry_after_seconds {
-                    write!(f, "Daily API rate limit exceeded. Retry after {} seconds", retry_after)
+                    write!(
+                        f,
+                        "Daily API rate limit exceeded. Retry after {} seconds",
+                        retry_after
+                    )
                 } else if let Some(reset_timestamp) = info.reset_timestamp {
                     let now = Utc::now().timestamp() as u64;
-                    let wait_seconds = if reset_timestamp > now { reset_timestamp - now } else { 0 };
-                    write!(f, "Daily API rate limit exceeded. Resets in {} seconds", wait_seconds)
+                    let wait_seconds = if reset_timestamp > now {
+                        reset_timestamp - now
+                    } else {
+                        0
+                    };
+                    write!(
+                        f,
+                        "Daily API rate limit exceeded. Resets in {} seconds",
+                        wait_seconds
+                    )
                 } else {
                     write!(f, "Daily API rate limit exceeded")
                 }
-            },
+            }
             AbuseIpError::NetworkError(e) => write!(f, "Network error: {}", e),
             AbuseIpError::Other(msg) => write!(f, "{}", msg),
         }
@@ -69,49 +81,49 @@ impl std::error::Error for AbuseIpError {
 impl std::fmt::Display for CheckResponseData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "IP: {}", self.ip_address)?;
-        
+
         if let Some(confidence) = self.abuse_confidence_score {
             write!(f, ", Confidence: {}%", confidence)?;
         }
-        
+
         if let Some(country) = &self.country_code {
             write!(f, ", Country: {}", country)?;
         }
-        
+
         if let Some(isp) = &self.isp {
             write!(f, ", ISP: {}", isp)?;
         }
-        
+
         if let Some(usage_type) = &self.usage_type {
             write!(f, ", Usage: {}", usage_type)?;
         }
-        
+
         write!(f, ", Reports: {}", self.total_reports)?;
-        
+
         if self.is_tor {
             write!(f, ", Tor: true")?;
         }
-        
+
         if let Some(allowlisted) = self.is_allowlisted {
             if allowlisted {
                 write!(f, ", Allowlisted: true")?;
             }
         }
-        
+
         if let Some(domain) = &self.domain {
             write!(f, ", Domain: {}", domain)?;
         }
-        
+
         if let Some(hostnames) = &self.hostnames {
             if !hostnames.is_empty() {
                 write!(f, ", Hostnames: [{}]", hostnames.join(", "))?;
             }
         }
-        
+
         if let Some(last_reported) = &self.last_reported_at {
             write!(f, ", LastReported: {}", last_reported)?;
         }
-        
+
         Ok(())
     }
 }
@@ -147,7 +159,7 @@ pub struct CheckResponseData {
 
 #[derive(Serialize, Deserialize, Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Hash)]
 pub struct CheckResponse {
-    pub data: CheckResponseData
+    pub data: CheckResponseData,
 }
 
 #[derive(Serialize, Deserialize, Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Hash)]
@@ -155,12 +167,12 @@ pub struct ReportResponseData {
     #[serde(rename = "ipAddress")]
     ip_address: String,
     #[serde(rename = "abuseConfidenceScore")]
-    abuse_confidence_score: String
+    abuse_confidence_score: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Ord, PartialOrd, Eq, PartialEq, Debug, Hash)]
 pub struct ReportResponse {
-    pub data: ReportResponseData
+    pub data: ReportResponseData,
 }
 
 #[derive(Clone, Debug)]
@@ -181,7 +193,10 @@ pub struct Client {
 
 impl Client {
     pub fn new(api_key: String, pool: PgPool, cache_ttl_hours: Option<u8>) -> Self {
-        let certs = TLS_SERVER_ROOT_CERTS.iter().map(|cert| Certificate::from_der(cert).unwrap()).collect::<Vec<Certificate>>();
+        let certs = TLS_SERVER_ROOT_CERTS
+            .iter()
+            .map(|cert| Certificate::from_der(cert).unwrap())
+            .collect::<Vec<Certificate>>();
 
         Self {
             client: reqwest::Client::builder()
@@ -200,13 +215,20 @@ impl Client {
         }
     }
 
-    pub async fn check_ip_with_cache(&self, ip_address: &str) -> Result<CheckResponse, AbuseIpError> {
+    pub async fn check_ip_with_cache(
+        &self,
+        ip_address: &str,
+    ) -> Result<CheckResponse, AbuseIpError> {
         log::trace!("Checking IP address: {} in cache", ip_address);
 
         // First check memory cache
         let cache = self.memory_cache.read().await;
         if let Some(cached) = cache.get(ip_address) {
-            log::trace!("Found cached IP address: {}, result: {}", ip_address, cached.response.data);
+            log::trace!(
+                "Found cached IP address: {}, result: {}",
+                ip_address,
+                cached.response.data
+            );
             let age = Utc::now() - cached.cached_at;
             if age < Duration::hours(self.cache_ttl_hours as i64) {
                 log::debug!("AbuseIPDB memory cache hit for IP: {}", ip_address);
@@ -214,30 +236,42 @@ impl Client {
             }
         }
         drop(cache); // Release read lock
-        log::trace!("No cached IP address found in in-memory-cache {}", ip_address);
+        log::trace!(
+            "No cached IP address found in in-memory-cache {}",
+            ip_address
+        );
 
         // Check database cache
         log::trace!("Checking database cache for IP address: {}", ip_address);
         match get_abuse_ip_check(&self.pool, ip_address, self.cache_ttl_hours).await {
             Ok(Some((timestamp, response_data))) => {
                 log::debug!("AbuseIPDB database cache hit for IP: {}", ip_address);
-                log::trace!("Database cache entry timestamp: {}, result: {:?}", timestamp, response_data);
-                let response = CheckResponse { data: response_data };
+                log::trace!(
+                    "Database cache entry timestamp: {}, result: {:?}",
+                    timestamp,
+                    response_data
+                );
+                let response = CheckResponse {
+                    data: response_data,
+                };
 
                 log::trace!("Updating memory cache");
                 // Update memory cache
                 let mut cache = self.memory_cache.write().await;
-                cache.insert(ip_address.to_string(), CachedResult {
-                    response: response.clone(),
-                    cached_at: timestamp,
-                });
+                cache.insert(
+                    ip_address.to_string(),
+                    CachedResult {
+                        response: response.clone(),
+                        cached_at: timestamp,
+                    },
+                );
 
                 return Ok(response);
-            },
+            }
             Ok(None) => {
                 // No cache entry or expired - continue to API call
                 log::trace!("No database cache entry found for IP: {}", ip_address);
-            },
+            }
             Err(e) => {
                 log::error!("Failed to query AbuseIPDB cache: {}", e);
                 // Continue to API call on database error
@@ -251,17 +285,27 @@ impl Client {
         };
 
         if let Some(lookup) = existing_lookup {
-            log::debug!("Found in-flight lookup for IP: {}, waiting up to {}ms", ip_address, IN_FLIGHT_WAIT_TIMEOUT_MS);
+            log::debug!(
+                "Found in-flight lookup for IP: {}, waiting up to {}ms",
+                ip_address,
+                IN_FLIGHT_WAIT_TIMEOUT_MS
+            );
 
             // Wait for the in-flight lookup to complete (with timeout)
             let wait_result = tokio::time::timeout(
                 std::time::Duration::from_millis(IN_FLIGHT_WAIT_TIMEOUT_MS),
-                lookup.notify.notified()
-            ).await;
+                lookup.notify.notified(),
+            )
+            .await;
 
             if wait_result.is_err() {
-                log::debug!("Timeout waiting for in-flight lookup for IP: {}", ip_address);
-                return Err(AbuseIpError::Other("Timeout waiting for in-flight lookup".to_string()));
+                log::debug!(
+                    "Timeout waiting for in-flight lookup for IP: {}",
+                    ip_address
+                );
+                return Err(AbuseIpError::Other(
+                    "Timeout waiting for in-flight lookup".to_string(),
+                ));
             }
 
             // Check the result
@@ -270,17 +314,22 @@ impl Client {
                 Some(Some(response)) => {
                     log::debug!("Got result from in-flight lookup for IP: {}", ip_address);
                     Ok(response.clone())
-                },
+                }
                 Some(None) => {
                     log::debug!("In-flight lookup failed for IP: {}", ip_address);
                     Err(AbuseIpError::Other("In-flight lookup failed".to_string()))
-                },
+                }
                 None => {
                     // This shouldn't happen - notified but no result
-                    log::warn!("In-flight lookup notified but no result for IP: {}", ip_address);
-                    Err(AbuseIpError::Other("In-flight lookup state error".to_string()))
+                    log::warn!(
+                        "In-flight lookup notified but no result for IP: {}",
+                        ip_address
+                    );
+                    Err(AbuseIpError::Other(
+                        "In-flight lookup state error".to_string(),
+                    ))
                 }
-            }
+            };
         }
 
         // No in-flight lookup, register ourselves and make the API call
@@ -294,7 +343,10 @@ impl Client {
             in_flight.insert(ip_address.to_string(), lookup.clone());
         }
 
-        log::debug!("AbuseIPDB cache miss for IP: {}, making API call", ip_address);
+        log::debug!(
+            "AbuseIPDB cache miss for IP: {}, making API call",
+            ip_address
+        );
         let api_result = self.check_ip_api(ip_address).await;
 
         // Store result and notify waiters
@@ -306,10 +358,13 @@ impl Client {
                 log::trace!("Updating memory cache");
                 let mut cache = self.memory_cache.write().await;
                 let now = Utc::now();
-                cache.insert(ip_address.to_string(), CachedResult {
-                    response: response.clone(),
-                    cached_at: now,
-                });
+                cache.insert(
+                    ip_address.to_string(),
+                    CachedResult {
+                        response: response.clone(),
+                        cached_at: now,
+                    },
+                );
                 drop(cache);
                 log::trace!("Memory cache updated");
 
@@ -325,13 +380,15 @@ impl Client {
                     response.data.is_allowlisted,
                     response.data.total_reports,
                     serde_json::to_string(&response.data).unwrap_or_default(),
-                ).await {
+                )
+                .await
+                {
                     log::error!("Failed to cache AbuseIPDB result in database: {}", e);
                 }
                 log::trace!("Database cache updated");
 
                 Some(response.clone())
-            },
+            }
             Err(e) => {
                 log::debug!("API call failed for IP {}: {}", ip_address, e);
                 None
@@ -358,8 +415,10 @@ impl Client {
         let mut querystring = HashMap::new();
         querystring.insert("ipAddress", ip_address);
         querystring.insert("maxAgeInDays", "90");
-        
-        let res = self.client.request(Method::GET, "https://api.abuseipdb.com/api/v2/check")
+
+        let res = self
+            .client
+            .request(Method::GET, "https://api.abuseipdb.com/api/v2/check")
             .header("Key", &self.api_key)
             .header("Accept", "application/json")
             .query(&querystring)
@@ -375,7 +434,11 @@ impl Client {
 
         // Check for other HTTP errors
         if !res.status().is_success() {
-            return Err(AbuseIpError::Other(format!("HTTP {}: {}", res.status(), res.status().canonical_reason().unwrap_or("Unknown error"))));
+            return Err(AbuseIpError::Other(format!(
+                "HTTP {}: {}",
+                res.status(),
+                res.status().canonical_reason().unwrap_or("Unknown error")
+            )));
         }
 
         res.json().await.map_err(AbuseIpError::NetworkError)
@@ -383,18 +446,22 @@ impl Client {
 
     fn parse_rate_limit_headers(&self, response: &reqwest::Response) -> RateLimitInfo {
         let headers = response.headers();
-        
+
         RateLimitInfo {
-            limit: headers.get("X-RateLimit-Limit")
+            limit: headers
+                .get("X-RateLimit-Limit")
                 .and_then(|h| h.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            remaining: headers.get("X-RateLimit-Remaining")
+            remaining: headers
+                .get("X-RateLimit-Remaining")
                 .and_then(|h| h.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            reset_timestamp: headers.get("X-RateLimit-Reset")
+            reset_timestamp: headers
+                .get("X-RateLimit-Reset")
                 .and_then(|h| h.to_str().ok())
                 .and_then(|s| s.parse().ok()),
-            retry_after_seconds: headers.get("Retry-After")
+            retry_after_seconds: headers
+                .get("Retry-After")
                 .and_then(|h| h.to_str().ok())
                 .and_then(|s| s.parse().ok()),
         }
@@ -404,10 +471,12 @@ impl Client {
     /// Returns the number of database entries deleted.
     pub async fn cleanup_expired_cache(&self) -> Result<u64, sqlx::Error> {
         // Clean up database cache
-        let result = sqlx::query("DELETE FROM abuse_ip_cache WHERE timestamp < NOW() - ($1 * INTERVAL '1 hour')")
-            .bind(self.cache_ttl_hours as i32)
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query(
+            "DELETE FROM abuse_ip_cache WHERE timestamp < NOW() - ($1 * INTERVAL '1 hour')",
+        )
+        .bind(self.cache_ttl_hours as i32)
+        .execute(&self.pool)
+        .await?;
 
         let rows_deleted = result.rows_affected();
 
@@ -420,7 +489,10 @@ impl Client {
         let memory_entries_removed = initial_size - cache.len();
 
         if memory_entries_removed > 0 {
-            log::debug!("Removed {} expired entries from AbuseIPDB memory cache", memory_entries_removed);
+            log::debug!(
+                "Removed {} expired entries from AbuseIPDB memory cache",
+                memory_entries_removed
+            );
         }
 
         Ok(rows_deleted)
@@ -428,15 +500,27 @@ impl Client {
 
     #[allow(dead_code)]
     // 2023-10-18T11:25:11-04:00 is the format of the timestamp
-    pub async fn report_ip(&self, ip_address: &str, categories: &Vec<u8>, evidence: &str, timestamp: &str) -> Result<ReportResponse, reqwest::Error> {
+    pub async fn report_ip(
+        &self,
+        ip_address: &str,
+        categories: &Vec<u8>,
+        evidence: &str,
+        timestamp: &str,
+    ) -> Result<ReportResponse, reqwest::Error> {
         // Really rust? You could just do categories.join(","), but rust says no
-        let formatted_categories: String = categories.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(",");
+        let formatted_categories: String = categories
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<String>>()
+            .join(",");
         let mut querystring = HashMap::new();
         querystring.insert("ip", ip_address);
         querystring.insert("categories", &formatted_categories);
         querystring.insert("comment", evidence);
         querystring.insert("timestamp", timestamp);
-        let res = self.client.request(Method::POST, "https://api.abuseipdb.com/api/v2/report")
+        let res = self
+            .client
+            .request(Method::POST, "https://api.abuseipdb.com/api/v2/report")
             .header("Key", &self.api_key)
             .header("Accept", "application/json")
             .query(&querystring)

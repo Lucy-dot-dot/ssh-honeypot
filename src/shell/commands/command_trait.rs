@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use super::context::CommandContext;
+use async_trait::async_trait;
 
 /// Result type for command execution
 pub type CommandResult = Result<String, CommandError>;
@@ -43,30 +43,33 @@ impl std::error::Error for CommandError {}
 pub trait Command: Send + Sync {
     /// The name of the command (e.g., "echo", "ls", "cat")
     fn name(&self) -> &'static str;
-    
+
     /// Aliases for this command (e.g., ["ll"] for ls)
     fn aliases(&self) -> Vec<&'static str> {
         vec![]
     }
-    
+
     /// Execute the command with the given (pre-tokenized, expanded) arguments and context
     async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult;
-    
+
     /// Get help text for this command
     fn help(&self) -> String {
-        format!("Usage: {} [options]\nNo help available for this command.", self.name())
+        format!(
+            "Usage: {} [options]\nNo help available for this command.",
+            self.name()
+        )
     }
-    
+
     /// Get version information for this command
     fn version(&self) -> String {
         format!("{} (GNU coreutils) 8.32", self.name())
     }
-    
+
     /// Whether this command modifies the filesystem
     fn modifies_filesystem(&self) -> bool {
         false
     }
-    
+
     /// Whether this command requires special privileges
     fn requires_privileges(&self) -> bool {
         false
@@ -77,5 +80,9 @@ pub trait Command: Send + Sync {
 #[async_trait]
 pub trait StatefulCommand: Command {
     /// Execute the command and potentially modify the context state
-    async fn execute_with_state_change(&self, args: &[String], context: &mut CommandContext) -> CommandResult;
+    async fn execute_with_state_change(
+        &self,
+        args: &[String],
+        context: &mut CommandContext,
+    ) -> CommandResult;
 }

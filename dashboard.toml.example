@@ -1,0 +1,21 @@
+# Dashboard GUI Configuration Example
+# Copy this file to dashboard.toml in the same config directory (or just run the
+# dashboard once and it will be created on your first change from the GUI).
+#
+# Location: same config dir as config.toml, i.e. the XDG config dir of the
+# "ssh-honeypot" project (e.g. ~/.config/ssh-honeypot/dashboard.toml on Linux,
+# %APPDATA%\ssh-honeypot\config\dashboard.toml on Windows).
+
+# IP addresses hidden from every dashboard view (recent connections, auth
+# attempts, live/ended sessions, top IPs). Useful to hide your own monitoring
+# probes or known-benign scanners.
+# Default: [] (none excluded)
+excluded_ips = [
+    # "10.0.0.1",
+    # "192.168.1.50",
+]
+
+# Show geolocation fields (country, city, ISP, org) in session details and IP
+# reports. Toggleable live from the dashboard hotbar.
+# Default: true
+show_geolocation = true

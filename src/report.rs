@@ -178,8 +178,11 @@ fn report_env() -> &'static Environment<'static> {
         env.add_filter("fmt", format_datetime);
         env.add_template("ip_report.txt", include_str!("../templates/ip_report.txt"))
             .expect("ip_report.txt template is valid");
-        env.add_template("ip_report.html", include_str!("../templates/ip_report.html"))
-            .expect("ip_report.html template is valid");
+        env.add_template(
+            "ip_report.html",
+            include_str!("../templates/ip_report.html"),
+        )
+        .expect("ip_report.html template is valid");
         env.add_template("ip_report.md", include_str!("../templates/ip_report.md"))
             .expect("ip_report.md template is valid");
         env.add_template(
@@ -215,7 +218,10 @@ impl ReportGenerator {
         Self { pool }
     }
 
-    pub async fn get_ip_isp_org(&self, ip: &str) -> Result<(Option<String>, Option<String>), sqlx::Error> {
+    pub async fn get_ip_isp_org(
+        &self,
+        ip: &str,
+    ) -> Result<(Option<String>, Option<String>), sqlx::Error> {
         let row = sqlx::query(
             "SELECT isp, org FROM auth_password_enriched WHERE ip = $1::inet AND (isp IS NOT NULL OR org IS NOT NULL) ORDER BY timestamp DESC LIMIT 1"
         )
@@ -257,32 +263,31 @@ impl ReportGenerator {
             ReportFormat::Html => {
                 self.generate_html_report(ip, &records, &conn_track, commands_total, &commands)
             }
-            ReportFormat::Markdown => self.generate_markdown_report(
-                ip,
-                &records,
-                &conn_track,
-                commands_total,
-                &commands,
-            ),
+            ReportFormat::Markdown => {
+                self.generate_markdown_report(ip, &records, &conn_track, commands_total, &commands)
+            }
         }
     }
 
     async fn get_conn_track_for_ip(&self, ip: &str) -> Result<Vec<ConnTrackRecord>, sqlx::Error> {
         let query = "SELECT timestamp, port, local_port FROM conn_track WHERE ip = $1::inet ORDER BY timestamp DESC";
 
-        let rows = sqlx::query(query)
-            .bind(ip)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(query).bind(ip).fetch_all(&self.pool).await?;
 
-        Ok(rows.iter().map(|row| ConnTrackRecord {
-            timestamp: row.get("timestamp"),
-            port: row.get("port"),
-            local_port: row.get("local_port"),
-        }).collect())
+        Ok(rows
+            .iter()
+            .map(|row| ConnTrackRecord {
+                timestamp: row.get("timestamp"),
+                port: row.get("port"),
+                local_port: row.get("local_port"),
+            })
+            .collect())
     }
 
-    async fn get_auth_data_for_ip(&self, ip: &str) -> Result<Vec<AuthPasswordEnrichedRecord>, sqlx::Error> {
+    async fn get_auth_data_for_ip(
+        &self,
+        ip: &str,
+    ) -> Result<Vec<AuthPasswordEnrichedRecord>, sqlx::Error> {
         let query = "SELECT
             id, timestamp, ip::text as ip_text, username, password,
             country_code, country, region, region_name, city, zip,
@@ -291,10 +296,7 @@ impl ReportGenerator {
             abuse_check_timestamp, ipapi_check_timestamp
             FROM auth_password_enriched WHERE ip = $1::inet ORDER BY timestamp DESC";
 
-        let rows = sqlx::query(query)
-            .bind(ip)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(query).bind(ip).fetch_all(&self.pool).await?;
 
         let mut records = Vec::new();
         for row in rows {
@@ -328,7 +330,10 @@ impl ReportGenerator {
         Ok(records)
     }
 
-    async fn get_commands_for_ip(&self, ip: &str) -> Result<(i64, Vec<CommandRecord>), sqlx::Error> {
+    async fn get_commands_for_ip(
+        &self,
+        ip: &str,
+    ) -> Result<(i64, Vec<CommandRecord>), sqlx::Error> {
         let count_query = "SELECT COUNT(*) AS total
             FROM commands c JOIN auth a ON c.auth_id = a.id
             WHERE a.ip = $1::inet";
@@ -504,7 +509,13 @@ impl ReportGenerator {
                     .unwrap_or_else(|| "-".to_string()),
                 is_tor: r
                     .is_tor
-                    .map(|t| if t { "Yes".to_string() } else { "No".to_string() })
+                    .map(|t| {
+                        if t {
+                            "Yes".to_string()
+                        } else {
+                            "No".to_string()
+                        }
+                    })
                     .unwrap_or_else(|| "-".to_string()),
                 total_reports: r
                     .total_reports
@@ -621,8 +632,7 @@ impl ReportGenerator {
         commands_total: i64,
         commands: &[CommandRecord],
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let ctx =
-            self.build_ip_context(ip, records, conn_track, commands_total, commands, false);
+        let ctx = self.build_ip_context(ip, records, conn_track, commands_total, commands, false);
         Ok(report_env().get_template("ip_report.html")?.render(ctx)?)
     }
 
@@ -634,8 +644,7 @@ impl ReportGenerator {
         commands_total: i64,
         commands: &[CommandRecord],
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let ctx =
-            self.build_ip_context(ip, records, conn_track, commands_total, commands, false);
+        let ctx = self.build_ip_context(ip, records, conn_track, commands_total, commands, false);
         Ok(report_env().get_template("ip_report.md")?.render(ctx)?)
     }
 
@@ -1031,9 +1040,7 @@ mod tests {
     #[test]
     fn count_top_ranks_descending() {
         let rows = count_top(
-            ["a", "b", "a", "c", "a", "b"]
-                .into_iter()
-                .map(String::from),
+            ["a", "b", "a", "c", "a", "b"].into_iter().map(String::from),
             2,
         );
         assert_eq!(rows.len(), 2);

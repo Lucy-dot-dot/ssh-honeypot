@@ -1,7 +1,7 @@
-use async_trait::async_trait;
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
 use crate::shell::filesystem::fs2::FileContent;
+use async_trait::async_trait;
 
 /// Cat command implementation using the new trait system
 pub struct CatCommand;
@@ -35,7 +35,10 @@ impl Command for CatCommand {
             match fs.follow_symlink(file_path) {
                 Ok(entry) => match &entry.file_content {
                     None => {
-                        errors.push_str(&format!("cat: {}: No such file or directory\r\n", file_path));
+                        errors.push_str(&format!(
+                            "cat: {}: No such file or directory\r\n",
+                            file_path
+                        ));
                     }
                     Some(FileContent::Directory(_)) => {
                         errors.push_str(&format!("cat: {}: Is a directory\r\n", file_path));
@@ -49,7 +52,10 @@ impl Command for CatCommand {
                     }
                 },
                 Err(_) => {
-                    errors.push_str(&format!("cat: {}: No such file or directory\r\n", file_path));
+                    errors.push_str(&format!(
+                        "cat: {}: No such file or directory\r\n",
+                        file_path
+                    ));
                 }
             }
         }
@@ -80,13 +86,15 @@ impl Command for CatCommand {
         -u                       (ignored)\n\
         -v, --show-nonprinting   use ^ and M- notation, except for LFD and TAB\n\
         --help                   display this help and exit\n\
-        --version                output version information and exit\n".to_string()
+        --version                output version information and exit\n"
+            .to_string()
     }
 
     fn version(&self) -> String {
         "cat (GNU coreutils) 8.32\n\
         License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
         This is free software: you are free to change and redistribute it.\n\
-        There is NO WARRANTY, to the extent permitted by law.\n".to_string()
+        There is NO WARRANTY, to the extent permitted by law.\n"
+            .to_string()
     }
 }

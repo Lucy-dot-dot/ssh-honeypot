@@ -1,21 +1,21 @@
+mod abuseipdb;
 mod app;
 mod db;
+mod ipapi;
 mod keys;
 mod paths;
-mod server;
-mod shell;
-mod sftp;
-mod abuseipdb;
-mod ipapi;
 mod report;
+mod server;
+mod sftp;
+mod shell;
 
-use std::borrow::Cow;
 use app::App;
-use db::{run_db_handler, initialize_database_pool};
+use db::{initialize_database_pool, run_db_handler};
+use std::borrow::Cow;
 use std::fs::OpenOptions;
 
-use crate::server::SshServerHandler;
 use crate::abuseipdb::Client as AbuseIpClient;
+use crate::server::SshServerHandler;
 use russh::server::Server as _;
 use russh::*;
 use shell::filesystem::fs2::FileSystem;
@@ -57,7 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Authentication BANNER: {}",
         app.authentication_banner.clone().unwrap_or_default()
     );
-    log::info!("AbuseIPDB cache cleanup interval: {} hours", app.abuse_ip_cache_cleanup_interval_hours);
+    log::info!(
+        "AbuseIPDB cache cleanup interval: {} hours",
+        app.abuse_ip_cache_cleanup_interval_hours
+    );
 
     log::trace!("Generating or loading keys");
     let keys = keys::load_or_generate_keys(&app);
@@ -74,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a channel for database communications
     let (db_tx, db_rx) = mpsc::channel(100);
 
-    // Start the database handler in its own thread  
+    // Start the database handler in its own thread
     let pool_for_db_handler = pool.clone();
     let db_handle = tokio::spawn(async move {
         run_db_handler(db_rx, pool_for_db_handler).await;
@@ -91,7 +94,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
         server_id: SshId::Standard(Cow::from(app.server_id.clone())),
         keys: vec![keys.ed25519, keys.rsa, keys.ecdsa],
-        methods: (&[MethodKind::PublicKey, MethodKind::Password, MethodKind::KeyboardInteractive]).as_slice().into(),
+        methods: (&[
+            MethodKind::PublicKey,
+            MethodKind::Password,
+            MethodKind::KeyboardInteractive,
+        ])
+            .as_slice()
+            .into(),
         preferred: Preferred {
             kex: Cow::Borrowed(&[
                 // russh::negotiation::SAFE_KEX_ORDER
@@ -136,7 +145,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create AbuseIPDB client if API key is provided
     let abuse_ip_client = if let Some(api_key) = &app.abuse_ip_db_api_key {
         log::info!("AbuseIPDB integration enabled");
-        Some(Arc::new(AbuseIpClient::new(api_key.clone(), pool.clone(), None)))
+        Some(Arc::new(AbuseIpClient::new(
+            api_key.clone(),
+            pool.clone(),
+            None,
+        )))
     } else {
         log::info!("AbuseIPDB integration disabled (no API key provided)");
         None
@@ -152,8 +165,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(client) = abuse_ip_client.clone() {
         let cleanup_interval_hours = app.abuse_ip_cache_cleanup_interval_hours;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(cleanup_interval_hours as u64 * 3600));
-            log::info!("Starting AbuseIPDB cache cleanup task (interval: {} hours)", cleanup_interval_hours);
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                cleanup_interval_hours as u64 * 3600,
+            ));
+            log::info!(
+                "Starting AbuseIPDB cache cleanup task (interval: {} hours)",
+                cleanup_interval_hours
+            );
 
             loop {
                 interval.tick().await;
@@ -161,11 +179,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match client.cleanup_expired_cache().await {
                     Ok(rows_deleted) => {
                         if rows_deleted > 0 {
-                            log::info!("Cleaned up {} expired AbuseIPDB database cache entries", rows_deleted);
+                            log::info!(
+                                "Cleaned up {} expired AbuseIPDB database cache entries",
+                                rows_deleted
+                            );
                         } else {
                             log::debug!("No expired AbuseIPDB cache entries to clean up");
                         }
-                    },
+                    }
                     Err(e) => {
                         log::error!("Failed to cleanup expired AbuseIPDB cache entries: {}", e);
                     }
@@ -259,12 +280,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.welcome_message.clone(),
             app.hostname.clone(),
             // Does not work the intended way because of NATting on dockers side if DNAT port != target port
-            interface.port()
+            interface.port(),
         );
         tasks.push(tokio::spawn(async move {
             // Start the SSH server
             log::info!("Starting SSH honeypot on {}", interface);
-            let socket = match create_socket_with_reuse(interface, app.disable_so_reuseaddr, app.disable_so_reuseport) {
+            let socket = match create_socket_with_reuse(
+                interface,
+                app.disable_so_reuseaddr,
+                app.disable_so_reuseport,
+            ) {
                 Ok(socket) => socket,
                 Err(err) => {
                     log::error!(
@@ -340,7 +365,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// binding will fail due to conflicting ports.
 /// Linux wants to be helpful and allow IPv4 clients to connect to an IPv6 socket. But if something already listens...
 #[allow(unused_variables)]
-fn create_socket_with_reuse(addr: SocketAddr, disable_reuse_addr: bool, disable_reuse_port: bool) -> io::Result<TcpListener> {
+fn create_socket_with_reuse(
+    addr: SocketAddr,
+    disable_reuse_addr: bool,
+    disable_reuse_port: bool,
+) -> io::Result<TcpListener> {
     let socket = if addr.is_ipv4() {
         TcpSocket::new_v4()?
     } else {

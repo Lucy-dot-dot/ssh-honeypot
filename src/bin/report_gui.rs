@@ -1,7 +1,7 @@
 use eframe::egui;
+use sqlx::PgPool;
 use ssh_honeypot::db::initialize_database_pool;
 use ssh_honeypot::report::{ReportFormat, ReportGenerator};
-use sqlx::PgPool;
 use std::sync::mpsc;
 
 const DEFAULT_DB_URL: &str = "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot";
@@ -114,7 +114,10 @@ impl ReportApp {
             let generator = ReportGenerator::new(pool);
 
             let (isp, org) = if report_type == ReportType::Ip {
-                generator.get_ip_isp_org(&query).await.unwrap_or((None, None))
+                generator
+                    .get_ip_isp_org(&query)
+                    .await
+                    .unwrap_or((None, None))
             } else {
                 (None, None)
             };
@@ -126,7 +129,9 @@ impl ReportApp {
                         .await
                 }
                 ReportType::Password => {
-                    generator.generate_password_report(&query, &ReportFormat::Text).await
+                    generator
+                        .generate_password_report(&query, &ReportFormat::Text)
+                        .await
                 }
             };
 
@@ -178,12 +183,13 @@ impl eframe::App for ReportApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Database URL:");
-                ui.add_sized(
-                    [450.0, 20.0],
-                    egui::TextEdit::singleline(&mut self.db_url),
-                );
+                ui.add_sized([450.0, 20.0], egui::TextEdit::singleline(&mut self.db_url));
 
-                let connect_label = if self.is_connecting { "Connecting…" } else { "Connect" };
+                let connect_label = if self.is_connecting {
+                    "Connecting…"
+                } else {
+                    "Connect"
+                };
                 if ui
                     .add_enabled(!self.is_connecting, egui::Button::new(connect_label))
                     .clicked()
@@ -235,13 +241,16 @@ impl eframe::App for ReportApp {
                     egui::TextEdit::singleline(&mut self.query_input).hint_text(hint),
                 );
 
-                let can_generate = self.pool.is_some()
-                    && !self.is_loading
-                    && !self.query_input.trim().is_empty();
-                let gen_label = if self.is_loading { "Loading…" } else { "Generate Report" };
+                let can_generate =
+                    self.pool.is_some() && !self.is_loading && !self.query_input.trim().is_empty();
+                let gen_label = if self.is_loading {
+                    "Loading…"
+                } else {
+                    "Generate Report"
+                };
 
-                let submitted = response.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let submitted =
+                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
                 if ui
                     .add_enabled(can_generate, egui::Button::new(gen_label))

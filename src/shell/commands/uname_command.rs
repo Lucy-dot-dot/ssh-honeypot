@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
+use async_trait::async_trait;
 
 /// Uname command implementation using the new trait system
 pub struct UnameCommand;
@@ -10,7 +10,7 @@ impl Command for UnameCommand {
     fn name(&self) -> &'static str {
         "uname"
     }
-    
+
     fn help(&self) -> String {
         "Usage: uname [OPTION]...\n\
         Print certain system information.  With no OPTION, same as -s.\n\
@@ -26,28 +26,30 @@ impl Command for UnameCommand {
         -i, --hardware-platform  print the hardware platform (non-portable)\n\
         -o, --operating-system   print the operating system\n\
         --help                   display this help and exit\n\
-        --version                output version information and exit\n".to_string()
+        --version                output version information and exit\n"
+            .to_string()
     }
-    
+
     fn version(&self) -> String {
         "uname (GNU coreutils) 8.32\n\
         License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
         This is free software: you are free to change and redistribute it.\n\
-        There is NO WARRANTY, to the extent permitted by law.\n".to_string()
+        There is NO WARRANTY, to the extent permitted by law.\n"
+            .to_string()
     }
-    
+
     async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
         // Handle help and version flags
         if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
         }
-        
+
         if args.iter().any(|a| a == "--version") {
             return Ok(self.version());
         }
-        
+
         let hostname = &context.hostname;
-        
+
         // Default values for system information
         let kernel_name = "Linux";
         let kernel_release = "5.4.0-109-generic";
@@ -56,17 +58,17 @@ impl Command for UnameCommand {
         let processor = "x86_64";
         let hardware_platform = "x86_64";
         let operating_system = "GNU/Linux";
-        
+
         let mut output_parts = Vec::new();
-        
+
         let has = |flag: &str| args.iter().any(|a| a == flag);
-        
+
         let want_all = has("-a") || has("--all");
 
         if args.is_empty() || has("-s") || has("--kernel-name") {
             output_parts.push(kernel_name);
         }
-        
+
         if want_all {
             // Print all information
             output_parts.clear();
@@ -118,12 +120,12 @@ impl Command for UnameCommand {
                 }
             }
         }
-        
+
         // If no flags matched, default to kernel name
         if output_parts.is_empty() {
             output_parts.push(kernel_name);
         }
-        
+
         Ok(format!("{}\r\n", output_parts.join(" ")))
     }
 }

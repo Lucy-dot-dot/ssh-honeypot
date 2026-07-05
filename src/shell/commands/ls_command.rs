@@ -1,7 +1,7 @@
-use async_trait::async_trait;
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
 use crate::shell::filesystem::fs2::FileContent;
+use async_trait::async_trait;
 
 /// LS command implementation using the new trait system
 pub struct LsCommand;
@@ -11,11 +11,11 @@ impl Command for LsCommand {
     fn name(&self) -> &'static str {
         "ls"
     }
-    
+
     fn aliases(&self) -> Vec<&'static str> {
         vec!["ll", "la"]
     }
-    
+
     fn help(&self) -> String {
         "Usage: ls [OPTION]... [FILE]...\n\
         List information about the FILEs (the current directory by default).\n\
@@ -30,16 +30,18 @@ impl Command for LsCommand {
         -S                         sort by file size, largest first\n\
         -1                         list one file per line\n\
         --help                     display this help and exit\n\
-        --version                  output version information and exit\n".to_string()
+        --version                  output version information and exit\n"
+            .to_string()
     }
-    
+
     fn version(&self) -> String {
         "ls (GNU coreutils) 8.32\n\
         License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\n\
         This is free software: you are free to change and redistribute it.\n\
-        There is NO WARRANTY, to the extent permitted by law.\n".to_string()
+        There is NO WARRANTY, to the extent permitted by law.\n"
+            .to_string()
     }
-    
+
     async fn execute(&self, args: &[String], context: &mut CommandContext) -> CommandResult {
         if args.iter().any(|a| a == "--help") {
             return Ok(self.help());
@@ -83,13 +85,14 @@ impl Command for LsCommand {
         } else {
             path.to_string()
         };
-        
+
         match fs.list_directory(&list_path) {
             Ok(entries) => {
                 let mut result = String::new();
 
                 // Filter entries based on show_all flag
-                let filtered_entries: Vec<_> = entries.iter()
+                let filtered_entries: Vec<_> = entries
+                    .iter()
                     .filter(|entry| show_all || !entry.name.starts_with('.'))
                     .collect();
 
@@ -102,7 +105,9 @@ impl Command for LsCommand {
                     for entry in filtered_entries {
                         let (permissions, size, _file_type) = match &entry.file_content {
                             Some(FileContent::Directory(_)) => ("drwxr-xr-x", 4096, "dir"),
-                            Some(FileContent::RegularFile(data)) => ("-rw-r--r--", data.len(), "file"),
+                            Some(FileContent::RegularFile(data)) => {
+                                ("-rw-r--r--", data.len(), "file")
+                            }
                             Some(FileContent::SymbolicLink(_)) => ("lrwxrwxrwx", 0, "link"),
                             None => ("?---------", 0, "unknown"),
                         };
@@ -119,7 +124,10 @@ impl Command for LsCommand {
                     }
                 } else {
                     // Default format (multiple columns)
-                    let names: Vec<&str> = filtered_entries.iter().map(|entry| entry.name.as_str()).collect();
+                    let names: Vec<&str> = filtered_entries
+                        .iter()
+                        .map(|entry| entry.name.as_str())
+                        .collect();
                     if names.is_empty() {
                         // Empty directory
                     } else {
@@ -129,7 +137,7 @@ impl Command for LsCommand {
                 }
 
                 Ok(result)
-            },
+            }
             Err(_) => {
                 // Try to check if it's a file instead
                 match fs.follow_symlink(&list_path) {
@@ -139,18 +147,21 @@ impl Command for LsCommand {
                                 // If it's a file, just show the filename
                                 let filename = list_path.split('/').last().unwrap_or(&list_path);
                                 Ok(format!("{}\r\n", filename))
-                            },
-                            Some(FileContent::SymbolicLink(_)) => {
-                                Ok(format!("ls: cannot access '{}': symbolic link\r\n", list_path))
-                            },
-                            _ => {
-                                Ok(format!("ls: cannot access '{}': No such file or directory\r\n", list_path))
                             }
+                            Some(FileContent::SymbolicLink(_)) => Ok(format!(
+                                "ls: cannot access '{}': symbolic link\r\n",
+                                list_path
+                            )),
+                            _ => Ok(format!(
+                                "ls: cannot access '{}': No such file or directory\r\n",
+                                list_path
+                            )),
                         }
-                    },
-                    Err(_) => {
-                        Ok(format!("ls: cannot access '{}': No such file or directory\r\n", list_path))
                     }
+                    Err(_) => Ok(format!(
+                        "ls: cannot access '{}': No such file or directory\r\n",
+                        list_path
+                    )),
                 }
             }
         }
