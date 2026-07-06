@@ -14,17 +14,13 @@ path = "src/main.rs"
 name = "report-generator"
 path = "src/bin/report_generator.rs"
 
-[[bin]]
-name = "report-gui"
-path = "src/bin/report_gui.rs"
-
-[[bin]]
-name = "dashboard-gui"
-path = "src/bin/dashboard_gui.rs"
+[workspace]
+members = ["desktop"]
+resolver = "2"
 
 [dependencies]
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "signal"] }
-russh = "0.62.1"
+russh = "0.62.2"
 log = "0.4.33"
 env_logger = "0.11.11"
 async-trait = "0.1.89"
@@ -46,18 +42,7 @@ webpki-root-certs = "1.0.8"
 serde_json = "1.0.150"
 ssh-encoding = "0.3.0-rc.9"
 minijinja = "2.21.0"
-shlex = "2.0"
-
-# gui
-eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow"] }
-egui = "0.35.0"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-eframe = { version = "0.35.0", features = ["x11", "wayland"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-clipboard-win = "5.4.1"
-image = "0.25.10"
+shlex = "2.0.1"
 
 [profile.release]
 lto = true

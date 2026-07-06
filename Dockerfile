@@ -7,10 +7,12 @@ WORKDIR /app
 # Only manifests — no source or migration files, so the recipe stays
 # stable for any change that doesn't touch Cargo.toml / Cargo.lock
 COPY Cargo.toml Cargo.lock ./
+COPY desktop/Cargo.toml desktop/
 # cargo chef prepare needs the bin/lib entry-points to exist
-RUN mkdir -p src/bin && \
+RUN mkdir -p src/bin desktop/src/bin && \
     touch src/lib.rs src/main.rs \
-          src/bin/report_generator.rs src/bin/report_gui.rs src/bin/dashboard_gui.rs
+          src/bin/report_generator.rs \
+          desktop/src/bin/dashboard_gui.rs desktop/src/bin/report_gui.rs
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder

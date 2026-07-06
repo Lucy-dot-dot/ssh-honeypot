@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
-use crate::db::DbMessage;
+use ssh_honeypot::db::DbMessage;
 use crate::shell::filesystem::fs2::{FileContent, FileSystem};
 
 /*

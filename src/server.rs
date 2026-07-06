@@ -1,6 +1,6 @@
-use crate::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
-use crate::db::DbMessage;
-use crate::ipapi;
+use ssh_honeypot::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
+use ssh_honeypot::db::DbMessage;
+use ssh_honeypot::ipapi;
 use crate::sftp::HoneypotSftpSession;
 use crate::shell::commands::{
     CatCommand, CdCommand, ColonCommand, CommandContext, CommandDispatcher, CurlCommand,

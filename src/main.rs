@@ -1,20 +1,17 @@
-mod abuseipdb;
 mod app;
-mod db;
-mod ipapi;
 mod keys;
 mod paths;
-mod report;
 mod server;
 mod sftp;
 mod shell;
 
 use app::App;
-use db::{initialize_database_pool, run_db_handler};
+use ssh_honeypot::db::{self, initialize_database_pool, run_db_handler};
+use ssh_honeypot::ipapi;
 use std::borrow::Cow;
 use std::fs::OpenOptions;
 
-use crate::abuseipdb::Client as AbuseIpClient;
+use ssh_honeypot::abuseipdb::Client as AbuseIpClient;
 use crate::server::SshServerHandler;
 use russh::server::Server as _;
 use russh::*;
