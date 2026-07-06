@@ -662,6 +662,9 @@ impl Handler for SshHandler {
             log::debug!("Answering with: {}", answer);
             self.tarpit_data(session, channel, answer.as_bytes())
                 .await?;
+            if let Err(e) = session.exit_status_request(channel, 0) {
+                log::error!("Failed to send exit status request: {}", e);
+            };
             session.channel_failure(channel)?;
             Ok(())
         }
