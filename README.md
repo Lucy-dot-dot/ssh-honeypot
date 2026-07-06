@@ -14,7 +14,7 @@ There are lots of SSH honeypots. This one aims to be the one you actually want t
 
 - **Believable sessions.** A Debian/Ubuntu-flavoured fake filesystem (loaded from `base.tar.gz`) plus simulated `ls`, `cat`, `echo`, `date`, `free`, `ps`, `uname` and friends — pipes, redirects, `&&`/`||`, command substitution and all. Attackers waste real time exploring.
 - **Everything is logged.** Every connection, auth attempt, command, session, and uploaded file ends up queryable in PostgreSQL.
-- **Built-in analysis tools.** A real-time desktop **dashboard**, a **report viewer**, and a CLI **report generator** ship in the same crate.
+- **Built-in analysis tools.** A real-time desktop **dashboard**, a **report viewer**, and a CLI **report generator** are all included.
 - **Threat intel, on by default.** Automatic [AbuseIPDB](https://www.abuseipdb.com/) lookups (abuse-confidence scores, Tor-exit detection) and [IPAPI](https://ip-api.com/) geolocation/ISP data, cached in memory + DB.
 - **Malware-aware file capture.** SFTP uploads get magic-byte MIME detection, Shannon-entropy scoring, claimed-vs-detected format-mismatch flagging, and hashing.
 - **Modern crypto.** Supports post-quantum key exchange (`mlkem768x25519-sha256`) alongside the usual curve25519/DH suites, and accepts password, public-key, and keyboard-interactive auth (so you capture all of them).
@@ -58,7 +58,7 @@ A prebuilt image is published automatically to `ghcr.io/lucy-dot-dot/ssh-honeypo
 Build and run the GUI against the same database:
 
 ```bash
-cargo run --release --bin dashboard-gui
+cargo run --release -p desktop --bin dashboard-gui
 # defaults to postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot
 ```
 
@@ -163,9 +163,10 @@ Requirements: a recent Rust toolchain (edition 2024), and PostgreSQL if you're n
 git clone https://github.com/Lucy-dot-dot/ssh-honeypot.git
 cd ssh-honeypot
 
-cargo build --release                       # builds all four binaries
+cargo build --release                       # builds ssh-honeypot + report-generator
+cargo build --release -p desktop            # builds the GUI binaries (dashboard-gui, report-gui)
 cargo run --release -- --help               # honeypot options
-cargo run --release --bin dashboard-gui     # the live dashboard
+cargo run --release -p desktop --bin dashboard-gui     # the live dashboard
 ```
 
 To bind ports below 1024 without root, grant the capability once:
