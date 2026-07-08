@@ -17,4 +17,4 @@ eframe = { version = "0.35.0", features = ["x11", "wayland"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 clipboard-win = "5.4.1"
-image = "0.25.10"
+image = { version = "0.25.10", default-features = false, features = ["bmp"] }

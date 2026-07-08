@@ -1,3 +1,4 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Live-activity dashboard for the SSH honeypot.
 //!
 //! Shows recent connections, auth attempts, live/ended sessions and top
