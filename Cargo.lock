@@ -1025,6 +1025,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "directories",
+ "log",
+ "minijinja",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1333,12 +1349,12 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clipboard-win",
+ "common",
  "eframe",
  "egui",
  "image",
  "log",
  "sqlx",
- "ssh-honeypot",
  "tokio",
 ]
 
@@ -5365,6 +5381,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "common",
  "directories",
  "env_logger",
  "flate2",

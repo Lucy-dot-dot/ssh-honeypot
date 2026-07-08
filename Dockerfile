@@ -8,11 +8,13 @@ WORKDIR /app
 # stable for any change that doesn't touch Cargo.toml / Cargo.lock
 COPY Cargo.toml Cargo.lock ./
 COPY desktop/Cargo.toml desktop/
+COPY common/Cargo.toml common/
 # cargo chef prepare needs the bin/lib entry-points to exist
-RUN mkdir -p src/bin desktop/src/bin && \
+RUN mkdir -p src/bin desktop/src/bin common/src && \
     touch src/lib.rs src/main.rs \
           src/bin/report_generator.rs \
-          desktop/src/bin/dashboard-gui.rs desktop/src/bin/report-gui.rs
+          desktop/src/bin/dashboard-gui.rs desktop/src/bin/report-gui.rs \
+          common/src/lib.rs
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder

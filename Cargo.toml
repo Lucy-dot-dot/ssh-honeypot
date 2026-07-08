@@ -15,10 +15,11 @@ name = "report-generator"
 path = "src/bin/report_generator.rs"
 
 [workspace]
-members = ["desktop"]
+members = ["desktop", "common"]
 resolver = "2"
 
 [dependencies]
+common = { path = "common" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "signal"] }
 russh = "0.62.2"
 log = "0.4.33"

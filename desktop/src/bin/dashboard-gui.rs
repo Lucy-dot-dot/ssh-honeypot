@@ -14,10 +14,10 @@ use eframe::egui;
 use egui::{Key, KeyboardShortcut, Modifiers};
 use sqlx::PgPool;
 use sqlx::postgres::PgListener;
-use ssh_honeypot::dashboard::{Dashboard, DashboardSnapshot, ReportedIp, SessionDetail, TopData};
-use ssh_honeypot::dashboard_config::DashboardConfig;
-use ssh_honeypot::db::initialize_database_pool;
-use ssh_honeypot::report::{ReportFormat, ReportGenerator};
+use common::dashboard::{Dashboard, DashboardSnapshot, ReportedIp, SessionDetail, TopData};
+use common::dashboard_config::DashboardConfig;
+use common::db::initialize_database_pool;
+use common::report::{ReportFormat, ReportGenerator};
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -1829,7 +1829,7 @@ fn render_top_lists(
 fn render_top_list(
     ui: &mut egui::Ui,
     title: &str,
-    entries: &[ssh_honeypot::dashboard::TopEntry],
+    entries: &[common::dashboard::TopEntry],
     reported: &HashMap<String, ReportedIp>,
     actions: &mut Vec<Action>,
     kind: Option<ReportKind>,

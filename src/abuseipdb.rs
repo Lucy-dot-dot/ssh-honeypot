@@ -244,30 +244,36 @@ impl Client {
         // Check database cache
         log::trace!("Checking database cache for IP address: {}", ip_address);
         match get_abuse_ip_check(&self.pool, ip_address, self.cache_ttl_hours).await {
-            Ok(Some((timestamp, response_data))) => {
-                log::debug!("AbuseIPDB database cache hit for IP: {}", ip_address);
-                log::trace!(
-                    "Database cache entry timestamp: {}, result: {:?}",
-                    timestamp,
-                    response_data
-                );
-                let response = CheckResponse {
-                    data: response_data,
-                };
+            Ok(Some((timestamp, raw_value))) => match serde_json::from_value::<CheckResponseData>(raw_value) {
+                Ok(response_data) => {
+                    log::debug!("AbuseIPDB database cache hit for IP: {}", ip_address);
+                    log::trace!(
+                        "Database cache entry timestamp: {}, result: {:?}",
+                        timestamp,
+                        response_data
+                    );
+                    let response = CheckResponse {
+                        data: response_data,
+                    };
 
-                log::trace!("Updating memory cache");
-                // Update memory cache
-                let mut cache = self.memory_cache.write().await;
-                cache.insert(
-                    ip_address.to_string(),
-                    CachedResult {
-                        response: response.clone(),
-                        cached_at: timestamp,
-                    },
-                );
+                    log::trace!("Updating memory cache");
+                    // Update memory cache
+                    let mut cache = self.memory_cache.write().await;
+                    cache.insert(
+                        ip_address.to_string(),
+                        CachedResult {
+                            response: response.clone(),
+                            cached_at: timestamp,
+                        },
+                    );
 
-                return Ok(response);
-            }
+                    return Ok(response);
+                }
+                Err(e) => {
+                    log::error!("Failed to deserialize cached AbuseIPDB data for {}: {}", ip_address, e);
+                    // Treat as cache miss, fall through to API call
+                }
+            },
             Ok(None) => {
                 // No cache entry or expired - continue to API call
                 log::trace!("No database cache entry found for IP: {}", ip_address);

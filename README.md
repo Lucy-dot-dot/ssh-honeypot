@@ -134,7 +134,7 @@ cargo run --release --bin report-generator -- ip 203.0.113.42 --format text --ex
 cargo run --release --bin report-generator -- password "root" --format markdown -o root.md
 ```
 
-An IP report includes connection history, geolocation, ISP/AS, AbuseIPDB abuse-confidence score and Tor flag, total/unique auth attempts, top usernames & passwords, recent attempts, and any commands that IP ran. Password reports show every IP and username that tried that password. Templates live in `templates/` if you want to tweak the output.
+An IP report includes connection history, geolocation, ISP/AS, AbuseIPDB abuse-confidence score and Tor flag, total/unique auth attempts, top usernames & passwords, recent attempts, and any commands that IP ran. Password reports show every IP and username that tried that password. Templates live in `common/templates/` if you want to tweak the output.
 
 The `report-gui` binary is the click-and-point version of the same thing.
 
@@ -151,7 +151,7 @@ All data lands in PostgreSQL. The core tables:
 - **`conn_track`** — raw connection attempts (source/destination ports)
 - **`abuse_ip_cache`** / **`ipapi_cache`** — 24-hour threat-intel caches
 
-Plus a couple of ready-made views that join auth attempts with geo + threat intel (`auth_enriched`, `auth_password_enriched`). Migrations are plain SQL files under `migrations/` and run automatically on startup.
+Plus a couple of ready-made views that join auth attempts with geo + threat intel (`auth_enriched`, `auth_password_enriched`). Migrations are plain SQL files under `common/migrations/` and run automatically on startup.
 
 ---
 

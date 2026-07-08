@@ -507,7 +507,7 @@ pub async fn get_abuse_ip_check(
     pool: &PgPool,
     ip: &str,
     cache_ttl_hours: u8,
-) -> Result<Option<(DateTime<Utc>, crate::abuseipdb::CheckResponseData)>, Error> {
+) -> Result<Option<(DateTime<Utc>, serde_json::Value)>, Error> {
     let result = query(
         "SELECT timestamp, response_data 
          FROM abuse_ip_cache 
@@ -523,21 +523,8 @@ pub async fn get_abuse_ip_check(
         Some(row) => {
             let timestamp: DateTime<Utc> = row.get("timestamp");
             let response_data: serde_json::Value = row.get("response_data");
-
-            match serde_json::from_value::<crate::abuseipdb::CheckResponseData>(response_data) {
-                Ok(response) => {
-                    log::debug!("AbuseIPDB cache hit from database for IP: {}", ip);
-                    Ok(Some((timestamp, response)))
-                }
-                Err(e) => {
-                    log::error!(
-                        "Failed to deserialize cached AbuseIPDB data for {}: {}",
-                        ip,
-                        e
-                    );
-                    Ok(None)
-                }
-            }
+            log::debug!("AbuseIPDB cache hit from database for IP: {}", ip);
+            Ok(Some((timestamp, response_data)))
         }
         None => {
             log::debug!("No valid AbuseIPDB cache entry found for IP: {}", ip);
@@ -626,7 +613,7 @@ pub async fn get_ipapi_check(
     pool: &PgPool,
     ip: &str,
     cache_ttl_hours: u8,
-) -> Result<Option<(DateTime<Utc>, crate::ipapi::IpApiResponse)>, Error> {
+) -> Result<Option<(DateTime<Utc>, serde_json::Value)>, Error> {
     let result = query(
         "SELECT timestamp, response_data 
          FROM ipapi_cache 
@@ -642,17 +629,8 @@ pub async fn get_ipapi_check(
         Some(row) => {
             let timestamp: DateTime<Utc> = row.get("timestamp");
             let response_data: serde_json::Value = row.get("response_data");
-
-            match serde_json::from_value::<crate::ipapi::IpApiResponse>(response_data) {
-                Ok(response) => {
-                    log::debug!("IPAPI cache hit from database for IP: {}", ip);
-                    Ok(Some((timestamp, response)))
-                }
-                Err(e) => {
-                    log::error!("Failed to deserialize cached IPAPI data for {}: {}", ip, e);
-                    Ok(None)
-                }
-            }
+            log::debug!("IPAPI cache hit from database for IP: {}", ip);
+            Ok(Some((timestamp, response_data)))
         }
         None => {
             log::debug!("No valid IPAPI cache entry found for IP: {}", ip);

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ssh-honeypot = { path = ".." }
+common = { path = "../common" }
 eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow"] }
 egui = "0.35.0"
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "postgres", "chrono", "uuid", "json"] }

@@ -105,21 +105,27 @@ impl Client {
 
         // Check database cache
         match get_ipapi_check(&self.pool, ip_address, self.cache_ttl_hours).await {
-            Ok(Some((timestamp, response))) => {
-                log::debug!("IPAPI database cache hit for IP: {}", ip_address);
+            Ok(Some((timestamp, raw_value))) => match serde_json::from_value::<IpApiResponse>(raw_value) {
+                Ok(response) => {
+                    log::debug!("IPAPI database cache hit for IP: {}", ip_address);
 
-                // Update memory cache
-                let mut cache = self.memory_cache.write().await;
-                cache.insert(
-                    ip_address.to_string(),
-                    CachedResult {
-                        response: response.clone(),
-                        cached_at: timestamp,
-                    },
-                );
+                    // Update memory cache
+                    let mut cache = self.memory_cache.write().await;
+                    cache.insert(
+                        ip_address.to_string(),
+                        CachedResult {
+                            response: response.clone(),
+                            cached_at: timestamp,
+                        },
+                    );
 
-                return Ok(response);
-            }
+                    return Ok(response);
+                }
+                Err(e) => {
+                    log::error!("Failed to deserialize cached IPAPI data for {}: {}", ip_address, e);
+                    // Treat as cache miss, fall through to API call
+                }
+            },
             Ok(None) => {
                 // No cache entry or expired - continue to API call
             }
