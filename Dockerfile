@@ -12,7 +12,7 @@ COPY desktop/Cargo.toml desktop/
 RUN mkdir -p src/bin desktop/src/bin && \
     touch src/lib.rs src/main.rs \
           src/bin/report_generator.rs \
-          desktop/src/bin/dashboard-gui desktop/src/bin/report-gui
+          desktop/src/bin/dashboard-gui.rs desktop/src/bin/report-gui.rs
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
