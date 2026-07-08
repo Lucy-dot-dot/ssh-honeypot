@@ -1191,129 +1191,145 @@ impl eframe::App for DashboardApp {
                     loading,
                     error,
                     ..
-                } => egui::Window::new(format!("Session · {ip}"))
-                    .id(egui::Id::new(id))
-                    .open(&mut open)
-                    .resizable(true)
-                    .default_width(640.0)
-                    .default_height(540.0)
-                    .show(&ctx, |ui| {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(!*loading, egui::Button::new("Refresh (F5)"))
-                                .clicked()
-                            {
-                                actions.push(Action::RefreshWindow(id));
-                            }
-                            ui.separator();
-                            ui.label(format!("User: {username}"));
-                            if let Some(st) = start_time {
-                                ui.label(format!("Started: {}", fmt_ts(*st)));
-                            }
-                            let r = link_label(ui, ip, "double-click for IP report");
-                            if r.double_clicked() {
-                                actions.push(Action::OpenReport(ReportKind::Ip, ip.clone()));
-                            }
-                        });
-
-                        if *loading {
-                            ui.spinner();
-                            ui.label("Loading session detail…");
-                            return;
-                        }
-                        if let Some(e) = error {
-                            ui.colored_label(RED, format!("Error: {e}"));
-                            return;
-                        }
-                        let Some(d) = detail.as_ref() else {
-                            return;
-                        };
-
-                        ui.separator();
-                        egui::Grid::new("detail_meta")
-                            .striped(true)
-                            .min_col_width(80.0)
-                            .show(ui, |ui| {
-                                ui.label("Auth type");
-                                ui.label(d.auth_type.as_deref().unwrap_or("—"));
-                                ui.end_row();
-                                ui.label("Successful");
-                                success_label(ui, d.successful);
-                                ui.end_row();
-                                ui.label("Password");
-                                ui.label(d.password.as_deref().unwrap_or("—"));
-                                ui.end_row();
-                                if show_geo {
-                                    ui.label("Country");
-                                    ui.label(d.country_code.as_deref().unwrap_or("—"));
-                                    ui.end_row();
-                                    ui.label("City");
-                                    ui.label(d.city.as_deref().unwrap_or("—"));
-                                    ui.end_row();
-                                    ui.label("ISP");
-                                    ui.label(d.isp.as_deref().unwrap_or("—"));
-                                    ui.end_row();
+                } => {
+                    let screen = ctx.content_rect();
+                    egui::Window::new(format!("Session · {ip}"))
+                        .id(egui::Id::new(id))
+                        .open(&mut open)
+                        .resizable(true)
+                        .default_width(640.0)
+                        .default_height(540.0)
+                        .constrain_to(screen)
+                        .show(&ctx, |ui| {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(!*loading, egui::Button::new("Refresh (F5)"))
+                                    .clicked()
+                                {
+                                    actions.push(Action::RefreshWindow(id));
                                 }
-                                ui.label("Auth ID");
-                                ui.label(&d.auth_id);
-                                ui.end_row();
+                                ui.separator();
+                                ui.label(format!("User: {username}"));
+                                if let Some(st) = start_time {
+                                    ui.label(format!("Started: {}", fmt_ts(*st)));
+                                }
+                                let r = link_label(ui, ip, "double-click for IP report");
+                                if r.double_clicked() {
+                                    actions.push(Action::OpenReport(ReportKind::Ip, ip.clone()));
+                                }
                             });
 
-                        ui.add_space(6.0);
-                        ui.strong(format!("Commands ({})", d.commands.len()));
-                        if d.commands.is_empty() {
-                            ui.colored_label(GRAY, "No commands recorded.");
-                        } else {
-                            egui::Grid::new("detail_cmds")
-                                .striped(true)
-                                .min_col_width(60.0)
-                                .show(ui, |ui| {
-                                    ui.strong("Time");
-                                    ui.strong("Command");
-                                    ui.end_row();
-                                    for c in &d.commands {
-                                        ui.label(fmt_ts(c.timestamp));
-                                        ui.label(&c.command);
-                                        ui.end_row();
-                                    }
-                                });
-                        }
+                            if *loading {
+                                ui.spinner();
+                                ui.label("Loading session detail…");
+                                return;
+                            }
+                            if let Some(e) = error {
+                                ui.colored_label(RED, format!("Error: {e}"));
+                                return;
+                            }
+                            let Some(d) = detail.as_ref() else {
+                                return;
+                            };
 
-                        ui.add_space(6.0);
-                        ui.strong(format!("Uploaded files ({})", d.files.len()));
-                        if d.files.is_empty() {
-                            ui.colored_label(GRAY, "No files uploaded.");
-                        } else {
-                            egui::Grid::new("detail_files")
-                                .striped(true)
-                                .min_col_width(60.0)
+                            // Scrollable detail body: scroll both horizontally
+                            // and vertically so long attacker-controlled strings
+                            // (commands, file names, passwords) can be scrolled
+                            // into view instead of wrapping or stretching the
+                            // window past the screen. A non-wrapping Label in a
+                            // Grid uses TextWrapMode::Extend, which makes the
+                            // grid expand to the full text width; the ScrollArea
+                            // then provides a horizontal scrollbar for it.
+                            egui::ScrollArea::both()
+                                .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    ui.strong("Time");
-                                    ui.strong("Name");
-                                    ui.strong("Size");
-                                    ui.strong("MIME");
-                                    ui.strong("Entropy");
-                                    ui.end_row();
-                                    for f in &d.files {
-                                        ui.label(fmt_ts(f.timestamp));
-                                        ui.label(&f.filename);
-                                        ui.label(fmt_size(f.file_size));
-                                        ui.label(
-                                            f.detected_mime_type
-                                                .as_deref()
-                                                .or(f.claimed_mime_type.as_deref())
-                                                .unwrap_or("—"),
-                                        );
-                                        ui.label(
-                                            f.file_entropy
-                                                .map(|e| format!("{e:.2}"))
-                                                .unwrap_or_else(|| "—".to_string()),
-                                        );
-                                        ui.end_row();
+                                    ui.separator();
+                                    egui::Grid::new("detail_meta")
+                                        .striped(true)
+                                        .min_col_width(80.0)
+                                        .show(ui, |ui| {
+                                            ui.label("Auth type");
+                                            ui.label(d.auth_type.as_deref().unwrap_or("—"));
+                                            ui.end_row();
+                                            ui.label("Successful");
+                                            success_label(ui, d.successful);
+                                            ui.end_row();
+                                            ui.label("Password");
+                                            ui.label(d.password.as_deref().unwrap_or("—"));
+                                            ui.end_row();
+                                            if show_geo {
+                                                ui.label("Country");
+                                                ui.label(d.country_code.as_deref().unwrap_or("—"));
+                                                ui.end_row();
+                                                ui.label("City");
+                                                ui.label(d.city.as_deref().unwrap_or("—"));
+                                                ui.end_row();
+                                                ui.label("ISP");
+                                                ui.label(d.isp.as_deref().unwrap_or("—"));
+                                                ui.end_row();
+                                            }
+                                            ui.label("Auth ID");
+                                            ui.label(&d.auth_id);
+                                            ui.end_row();
+                                        });
+
+                                    ui.add_space(6.0);
+                                    ui.strong(format!("Commands ({})", d.commands.len()));
+                                    if d.commands.is_empty() {
+                                        ui.colored_label(GRAY, "No commands recorded.");
+                                    } else {
+                                        egui::Grid::new("detail_cmds")
+                                            .striped(true)
+                                            .min_col_width(60.0)
+                                            .show(ui, |ui| {
+                                                ui.strong("Time");
+                                                ui.strong("Command");
+                                                ui.end_row();
+                                                for c in &d.commands {
+                                                    ui.label(fmt_ts(c.timestamp));
+                                                    ui.label(&c.command);
+                                                    ui.end_row();
+                                                }
+                                            });
+                                    }
+
+                                    ui.add_space(6.0);
+                                    ui.strong(format!("Uploaded files ({})", d.files.len()));
+                                    if d.files.is_empty() {
+                                        ui.colored_label(GRAY, "No files uploaded.");
+                                    } else {
+                                        egui::Grid::new("detail_files")
+                                            .striped(true)
+                                            .min_col_width(60.0)
+                                            .show(ui, |ui| {
+                                                ui.strong("Time");
+                                                ui.strong("Name");
+                                                ui.strong("Size");
+                                                ui.strong("MIME");
+                                                ui.strong("Entropy");
+                                                ui.end_row();
+                                                for f in &d.files {
+                                                    ui.label(fmt_ts(f.timestamp));
+                                                    ui.label(&f.filename);
+                                                    ui.label(fmt_size(f.file_size));
+                                                    ui.label(
+                                                        f.detected_mime_type
+                                                            .as_deref()
+                                                            .or(f.claimed_mime_type.as_deref())
+                                                            .unwrap_or("—"),
+                                                    );
+                                                    ui.label(
+                                                        f.file_entropy
+                                                            .map(|e| format!("{e:.2}"))
+                                                            .unwrap_or_else(|| "—".to_string()),
+                                                    );
+                                                    ui.end_row();
+                                                }
+                                            });
                                     }
                                 });
-                        }
-                    }),
+                        })
+                }
                 OpenWindow::ReportedDetails { ip, .. } => {
                     egui::Window::new(format!("Reported \u{00b7} {ip}"))
                         .id(egui::Id::new(id))
