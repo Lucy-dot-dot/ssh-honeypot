@@ -1354,6 +1354,8 @@ dependencies = [
  "egui",
  "image",
  "log",
+ "reqwest",
+ "serde_json",
  "sqlx",
  "tokio",
 ]

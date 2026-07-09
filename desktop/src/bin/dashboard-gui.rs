@@ -18,6 +18,7 @@ use common::dashboard::{Dashboard, DashboardSnapshot, ReportedIp, SessionDetail,
 use common::dashboard_config::DashboardConfig;
 use common::db::initialize_database_pool;
 use common::report::{ReportFormat, ReportGenerator};
+use desktop::whois::{WhoisClient, WhoisInfo};
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -64,6 +65,11 @@ enum AppEvent {
         text: String,
         isp: Option<String>,
         org: Option<String>,
+    },
+    /// WHOIS/RDAP lookup result for an IP report window.
+    WhoisReady {
+        ip: String,
+        result: Result<WhoisInfo, String>,
     },
     ReportFailed {
         kind: ReportKind,
@@ -131,6 +137,11 @@ enum OpenWindow {
         isp: Option<String>,
         org: Option<String>,
         loading: bool,
+        /// Cached RDAP/WHOIS info for IP reports. `None` for password reports
+        /// or before the first lookup lands.
+        whois: Option<WhoisInfo>,
+        whois_loading: bool,
+        whois_error: Option<String>,
         open: bool,
     },
     Session {
@@ -222,6 +233,9 @@ struct DashboardApp {
     runtime: tokio::runtime::Runtime,
     tx: mpsc::Sender<AppEvent>,
     rx: mpsc::Receiver<AppEvent>,
+    /// RDAP/WHOIS client with an in-memory cache, shared across all IP report
+    /// windows so a repeat click on a known IP is instant.
+    whois_client: WhoisClient,
 
     /// Handle to the background LISTEN/NOTIFY task, so it can be cancelled on
     /// reconnect.
@@ -271,6 +285,7 @@ impl DashboardApp {
             runtime: tokio::runtime::Runtime::new().expect("failed to create tokio runtime"),
             tx,
             rx,
+            whois_client: WhoisClient::new(),
             notify_task: None,
             notify_pending: false,
             last_notify: None,
@@ -375,6 +390,7 @@ impl DashboardApp {
         }
         let id = self.next_window_id;
         self.next_window_id += 1;
+        let is_ip = kind == ReportKind::Ip;
         self.open_windows.push(OpenWindow::Report {
             id,
             kind,
@@ -383,12 +399,20 @@ impl DashboardApp {
             isp: None,
             org: None,
             loading: true,
+            whois: None,
+            whois_loading: is_ip,
+            whois_error: None,
             open: true,
         });
         // A freshly opened window becomes the focused one so F5 targets it
         // immediately, before the user has clicked inside it.
         self.focused_window_id = Some(id);
-        self.spawn_report(ctx, kind, query);
+        self.spawn_report(ctx, kind, query.clone());
+        // IP reports also kick off a WHOIS/RDAP lookup in parallel so both the
+        // report text and the WHOIS panel fill in together.
+        if is_ip {
+            self.spawn_whois(ctx, query);
+        }
     }
 
     /// Kick off the background report generation for the given query, sending
@@ -440,6 +464,20 @@ impl DashboardApp {
                     });
                 }
             }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Kick off a background WHOIS/RDAP lookup for an IP, sending the result
+    /// back through the event channel. Mirrors `spawn_report`. The in-memory
+    /// cache on `whois_client` makes repeat lookups instant.
+    fn spawn_whois(&self, ctx: &egui::Context, ip: String) {
+        let client = self.whois_client.clone();
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        self.runtime.spawn(async move {
+            let result = client.lookup(&ip).await;
+            let _ = tx.send(AppEvent::WhoisReady { ip, result });
             ctx.request_repaint();
         });
     }
@@ -520,7 +558,17 @@ impl DashboardApp {
         };
 
         match &mut self.open_windows[idx] {
-            OpenWindow::Report { loading, .. } => *loading = true,
+            OpenWindow::Report {
+                kind,
+                loading,
+                whois_loading,
+                ..
+            } => {
+                *loading = true;
+                if *kind == ReportKind::Ip {
+                    *whois_loading = true;
+                }
+            }
             OpenWindow::Session { loading, error, .. } => {
                 *loading = true;
                 *error = None;
@@ -529,7 +577,12 @@ impl DashboardApp {
         }
 
         match job {
-            Job::Report(kind, query) => self.spawn_report(ctx, kind, query),
+            Job::Report(kind, query) => {
+                self.spawn_report(ctx, kind, query.clone());
+                if kind == ReportKind::Ip {
+                    self.spawn_whois(ctx, query);
+                }
+            }
             Job::Session(auth_id) => self.spawn_session(ctx, auth_id),
         }
     }
@@ -763,6 +816,31 @@ impl DashboardApp {
                             if *k == kind && *q == query {
                                 *t = format!("Error generating report:\n{error}");
                                 *loading = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                AppEvent::WhoisReady { ip, result } => {
+                    for w in self.open_windows.iter_mut() {
+                        if let OpenWindow::Report {
+                            kind: ReportKind::Ip,
+                            query,
+                            whois,
+                            whois_loading,
+                            whois_error,
+                            ..
+                        } = w
+                        {
+                            if *query == ip {
+                                *whois_loading = false;
+                                match result {
+                                    Ok(info) => {
+                                        *whois = Some(info);
+                                        *whois_error = None;
+                                    }
+                                    Err(e) => *whois_error = Some(e),
+                                }
                                 break;
                             }
                         }
@@ -1107,6 +1185,9 @@ impl eframe::App for DashboardApp {
                     isp,
                     org,
                     loading,
+                    whois,
+                    whois_loading,
+                    whois_error,
                     ..
                 } => {
                     let title = report_title(*kind, query);
@@ -1114,7 +1195,9 @@ impl eframe::App for DashboardApp {
                         .id(egui::Id::new(id))
                         .open(&mut open)
                         .resizable(true)
-                        .default_width(560.0)
+                        // IP reports need room for the WHOIS panel beside the
+                        // report text; password reports stay narrow.
+                        .default_width(if *kind == ReportKind::Ip { 900.0 } else { 560.0 })
                         .default_height(440.0)
                         .show(&ctx, |ui| {
                             ui.horizontal(|ui| {
@@ -1171,7 +1254,41 @@ impl eframe::App for DashboardApp {
                                 }
                                 ui.separator();
                             }
-                            if !*loading && !text.is_empty() {
+                            // IP reports render a WHOIS/RDAP panel beside the
+                            // report text; password reports stay single-column.
+                            if *kind == ReportKind::Ip {
+                                ui.columns(2, |columns| {
+                                    let left = &mut columns[0];
+                                    if !*loading && !text.is_empty() {
+                                        egui::ScrollArea::vertical()
+                                            .id_salt(egui::Id::new(("ip_report_text_col", id)))
+                                            .auto_shrink([false, false])
+                                            .show(left, |ui| {
+                                                ui.add(
+                                                    egui::TextEdit::multiline(&mut text.as_str())
+                                                        .font(egui::TextStyle::Monospace)
+                                                        .desired_width(f32::INFINITY),
+                                                );
+                                            });
+                                    } else if *loading {
+                                        left.spinner();
+                                        left.label("Generating report…");
+                                    }
+
+                                    let right = &mut columns[1];
+                                    egui::ScrollArea::vertical()
+                                        .id_salt(egui::Id::new(("whois_col", id)))
+                                        .auto_shrink([false, false])
+                                        .show(right, |ui| {
+                                            render_whois_panel(
+                                                ui,
+                                                whois,
+                                                *whois_loading,
+                                                whois_error,
+                                            );
+                                        });
+                                });
+                            } else if !*loading && !text.is_empty() {
                                 egui::ScrollArea::vertical()
                                     .auto_shrink([false, false])
                                     .show(ui, |ui| {
@@ -1956,6 +2073,102 @@ fn report_title(kind: ReportKind, query: &str) -> String {
         ReportKind::Ip => format!("IP report · {query}"),
         ReportKind::Password => format!("Password report · {query}"),
     }
+}
+
+/// Render the WHOIS/RDAP side panel for an IP report window. Shown only for IP
+/// reports, populated from a background RDAP lookup.
+fn render_whois_panel(
+    ui: &mut egui::Ui,
+    whois: &Option<WhoisInfo>,
+    loading: bool,
+    error: &Option<String>,
+) {
+    ui.strong("WHOIS (RDAP)");
+    if loading {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.colored_label(GRAY, "Fetching RDAP…");
+        });
+        return;
+    }
+    if let Some(e) = error {
+        ui.colored_label(RED, format!("WHOIS error: {e}"));
+        ui.colored_label(GRAY, "(cached reports reuse the last result)");
+        return;
+    }
+    let Some(info) = whois else {
+        ui.colored_label(GRAY, "No WHOIS data.");
+        return;
+    };
+
+    egui::Grid::new("whois_grid")
+        .striped(true)
+        .min_col_width(70.0)
+        .show(ui, |ui| {
+            if let Some(v) = &info.network_name {
+                ui.strong("Network");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.cidr {
+                ui.strong("CIDR");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.range {
+                ui.strong("Range");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.net_type {
+                ui.strong("Type");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.country {
+                ui.strong("Country");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.handle {
+                ui.strong("Handle");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.status {
+                ui.strong("Status");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.abuse_name {
+                ui.strong("Abuse");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.abuse_email {
+                ui.strong("Abuse e-mail");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.registration {
+                ui.strong("Registered");
+                ui.label(v);
+                ui.end_row();
+            }
+            if let Some(v) = &info.last_changed {
+                ui.strong("Updated");
+                ui.label(v);
+                ui.end_row();
+            }
+        });
+
+    if let Some(desc) = &info.description {
+        ui.add_space(4.0);
+        ui.strong("Description");
+        ui.label(desc);
+    }
+    ui.add_space(4.0);
+    ui.colored_label(GRAY, format!("via RDAP · {}", fmt_ts(info.fetched_at)));
 }
 
 fn fmt_ts(t: DateTime<Utc>) -> String {
