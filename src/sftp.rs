@@ -409,18 +409,63 @@ impl Handler for HoneypotSftpSession {
         handle: String,
     ) -> impl Future<Output = Result<Name, Self::Error>> + Send {
         let handle = handle;
-        let _fs = self.fs.clone();
+        let fs = self.fs.clone();
+        let handles = self.handles.clone();
 
         async move {
             log::debug!("SFTP readdir request: id={}, handle={}", id, handle);
 
-            // Return some fake directory entries for honeypot
-            let files = vec![
-                File::new(".", FileAttributes::default()),
-                File::new("..", FileAttributes::default()),
-                File::new("config", FileAttributes::default()),
-                File::new("data", FileAttributes::default()),
-            ];
+            // Resolve the directory path from the tracked handle
+            let path = {
+                let guard = handles.read().await;
+                guard.get(&handle).map(|e| e.path.clone())
+            };
+
+            let path = match path {
+                Some(p) => p,
+                None => {
+                    log::warn!("readdir: unknown handle '{}'", handle);
+                    return Ok(Name { id, files: vec![] });
+                }
+            };
+
+            // Read entries from the VFS
+            let mut files = Vec::new();
+
+            // Always include "." and ".."
+            files.push(File::new(".", FileAttributes::default()));
+            files.push(File::new("..", FileAttributes::default()));
+
+            let entries = {
+                let fs_guard = fs.read().await;
+                fs_guard.list_directory(&path)
+            };
+
+            match entries {
+                Ok(dir_entries) => {
+                    for entry in dir_entries {
+                        let mut attrs = FileAttributes::default();
+                        match &entry.file_content {
+                            Some(FileContent::RegularFile(bytes)) => {
+                                attrs.size = Some(bytes.len() as u64);
+                                attrs.permissions = Some(0o100644);
+                            }
+                            Some(FileContent::Directory(_)) => {
+                                attrs.size = Some(4096);
+                                attrs.permissions = Some(0o40755);
+                            }
+                            Some(FileContent::SymbolicLink(_)) => {
+                                attrs.permissions = Some(0o120777);
+                            }
+                            None => {}
+                        }
+                        files.push(File::new(&entry.name, attrs));
+                    }
+                }
+                Err(e) => {
+                    log::warn!("readdir: failed to list '{}': {}", path, e);
+                }
+            }
 
             Ok(Name { id, files })
         }
