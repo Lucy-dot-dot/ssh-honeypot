@@ -236,8 +236,8 @@ impl Handler for HoneypotSftpSession {
         offset: u64,
         len: u32,
     ) -> impl Future<Output = Result<Data, Self::Error>> + Send {
-        let handle = handle;
-        let _fs = self.fs.clone();
+        let fs = self.fs.clone();
+        let handles = self.handles.clone();
 
         async move {
             log::debug!(
@@ -248,11 +248,43 @@ impl Handler for HoneypotSftpSession {
                 len
             );
 
-            // For honeypot, return empty data or fake content
-            Ok(Data {
-                id,
-                data: vec![0; std::cmp::min(len as usize, 1024)], // Return zeros or fake data
-            })
+            // Resolve the path from the tracked handle
+            let path = {
+                let guard = handles.read().await;
+                guard.get(&handle).map(|e| e.path.clone())
+            };
+
+            let path = match path {
+                Some(p) => p,
+                None => {
+                    log::warn!("read: unknown handle '{}'", handle);
+                    return Ok(Data { id, data: vec![] });
+                }
+            };
+
+            // Read the file from the VFS
+            let data = {
+                let fs_guard = fs.read().await;
+                match fs_guard.get_file(&path) {
+                    Ok(entry) => match &entry.file_content {
+                        Some(FileContent::RegularFile(bytes)) => {
+                            let start = (offset as usize).min(bytes.len());
+                            let end = start + (len as usize).min(bytes.len().saturating_sub(start));
+                            bytes[start..end].to_vec()
+                        }
+                        _ => {
+                            log::warn!("read: '{}' is not a regular file", path);
+                            vec![]
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("read: failed to get '{}': {}", path, e);
+                        vec![]
+                    }
+                }
+            };
+
+            Ok(Data { id, data })
         }
     }
 
