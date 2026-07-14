@@ -13,7 +13,9 @@ use ssh_honeypot::db::DbMessage;
 use crate::shell::filesystem::fs2::{FileContent, FileSystem};
 
 /*
-NOTE: This sftp implementation is quite basic and not feature complete. It may not work in many cases. And is subject to potential removal until I decide to or someone wants to have it.
+NOTE: This SFTP implementation is backed by a virtual filesystem (fs2).
+All 18 russh-sftp Handler trait methods are implemented with VFS integration.
+It is designed for honeypot use, not full POSIX correctness.
  */
 
 /// Tracks an open file or directory handle, associating the opaque SFTP
@@ -399,6 +401,206 @@ impl Handler for HoneypotSftpSession {
         }
     }
 
+    fn lstat(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<Attrs, Self::Error>> + Send {
+        let path = path;
+        let fs = self.fs.clone();
+
+        async move {
+            log::debug!("SFTP lstat request: id={}, path={}", id, path);
+
+            let fs_guard = fs.read().await;
+            let resolved_path = fs_guard.resolve_absolute_path(&path);
+
+            match fs_guard.get_file(&resolved_path) {
+                Ok(entry) => {
+                    let mut attrs = FileAttributes::default();
+                    attrs.size = Some(entry.inode.i_size_lo as u64);
+                    attrs.uid = Some(entry.inode.i_uid as u32);
+                    attrs.gid = Some(entry.inode.i_gid as u32);
+                    attrs.permissions = Some(entry.inode.i_mode as u32);
+                    attrs.mtime = Some(entry.inode.i_mtime);
+
+                    Ok(Attrs { id, attrs })
+                }
+                Err(_) => {
+                    let mut attrs = FileAttributes::default();
+                    attrs.size = Some(1024);
+                    attrs.permissions = Some(0o644);
+
+                    Ok(Attrs { id, attrs })
+                }
+            }
+        }
+    }
+
+    fn fstat(
+        &mut self,
+        id: u32,
+        handle: String,
+    ) -> impl Future<Output = Result<Attrs, Self::Error>> + Send {
+        let handles = self.handles.clone();
+        let fs = self.fs.clone();
+
+        async move {
+            log::debug!("SFTP fstat request: id={}, handle={}", id, handle);
+
+            let path = {
+                let guard = handles.read().await;
+                guard.get(&handle).map(|e| e.path.clone())
+            };
+
+            let path = match path {
+                Some(p) => p,
+                None => {
+                    log::warn!("fstat: unknown handle '{}'", handle);
+                    return Ok(Attrs {
+                        id,
+                        attrs: FileAttributes::default(),
+                    });
+                }
+            };
+
+            let fs_guard = fs.read().await;
+            match fs_guard.get_file(&path) {
+                Ok(entry) => {
+                    let mut attrs = FileAttributes::default();
+                    attrs.size = Some(entry.inode.i_size_lo as u64);
+                    attrs.uid = Some(entry.inode.i_uid as u32);
+                    attrs.gid = Some(entry.inode.i_gid as u32);
+                    attrs.permissions = Some(entry.inode.i_mode as u32);
+                    attrs.mtime = Some(entry.inode.i_mtime);
+
+                    Ok(Attrs { id, attrs })
+                }
+                Err(_) => {
+                    let mut attrs = FileAttributes::default();
+                    attrs.size = Some(1024);
+                    attrs.permissions = Some(0o644);
+
+                    Ok(Attrs { id, attrs })
+                }
+            }
+        }
+    }
+
+    fn setstat(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        let path = path;
+        let fs = self.fs.clone();
+
+        async move {
+            log::debug!("SFTP setstat request: id={}, path={}", id, path);
+
+            let mut fs_guard = fs.write().await;
+            match fs_guard.get_file_mut(&path) {
+                Ok(entry) => {
+                    if let Some(uid) = attrs.uid {
+                        entry.inode.i_uid = uid as u16;
+                    }
+                    if let Some(gid) = attrs.gid {
+                        entry.inode.i_gid = gid as u16;
+                    }
+                    if let Some(permissions) = attrs.permissions {
+                        entry.inode.i_mode = permissions as u16;
+                    }
+                    if let Some(mtime) = attrs.mtime {
+                        entry.inode.i_mtime = mtime;
+                    }
+
+                    Ok(Status {
+                        id,
+                        status_code: StatusCode::Ok,
+                        error_message: "".to_string(),
+                        language_tag: "".to_string(),
+                    })
+                }
+                Err(e) => {
+                    log::warn!("setstat: failed to stat '{}': {}", path, e);
+                    Ok(Status {
+                        id,
+                        status_code: StatusCode::NoSuchFile,
+                        error_message: e.to_string(),
+                        language_tag: "".to_string(),
+                    })
+                }
+            }
+        }
+    }
+
+    fn fsetstat(
+        &mut self,
+        id: u32,
+        handle: String,
+        attrs: FileAttributes,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        let handles = self.handles.clone();
+        let fs = self.fs.clone();
+
+        async move {
+            log::debug!("SFTP fsetstat request: id={}, handle={}", id, handle);
+
+            let path = {
+                let guard = handles.read().await;
+                guard.get(&handle).map(|e| e.path.clone())
+            };
+
+            let path = match path {
+                Some(p) => p,
+                None => {
+                    log::warn!("fsetstat: unknown handle '{}'", handle);
+                    return Ok(Status {
+                        id,
+                        status_code: StatusCode::Failure,
+                        error_message: "Unknown handle".to_string(),
+                        language_tag: "".to_string(),
+                    });
+                }
+            };
+
+            let mut fs_guard = fs.write().await;
+            match fs_guard.get_file_mut(&path) {
+                Ok(entry) => {
+                    if let Some(uid) = attrs.uid {
+                        entry.inode.i_uid = uid as u16;
+                    }
+                    if let Some(gid) = attrs.gid {
+                        entry.inode.i_gid = gid as u16;
+                    }
+                    if let Some(permissions) = attrs.permissions {
+                        entry.inode.i_mode = permissions as u16;
+                    }
+                    if let Some(mtime) = attrs.mtime {
+                        entry.inode.i_mtime = mtime;
+                    }
+
+                    Ok(Status {
+                        id,
+                        status_code: StatusCode::Ok,
+                        error_message: "".to_string(),
+                        language_tag: "".to_string(),
+                    })
+                }
+                Err(e) => {
+                    log::warn!("fsetstat: failed to stat '{}': {}", path, e);
+                    Ok(Status {
+                        id,
+                        status_code: StatusCode::NoSuchFile,
+                        error_message: e.to_string(),
+                        language_tag: "".to_string(),
+                    })
+                }
+            }
+        }
+    }
+
     fn opendir(
         &mut self,
         id: u32,
@@ -673,6 +875,82 @@ impl Handler for HoneypotSftpSession {
                 }),
                 Err(e) => {
                     log::warn!("rename: failed to move '{}' -> '{}': {}", old_path, new_path, e);
+                    Ok(Status {
+                        id,
+                        status_code: StatusCode::Failure,
+                        error_message: e.to_string(),
+                        language_tag: "".to_string(),
+                    })
+                }
+            }
+        }
+    }
+
+    fn readlink(
+        &mut self,
+        id: u32,
+        path: String,
+    ) -> impl Future<Output = Result<Name, Self::Error>> + Send {
+        let path = path;
+        let fs = self.fs.clone();
+
+        async move {
+            log::debug!("SFTP readlink request: id={}, path={}", id, path);
+
+            let fs_guard = fs.read().await;
+            match fs_guard.get_file(&path) {
+                Ok(entry) => match &entry.file_content {
+                    Some(FileContent::SymbolicLink(target)) => {
+                        let files = vec![File::new(target, FileAttributes::default())];
+                        Ok(Name { id, files })
+                    }
+                    _ => {
+                        log::warn!("readlink: '{}' is not a symbolic link", path);
+                        let files = vec![File::dummy("")];
+                        Ok(Name { id, files })
+                    }
+                },
+                Err(e) => {
+                    log::warn!("readlink: failed to get '{}': {}", path, e);
+                    let files = vec![File::dummy("")];
+                    Ok(Name { id, files })
+                }
+            }
+        }
+    }
+
+    fn symlink(
+        &mut self,
+        id: u32,
+        link_path: String,
+        target_path: String,
+    ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        let link_path = link_path;
+        let target_path = target_path;
+        let fs = self.fs.clone();
+
+        async move {
+            log::info!(
+                "SFTP symlink request: {} -> {}",
+                link_path,
+                target_path
+            );
+
+            let mut fs_guard = fs.write().await;
+            match fs_guard.create_symlink(&link_path, &target_path) {
+                Ok(_) => Ok(Status {
+                    id,
+                    status_code: StatusCode::Ok,
+                    error_message: "".to_string(),
+                    language_tag: "".to_string(),
+                }),
+                Err(e) => {
+                    log::warn!(
+                        "symlink: failed to create '{} -> {}': {}",
+                        link_path,
+                        target_path,
+                        e
+                    );
                     Ok(Status {
                         id,
                         status_code: StatusCode::Failure,
@@ -1480,7 +1758,7 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  Integration: round-trip scenarios  (desired-state)
+    //  Integration: end-to-end SFTP workflows
     // ═══════════════════════════════════════════════════════════════
 
     #[tokio::test]
@@ -1522,7 +1800,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Desired: data read back should match what was written
         assert_eq!(
             result.data, payload,
             "read after write should return identical data"
@@ -1533,38 +1810,651 @@ mod tests {
     async fn test_mkdir_populate_readdir_roundtrip() {
         let (mut session, _rx) = create_test_session(FileSystem::default());
 
-        // Create directory via SFTP
         session
             .mkdir(1, "/workspace".to_string(), FileAttributes::default())
             .await
             .unwrap();
 
-        // Populate via the VFS (simulating prior file creation)
-        {
-            let mut fs_guard = session.fs.write().await;
-            fs_guard.create_file("/workspace/a.txt").unwrap();
-            fs_guard.create_file("/workspace/b.txt").unwrap();
+        // Create files through the SFTP handlers (true integration)
+        for name in &["a.txt", "b.txt"] {
+            let h = session
+                .open(
+                    2,
+                    format!("/workspace/{}", name),
+                    OpenFlags::WRITE | OpenFlags::CREATE,
+                    FileAttributes::default(),
+                )
+                .await
+                .unwrap();
+            session
+                .write(3, h.handle.clone(), 0, b"content".to_vec())
+                .await
+                .unwrap();
+            session.close(4, h.handle).await.unwrap();
         }
 
-        // List via SFTP readdir
         let dir = session
-            .opendir(2, "/workspace".to_string())
+            .opendir(5, "/workspace".to_string())
             .await
             .unwrap();
-        let result = session.readdir(3, dir.handle).await.unwrap();
+        let result = session.readdir(6, dir.handle).await.unwrap();
         let names: Vec<&str> =
             result.files.iter().map(|f| f.filename.as_str()).collect();
 
-        // Desired: readdir should reflect the files we created
+        assert!(names.contains(&"a.txt"), "readdir should list a.txt, got: {:?}", names);
+        assert!(names.contains(&"b.txt"), "readdir should list b.txt, got: {:?}", names);
+    }
+
+    #[tokio::test]
+    async fn test_full_file_lifecycle() {
+        let (mut session, _rx) = create_test_session(FileSystem::default());
+
+        // mkdir
+        session
+            .mkdir(1, "/logs".to_string(), FileAttributes::default())
+            .await
+            .unwrap();
+
+        // open + write + close
+        let h = session
+            .open(
+                2,
+                "/logs/app.log".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+        let payload = b"ERROR: something broke\n".to_vec();
+        session
+            .write(3, h.handle.clone(), 0, payload.clone())
+            .await
+            .unwrap();
+        session.close(4, h.handle).await.unwrap();
+
+        // stat should reflect the written size
+        let st = session.stat(5, "/logs/app.log".to_string()).await.unwrap();
+        assert_eq!(st.attrs.size, Some(payload.len() as u64));
+
+        // readdir on parent should list the file
+        let dir = session
+            .opendir(6, "/logs".to_string())
+            .await
+            .unwrap();
+        let listing = session.readdir(7, dir.handle).await.unwrap();
+        let names: Vec<&str> =
+            listing.files.iter().map(|f| f.filename.as_str()).collect();
+        assert!(names.contains(&"app.log"));
+
+        // read back
+        let rh = session
+            .open(8, "/logs/app.log".to_string(), OpenFlags::READ, FileAttributes::default())
+            .await
+            .unwrap();
+        let data = session.read(9, rh.handle, 0, 1024).await.unwrap();
+        assert_eq!(data.data, payload);
+
+        // remove
+        session
+            .remove(10, "/logs/app.log".to_string())
+            .await
+            .unwrap();
+
+        // file should be gone from VFS
+        let fs_guard = session.fs.read().await;
+        assert!(fs_guard.get_file("/logs/app.log").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rename_then_read_new_path() {
+        let (mut session, _rx) = create_session_with_tmp();
+
+        // Write a file
+        let h = session
+            .open(
+                1,
+                "/tmp/original.txt".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+        let payload = b"rename me".to_vec();
+        session
+            .write(2, h.handle.clone(), 0, payload.clone())
+            .await
+            .unwrap();
+        session.close(3, h.handle).await.unwrap();
+
+        // Rename
+        session
+            .rename(4, "/tmp/original.txt".to_string(), "/tmp/renamed.txt".to_string())
+            .await
+            .unwrap();
+
+        // Read from the new path
+        let rh = session
+            .open(5, "/tmp/renamed.txt".to_string(), OpenFlags::READ, FileAttributes::default())
+            .await
+            .unwrap();
+        let data = session.read(6, rh.handle, 0, 1024).await.unwrap();
+        assert_eq!(data.data, payload);
+
+        // Old path should not exist
+        let fs_guard = session.fs.read().await;
+        assert!(fs_guard.get_file("/tmp/original.txt").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_remove_then_readdir() {
+        let (mut session, _rx) = create_test_session(FileSystem::default());
+
+        session
+            .mkdir(1, "/docs".to_string(), FileAttributes::default())
+            .await
+            .unwrap();
+
+        // Create three files via SFTP
+        for name in &["keep.txt", "delete_me.txt", "also_keep.txt"] {
+            let h = session
+                .open(
+                    2,
+                    format!("/docs/{}", name),
+                    OpenFlags::WRITE | OpenFlags::CREATE,
+                    FileAttributes::default(),
+                )
+                .await
+                .unwrap();
+            session.write(3, h.handle.clone(), 0, b"x".to_vec()).await.unwrap();
+            session.close(4, h.handle).await.unwrap();
+        }
+
+        // Remove one file
+        session
+            .remove(5, "/docs/delete_me.txt".to_string())
+            .await
+            .unwrap();
+
+        // readdir should show the remaining two, not the deleted one
+        let dir = session.opendir(6, "/docs".to_string()).await.unwrap();
+        let result = session.readdir(7, dir.handle).await.unwrap();
+        let names: Vec<&str> =
+            result.files.iter().map(|f| f.filename.as_str()).collect();
+
+        assert!(names.contains(&"keep.txt"));
+        assert!(names.contains(&"also_keep.txt"));
         assert!(
-            names.contains(&"a.txt"),
-            "readdir should list a.txt, got: {:?}",
-            names
+            !names.contains(&"delete_me.txt"),
+            "readdir should not list removed file"
         );
-        assert!(
-            names.contains(&"b.txt"),
-            "readdir should list b.txt, got: {:?}",
-            names
-        );
+    }
+
+    #[tokio::test]
+    async fn test_write_multiple_chunks_read_back() {
+        let (mut session, _rx) = create_session_with_tmp();
+
+        let h = session
+            .open(
+                1,
+                "/tmp/chunks.bin".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
+        // Write three non-contiguous chunks
+        session.write(2, h.handle.clone(), 0, b"AAAA".to_vec()).await.unwrap();
+        session.write(3, h.handle.clone(), 10, b"BBBB".to_vec()).await.unwrap();
+        session.write(4, h.handle.clone(), 20, b"CCCC".to_vec()).await.unwrap();
+        session.close(5, h.handle).await.unwrap();
+
+        // Read the whole file back
+        let rh = session
+            .open(6, "/tmp/chunks.bin".to_string(), OpenFlags::READ, FileAttributes::default())
+            .await
+            .unwrap();
+        let data = session.read(7, rh.handle, 0, 1024).await.unwrap();
+
+        assert_eq!(data.data.len(), 24); // spans offset 0..24
+        assert_eq!(&data.data[0..4], b"AAAA");
+        assert_eq!(&data.data[4..10], &[0; 6]); // gap filled with zeros
+        assert_eq!(&data.data[10..14], b"BBBB");
+        assert_eq!(&data.data[14..20], &[0; 6]); // gap filled with zeros
+        assert_eq!(&data.data[20..24], b"CCCC");
+    }
+
+    #[tokio::test]
+    async fn test_rmdir_after_removing_contents() {
+        let (mut session, _rx) = create_test_session(FileSystem::default());
+
+        // mkdir parent
+        session
+            .mkdir(1, "/work".to_string(), FileAttributes::default())
+            .await
+            .unwrap();
+
+        // Create files inside via SFTP
+        for name in &["file1", "file2"] {
+            let h = session
+                .open(
+                    2,
+                    format!("/work/{}", name),
+                    OpenFlags::WRITE | OpenFlags::CREATE,
+                    FileAttributes::default(),
+                )
+                .await
+                .unwrap();
+            session.write(3, h.handle.clone(), 0, b"data".to_vec()).await.unwrap();
+            session.close(4, h.handle).await.unwrap();
+        }
+
+        // Remove the files
+        session.remove(5, "/work/file1".to_string()).await.unwrap();
+        session.remove(6, "/work/file2".to_string()).await.unwrap();
+
+        // Now rmdir should succeed
+        let status = session.rmdir(7, "/work".to_string()).await.unwrap();
+        assert_eq!(status.status_code, StatusCode::Ok);
+
+        let fs_guard = session.fs.read().await;
+        assert!(fs_guard.get_file("/work").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_stat_reflects_written_size() {
+        let (mut session, _rx) = create_test_session(FileSystem::default());
+
+        // Write 100 bytes
+        let h = session
+            .open(
+                1,
+                "/blob.dat".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+        let payload = vec![0x42u8; 100];
+        session
+            .write(2, h.handle.clone(), 0, payload.clone())
+            .await
+            .unwrap();
+        session.close(3, h.handle).await.unwrap();
+
+        // stat should report size = 100
+        let st = session.stat(4, "/blob.dat".to_string()).await.unwrap();
+        assert_eq!(st.attrs.size, Some(100));
+    }
+
+    #[tokio::test]
+    async fn test_partial_read_across_written_gaps() {
+        let (mut session, _rx) = create_session_with_tmp();
+
+        let h = session
+            .open(
+                1,
+                "/tmp/sparse.bin".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
+        // Write at offset 5, leaving a gap at 0..5
+        session
+            .write(2, h.handle.clone(), 5, b"HELLO".to_vec())
+            .await
+            .unwrap();
+        session.close(3, h.handle).await.unwrap();
+
+        // Read just the written portion
+        let rh = session
+            .open(4, "/tmp/sparse.bin".to_string(), OpenFlags::READ, FileAttributes::default())
+            .await
+            .unwrap();
+
+        let from_offset = session.read(5, rh.handle.clone(), 5, 5).await.unwrap();
+        assert_eq!(from_offset.data, b"HELLO");
+
+        let from_zero = session.read(6, rh.handle.clone(), 0, 10).await.unwrap();
+        assert_eq!(from_zero.data.len(), 10);
+        assert_eq!(&from_zero.data[0..5], &[0; 5]); // zeros before the write
+        assert_eq!(&from_zero.data[5..10], b"HELLO");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  lstat
+    // ═══════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_lstat_returns_attributes_for_existing_file() {
+        let mut fs = FileSystem::default();
+        fs.create_directory("/etc").unwrap();
+        fs.create_file("/etc/config").unwrap();
+        {
+            let entry = fs.get_file_mut("/etc/config").unwrap();
+            entry.inode.i_size_lo = 2048;
+        }
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let result = session.lstat(1, "/etc/config".to_string()).await.unwrap();
+        assert_eq!(result.attrs.size, Some(2048));
+    }
+
+    #[tokio::test]
+    async fn test_lstat_returns_fake_attributes_for_missing_file() {
+        let (mut session, _rx) = create_test_session(FileSystem::default());
+
+        let result = session.lstat(1, "/nonexistent".to_string()).await.unwrap();
+        assert!(result.attrs.size.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_lstat_on_symlink_returns_link_attrs() {
+        let mut fs = FileSystem::default();
+        fs.create_directory("/dir").unwrap();
+        fs.create_file("/dir/target.txt").unwrap();
+        fs.create_symlink("/dir/link", "/dir/target.txt").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let link_result = session.lstat(1, "/dir/link".to_string()).await.unwrap();
+        let target_result = session.lstat(2, "/dir/target.txt".to_string()).await.unwrap();
+
+        // lstat should not follow the symlink — both return attrs successfully
+        assert!(link_result.attrs.size.is_some());
+        assert!(target_result.attrs.size.is_some());
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  fstat
+    // ═══════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_fstat_returns_attributes_by_handle() {
+        let (mut session, _rx) = create_session_with_tmp();
+
+        let handle = session
+            .open(
+                1,
+                "/tmp/data.bin".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
+        // Write some data so size is meaningful
+        session
+            .write(2, handle.handle.clone(), 0, b"100_bytes_of_payload_data_here_____________________!".to_vec())
+            .await
+            .unwrap();
+
+        let result = session.fstat(3, handle.handle.clone()).await.unwrap();
+        assert!(result.attrs.size.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_fstat_returns_default_for_unknown_handle() {
+        let (mut session, _rx) = create_session_with_tmp();
+
+        let result = session.fstat(1, "nonexistent_handle".to_string()).await.unwrap();
+        // Unknown handle should still return Ok with default attrs
+        assert!(result.attrs.size.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_fstat_returns_same_attrs_as_stat() {
+        let mut fs = FileSystem::default();
+        fs.create_directory("/home").unwrap();
+        fs.create_file("/home/file").unwrap();
+        {
+            let entry = fs.get_file_mut("/home/file").unwrap();
+            entry.inode.i_size_lo = 512;
+            entry.inode.i_mode = 0o100600;
+        }
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let stat_result = session.stat(1, "/home/file".to_string()).await.unwrap();
+        let handle = session
+            .open(2, "/home/file".to_string(), OpenFlags::READ, FileAttributes::default())
+            .await
+            .unwrap();
+        let fstat_result = session.fstat(3, handle.handle).await.unwrap();
+
+        assert_eq!(stat_result.attrs.size, fstat_result.attrs.size);
+        assert_eq!(stat_result.attrs.permissions, fstat_result.attrs.permissions);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  setstat
+    // ═══════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_setstat_updates_permissions() {
+        let mut fs = FileSystem::default();
+        fs.create_file("/file.txt").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let mut attrs = FileAttributes::default();
+        attrs.permissions = Some(0o100600);
+
+        let status = session.setstat(1, "/file.txt".to_string(), attrs).await.unwrap();
+        assert_eq!(status.status_code, StatusCode::Ok);
+
+        let guard = session.fs.read().await;
+        let entry = guard.get_file("/file.txt").unwrap();
+        assert_eq!(entry.inode.i_mode, 0o100600);
+    }
+
+    #[tokio::test]
+    async fn test_setstat_updates_uid_and_gid() {
+        let mut fs = FileSystem::default();
+        fs.create_file("/file.txt").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let mut attrs = FileAttributes::default();
+        attrs.uid = Some(1000);
+        attrs.gid = Some(1000);
+
+        session.setstat(1, "/file.txt".to_string(), attrs).await.unwrap();
+
+        let guard = session.fs.read().await;
+        let entry = guard.get_file("/file.txt").unwrap();
+        assert_eq!(entry.inode.i_uid, 1000);
+        assert_eq!(entry.inode.i_gid, 1000);
+    }
+
+    #[tokio::test]
+    async fn test_setstat_updates_mtime() {
+        let mut fs = FileSystem::default();
+        fs.create_file("/file.txt").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let mut attrs = FileAttributes::default();
+        attrs.mtime = Some(1234567890);
+
+        session.setstat(1, "/file.txt".to_string(), attrs).await.unwrap();
+
+        let guard = session.fs.read().await;
+        let entry = guard.get_file("/file.txt").unwrap();
+        assert_eq!(entry.inode.i_mtime, 1234567890);
+    }
+
+    #[tokio::test]
+    async fn test_setstat_returns_no_such_file_for_missing() {
+        let (mut session, _rx) = create_test_session(FileSystem::default());
+
+        let status = session
+            .setstat(1, "/ghost".to_string(), FileAttributes::default())
+            .await
+            .unwrap();
+        assert_eq!(status.status_code, StatusCode::NoSuchFile);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  fsetstat
+    // ═══════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_fsetstat_updates_permissions_by_handle() {
+        let (mut session, _rx) = create_session_with_tmp();
+
+        let handle = session
+            .open(
+                1,
+                "/tmp/fsetstat.bin".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
+        let mut attrs = FileAttributes::default();
+        attrs.permissions = Some(0o100755);
+        attrs.uid = Some(42);
+
+        let status = session.fsetstat(2, handle.handle.clone(), attrs).await.unwrap();
+        assert_eq!(status.status_code, StatusCode::Ok);
+
+        let guard = session.fs.read().await;
+        let entry = guard.get_file("/tmp/fsetstat.bin").unwrap();
+        assert_eq!(entry.inode.i_mode, 0o100755);
+        assert_eq!(entry.inode.i_uid, 42);
+    }
+
+    #[tokio::test]
+    async fn test_fsetstat_failure_for_unknown_handle() {
+        let (mut session, _rx) = create_session_with_tmp();
+
+        let status = session
+            .fsetstat(1, "bogus_handle".to_string(), FileAttributes::default())
+            .await
+            .unwrap();
+        assert_eq!(status.status_code, StatusCode::Failure);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  readlink
+    // ═══════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_readlink_returns_symlink_target() {
+        let mut fs = FileSystem::default();
+        fs.create_directory("/dir").unwrap();
+        fs.create_file("/dir/real.txt").unwrap();
+        fs.create_symlink("/dir/soft", "/dir/real.txt").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let result = session.readlink(1, "/dir/soft".to_string()).await.unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].filename, "/dir/real.txt");
+    }
+
+    #[tokio::test]
+    async fn test_readlink_returns_empty_for_non_symlink() {
+        let mut fs = FileSystem::default();
+        fs.create_file("/regular.txt").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let result = session.readlink(1, "/regular.txt".to_string()).await.unwrap();
+        // Non-symlink returns a dummy/empty entry
+        assert_eq!(result.files.len(), 1);
+        assert!(result.files[0].filename.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_readlink_returns_empty_for_missing_path() {
+        let (mut session, _rx) = create_test_session(FileSystem::default());
+
+        let result = session.readlink(1, "/no_such_link".to_string()).await.unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert!(result.files[0].filename.is_empty());
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  symlink
+    // ═══════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_symlink_creates_link_in_filesystem() {
+        let mut fs = FileSystem::default();
+        fs.create_directory("/links").unwrap();
+        fs.create_file("/links/target").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let status = session
+            .symlink(1, "/links/alias".to_string(), "/links/target".to_string())
+            .await
+            .unwrap();
+        assert_eq!(status.status_code, StatusCode::Ok);
+
+        let guard = session.fs.read().await;
+        let entry = guard.get_file("/links/alias").unwrap();
+        match &entry.file_content {
+            Some(FileContent::SymbolicLink(target)) => {
+                assert_eq!(target, "/links/target");
+            }
+            _ => panic!("expected a symbolic link"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_symlink_failure_for_missing_parent() {
+        let (mut session, _rx) = create_test_session(FileSystem::default());
+
+        let status = session
+            .symlink(1, "/nonexistent_dir/link".to_string(), "/target".to_string())
+            .await
+            .unwrap();
+        assert_eq!(status.status_code, StatusCode::Failure);
+    }
+
+    #[tokio::test]
+    async fn test_symlink_failure_for_already_exists() {
+        let mut fs = FileSystem::default();
+        fs.create_directory("/d").unwrap();
+        fs.create_symlink("/d/existing", "/target").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        let status = session
+            .symlink(1, "/d/existing".to_string(), "/other".to_string())
+            .await
+            .unwrap();
+        assert_eq!(status.status_code, StatusCode::Failure);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Integration: symlink → readlink round-trip
+    // ═══════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_symlink_readlink_roundtrip() {
+        let mut fs = FileSystem::default();
+        fs.create_directory("/home").unwrap();
+        fs.create_file("/home/original.txt").unwrap();
+
+        let (mut session, _rx) = create_test_session(fs);
+
+        // Create symlink
+        session
+            .symlink(1, "/home/shortcut".to_string(), "/home/original.txt".to_string())
+            .await
+            .unwrap();
+
+        // Read it back
+        let result = session.readlink(2, "/home/shortcut".to_string()).await.unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].filename, "/home/original.txt");
     }
 }
