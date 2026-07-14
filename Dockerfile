@@ -9,7 +9,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY desktop/Cargo.toml desktop/
 COPY common/Cargo.toml common/
-COPY shell/Cargo.toml common/
+COPY shell/Cargo.toml shell/
 # cargo chef prepare needs the bin/lib entry-points to exist
 RUN mkdir -p src/bin desktop/src/bin common/src shell/src && \
     touch src/lib.rs src/main.rs \
