@@ -3,7 +3,6 @@ mod keys;
 mod paths;
 mod server;
 mod sftp;
-mod shell;
 
 use app::App;
 use ssh_honeypot::db::{self, initialize_database_pool, run_db_handler};

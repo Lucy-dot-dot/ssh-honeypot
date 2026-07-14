@@ -1,6 +1,6 @@
 use super::command_trait::{Command, CommandError, CommandResult, StatefulCommand};
 use super::context::CommandContext;
-use crate::shell::filesystem::fs2::FileContent;
+use crate::filesystem::fs2::FileContent;
 use async_trait::async_trait;
 
 /// PWD command - print working directory

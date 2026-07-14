@@ -1,8 +1,8 @@
 use super::command_trait::CommandError;
 use super::context::CommandContext;
 use super::registry::CommandRegistry;
-use crate::shell::filters;
-use crate::shell::parser::{self, AndOp, CommandList, Redirect};
+use crate::filters;
+use crate::parser::{self, AndOp, CommandList, Redirect};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -556,11 +556,11 @@ fn find_arith_end(chars: &[char], start: usize) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::commands::{
+    use crate::commands::{
         CatCommand, ColonCommand, DateCommand, EchoCommand, ExitCommand, ExportCommand,
         FalseCommand, LsCommand, TestCommand, TrueCommand, UnameCommand, UnsetCommand,
     };
-    use crate::shell::filesystem::fs2::FileSystem;
+    use crate::filesystem::fs2::FileSystem;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 

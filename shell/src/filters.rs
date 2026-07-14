@@ -7,8 +7,8 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::shell::commands::context::CommandContext;
-use crate::shell::filesystem::fs2::FileContent;
+use crate::commands::context::CommandContext;
+use crate::filesystem::fs2::FileContent;
 
 /// Result of running a filter: `(output, exit_success)`.
 pub type FilterOutcome = Option<(String, bool)>;

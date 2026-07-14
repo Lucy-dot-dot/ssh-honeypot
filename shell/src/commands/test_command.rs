@@ -1,6 +1,6 @@
 use super::command_trait::{Command, CommandError, CommandResult};
 use super::context::CommandContext;
-use crate::shell::filesystem::fs2::FileContent;
+use crate::filesystem::fs2::FileContent;
 use async_trait::async_trait;
 
 /// The shell `test` / `[` builtin. Returns success (Ok) when the condition is

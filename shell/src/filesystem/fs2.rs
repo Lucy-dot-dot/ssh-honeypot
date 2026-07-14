@@ -74,6 +74,7 @@ Creates a new regular file at the specified path and returns a mutable reference
 
 ## Usage Example:
 ```rust
+# use shell::filesystem::fs2::FileSystem;
 let mut fs = FileSystem::default();
 fs.create_directory("/home").unwrap();
 fs.create_file("/home/user.txt").unwrap();
@@ -95,29 +96,29 @@ use tar::Archive;
 #[allow(dead_code)]
 pub struct Inode {
     // File mode (type and permissions)
-    pub(crate) i_mode: u16,
+    pub i_mode: u16,
     // Lower 16 bits of user ID
-    pub(crate) i_uid: u16,
+    pub i_uid: u16,
     // Lower 32 bits of size in bytes
-    pub(crate) i_size_lo: u32,
+    pub i_size_lo: u32,
     // Last access time in seconds since epoch
     i_atime: u64,
     // Last inode change time
     i_ctime: u64,
     // Last data modification time
-    pub(crate) i_mtime: u32,
+    pub i_mtime: u32,
     // Deletion time
     i_dtime: u32,
     // Lower 16 bits of group ID
-    pub(crate) i_gid: u16,
+    pub i_gid: u16,
     // Hard link count
-    pub(crate) i_links_count: u16,
+    pub i_links_count: u16,
     // File flags
     i_flags: u32,
     // High 16 bits of user ID
-    pub(crate) i_uid_high: u16,
+    pub i_uid_high: u16,
     // High 16 bits of group ID
-    pub(crate) i_gid_high: u16,
+    pub i_gid_high: u16,
     // Extra modification time (nanoseconds)
     i_atime_extra: u32,
     // File creation time (seconds since epoch)

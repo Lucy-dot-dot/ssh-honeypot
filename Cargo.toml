@@ -15,11 +15,11 @@ name = "report-generator"
 path = "src/bin/report_generator.rs"
 
 [workspace]
-members = ["desktop", "common"]
-resolver = "2"
+members = ["desktop", "common", "shell"]
 
 [dependencies]
 common = { path = "common" }
+shell = { path = "shell" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "signal"] }
 russh = "0.62.2"
 log = "0.4.33"
@@ -31,8 +31,6 @@ clap = { version =  "4.6.1", features = ["derive", "env", "usage", "suggestions"
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1.2"
 directories = "6.0.0"
-flate2 = "1.1.9"
-tar = "0.4.46"
 rand = "0.10.2"
 russh-sftp = "2.3.0"
 hex = "0.4.3"
@@ -42,8 +40,6 @@ reqwest = { version = "0.13.4", features = ["brotli", "deflate", "json", "query"
 webpki-root-certs = "1.0.8"
 serde_json = "1.0.150"
 ssh-encoding = "0.3.0-rc.9"
-minijinja = "2.21.0"
-shlex = "2.0.1"
 
 [profile.release]
 lto = true

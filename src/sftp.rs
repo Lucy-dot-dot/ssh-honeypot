@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
 use ssh_honeypot::db::DbMessage;
-use crate::shell::filesystem::fs2::{FileContent, FileSystem};
+use shell::filesystem::fs2::{FileContent, FileSystem};
 
 /*
 NOTE: This SFTP implementation is backed by a virtual filesystem (fs2).
@@ -966,7 +966,7 @@ impl Handler for HoneypotSftpSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::filesystem::fs2::FileSystem;
+    use shell::filesystem::fs2::FileSystem;
 
     // ═══════════════════════════════════════════════════════════════
     //  Test helpers

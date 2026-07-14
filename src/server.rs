@@ -2,13 +2,13 @@ use ssh_honeypot::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
 use ssh_honeypot::db::DbMessage;
 use ssh_honeypot::ipapi;
 use crate::sftp::HoneypotSftpSession;
-use crate::shell::commands::{
+use shell::commands::{
     CatCommand, CdCommand, ColonCommand, CommandContext, CommandDispatcher, CurlCommand,
     DateCommand, EchoCommand, ExitCommand, ExportCommand, FalseCommand, FreeCommand, IdCommand,
     LsCommand, PsCommand, PwdCommand, SudoCommand, TestCommand, TrueCommand, UnameCommand,
     UnsetCommand, WgetCommand, WhoamiCommand,
 };
-use crate::shell::filesystem::fs2::FileSystem;
+use shell::filesystem::fs2::FileSystem;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
 use rand::{Rng, RngExt, rng};
@@ -465,7 +465,7 @@ impl Handler for SshHandler {
                     }
 
                     // If the block is still incomplete (open if/for/while/case), prompt for more
-                    if crate::shell::parser::is_incomplete_block(&self.pending_block) {
+                    if shell::parser::is_incomplete_block(&self.pending_block) {
                         self.current_cmd = String::new();
                         match self.tarpit_data(session, channel, b"\r\n> ".as_ref()).await {
                             Ok(_) => {

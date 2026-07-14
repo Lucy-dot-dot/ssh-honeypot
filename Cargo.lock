@@ -4967,6 +4967,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "shell"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "flate2",
+ "hex",
+ "log",
+ "rand 0.10.2",
+ "sha2 0.11.0",
+ "shlex",
+ "tar",
+ "tokio",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5386,11 +5402,9 @@ dependencies = [
  "common",
  "directories",
  "env_logger",
- "flate2",
  "hex",
  "infer",
  "log",
- "minijinja",
  "rand 0.10.2",
  "reqwest",
  "russh",
@@ -5398,10 +5412,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "shlex",
+ "shell",
  "sqlx",
  "ssh-encoding",
- "tar",
  "tokio",
  "toml",
  "webpki-root-certs",

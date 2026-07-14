@@ -1,6 +1,6 @@
 use super::command_trait::{Command, CommandResult};
 use super::context::CommandContext;
-use crate::shell::filesystem::fs2::FileContent;
+use crate::filesystem::fs2::FileContent;
 use async_trait::async_trait;
 
 /// Cat command implementation using the new trait system
