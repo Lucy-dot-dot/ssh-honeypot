@@ -297,6 +297,7 @@ impl Handler for HoneypotSftpSession {
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let handle = handle;
         let fs = self.fs.clone();
+        let handles = self.handles.clone();
         let db_tx = self.db_tx.clone();
         let auth_id = self.auth_id.clone();
 
@@ -308,9 +309,30 @@ impl Handler for HoneypotSftpSession {
                 offset
             );
 
-            // Record the file upload
-            let filename = format!("sftp_upload_{}", handle);
-            let filepath = format!("/tmp/{}", filename);
+            // Resolve the path from the tracked handle
+            let path = {
+                let guard = handles.read().await;
+                guard.get(&handle).map(|e| e.path.clone())
+            };
+
+            let filepath = match path {
+                Some(p) => p,
+                None => {
+                    log::warn!("write: unknown handle '{}'", handle);
+                    return Ok(Status {
+                        id,
+                        status_code: StatusCode::Failure,
+                        error_message: "Invalid handle".to_string(),
+                        language_tag: "".to_string(),
+                    });
+                }
+            };
+
+            let filename = filepath
+                .rsplit('/')
+                .next()
+                .unwrap_or(&filepath)
+                .to_string();
 
             // Calculate SHA256 hash
             let hasher = Sha256::digest(&data);
@@ -320,13 +342,19 @@ impl Handler for HoneypotSftpSession {
             let (claimed_mime, detected_mime, format_mismatch, file_entropy) =
                 HoneypotSftpSession::analyze_file(&data, &filepath);
 
-            // Store in filesystem
+            // Store / update in filesystem
             {
                 let mut fs_guard = fs.write().await;
-                if let Ok(entry) = fs_guard.create_file(&filepath) {
+
+                // If the file doesn't exist yet, create it; otherwise update in place
+                if fs_guard.get_file(&filepath).is_err() {
+                    let _ = fs_guard.create_file(&filepath);
+                }
+
+                if let Ok(entry) = fs_guard.get_file_mut(&filepath) {
                     if let Some(FileContent::RegularFile(file_data)) = &mut entry.content {
                         let file_data = Arc::make_mut(file_data);
-                        let required_size = (offset + data.len() as u64) as usize;
+                        let required_size = (offset as usize) + data.len();
                         if file_data.len() < required_size {
                             file_data.resize(required_size, 0);
                         }
@@ -334,7 +362,6 @@ impl Handler for HoneypotSftpSession {
                         let end = start + data.len();
                         file_data[start..end].copy_from_slice(&data);
 
-                        // Update file size
                         entry.inode.i_size_lo = file_data.len() as u32;
                     }
                 }
@@ -477,18 +504,29 @@ impl Handler for HoneypotSftpSession {
         path: String,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let path = path;
+        let fs = self.fs.clone();
 
         async move {
-            log::info!(
-                "SFTP remove request: {} (honeypot - not actually removing)",
-                path
-            );
-            Ok(Status {
-                id,
-                status_code: StatusCode::Ok,
-                error_message: "".to_string(),
-                language_tag: "".to_string(),
-            })
+            log::info!("SFTP remove request: {}", path);
+
+            let mut fs_guard = fs.write().await;
+            match fs_guard.remove_file(&path) {
+                Ok(_) => Ok(Status {
+                    id,
+                    status_code: StatusCode::Ok,
+                    error_message: "".to_string(),
+                    language_tag: "".to_string(),
+                }),
+                Err(e) => {
+                    log::warn!("remove: failed to remove '{}': {}", path, e);
+                    Ok(Status {
+                        id,
+                        status_code: StatusCode::NoSuchFile,
+                        error_message: e.to_string(),
+                        language_tag: "".to_string(),
+                    })
+                }
+            }
         }
     }
 
@@ -528,18 +566,29 @@ impl Handler for HoneypotSftpSession {
         path: String,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let path = path;
+        let fs = self.fs.clone();
 
         async move {
-            log::info!(
-                "SFTP rmdir request: {} (honeypot - not actually removing)",
-                path
-            );
-            Ok(Status {
-                id,
-                status_code: StatusCode::Ok,
-                error_message: "".to_string(),
-                language_tag: "".to_string(),
-            })
+            log::info!("SFTP rmdir request: {}", path);
+
+            let mut fs_guard = fs.write().await;
+            match fs_guard.remove_file(&path) {
+                Ok(_) => Ok(Status {
+                    id,
+                    status_code: StatusCode::Ok,
+                    error_message: "".to_string(),
+                    language_tag: "".to_string(),
+                }),
+                Err(e) => {
+                    log::warn!("rmdir: failed to remove '{}': {}", path, e);
+                    Ok(Status {
+                        id,
+                        status_code: StatusCode::NoSuchFile,
+                        error_message: e.to_string(),
+                        language_tag: "".to_string(),
+                    })
+                }
+            }
         }
     }
 
@@ -609,19 +658,29 @@ impl Handler for HoneypotSftpSession {
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
         let old_path = old_path;
         let new_path = new_path;
+        let fs = self.fs.clone();
 
         async move {
-            log::info!(
-                "SFTP rename request: {} -> {} (honeypot - not actually renaming)",
-                old_path,
-                new_path
-            );
-            Ok(Status {
-                id,
-                status_code: StatusCode::Ok,
-                error_message: "".to_string(),
-                language_tag: "".to_string(),
-            })
+            log::info!("SFTP rename request: {} -> {}", old_path, new_path);
+
+            let mut fs_guard = fs.write().await;
+            match fs_guard.move_file(&old_path, &new_path) {
+                Ok(_) => Ok(Status {
+                    id,
+                    status_code: StatusCode::Ok,
+                    error_message: "".to_string(),
+                    language_tag: "".to_string(),
+                }),
+                Err(e) => {
+                    log::warn!("rename: failed to move '{}' -> '{}': {}", old_path, new_path, e);
+                    Ok(Status {
+                        id,
+                        status_code: StatusCode::Failure,
+                        error_message: e.to_string(),
+                        language_tag: "".to_string(),
+                    })
+                }
+            }
         }
     }
 }
@@ -873,15 +932,25 @@ mod tests {
     async fn test_write_stores_data_in_filesystem() {
         let (mut session, _rx) = create_session_with_tmp();
 
+        let handle = session
+            .open(
+                1,
+                "/tmp/upload.bin".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
         let payload = b"payload data".to_vec();
         session
-            .write(1, "h1".to_string(), 0, payload.clone())
+            .write(2, handle.handle, 0, payload.clone())
             .await
             .unwrap();
 
         let fs_guard = session.fs.read().await;
-        let file = fs_guard.get_file("/tmp/sftp_upload_h1");
-        assert!(file.is_ok(), "write should create the upload file in the VFS");
+        let file = fs_guard.get_file("/tmp/upload.bin");
+        assert!(file.is_ok(), "write should store data in the VFS");
 
         match &file.unwrap().file_content {
             Some(FileContent::RegularFile(bytes)) => {
@@ -895,19 +964,29 @@ mod tests {
     async fn test_write_appends_at_offset() {
         let (mut session, _rx) = create_session_with_tmp();
 
+        let handle = session
+            .open(
+                1,
+                "/tmp/append.bin".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
         // First write at offset 0
         session
-            .write(1, "hoff".to_string(), 0, b"AAAA".to_vec())
+            .write(2, handle.handle.clone(), 0, b"AAAA".to_vec())
             .await
             .unwrap();
         // Second write at offset 4
         session
-            .write(2, "hoff".to_string(), 4, b"BBBB".to_vec())
+            .write(3, handle.handle.clone(), 4, b"BBBB".to_vec())
             .await
             .unwrap();
 
         let fs_guard = session.fs.read().await;
-        let file = fs_guard.get_file("/tmp/sftp_upload_hoff").unwrap();
+        let file = fs_guard.get_file("/tmp/append.bin").unwrap();
         match &file.file_content {
             Some(FileContent::RegularFile(bytes)) => {
                 assert_eq!(bytes.len(), 8);
@@ -922,9 +1001,19 @@ mod tests {
     async fn test_write_sends_db_record_file_upload() {
         let (mut session, mut db_rx) = create_session_with_tmp();
 
+        let handle = session
+            .open(
+                1,
+                "/tmp/hello_db".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
         let data = b"hello db".to_vec();
         session
-            .write(1, "h2".to_string(), 0, data.clone())
+            .write(2, handle.handle, 0, data.clone())
             .await
             .unwrap();
 
@@ -938,7 +1027,7 @@ mod tests {
                 auth_id,
                 ..
             } => {
-                assert_eq!(filename, "sftp_upload_h2");
+                assert_eq!(filename, "hello_db");
                 assert_eq!(file_size, 8);
                 assert_eq!(auth_id, "test-auth-id");
             }
@@ -950,9 +1039,19 @@ mod tests {
     async fn test_write_records_correct_sha256_hash() {
         let (mut session, mut db_rx) = create_session_with_tmp();
 
+        let handle = session
+            .open(
+                1,
+                "/tmp/hashme".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
         let data = b"hash me".to_vec();
         session
-            .write(1, "h3".to_string(), 0, data.clone())
+            .write(2, handle.handle, 0, data.clone())
             .await
             .unwrap();
 
@@ -970,9 +1069,19 @@ mod tests {
     async fn test_write_preserves_binary_data_in_message() {
         let (mut session, mut db_rx) = create_session_with_tmp();
 
+        let handle = session
+            .open(
+                1,
+                "/tmp/binary".to_string(),
+                OpenFlags::WRITE | OpenFlags::CREATE,
+                FileAttributes::default(),
+            )
+            .await
+            .unwrap();
+
         let data: Vec<u8> = (0..=255).collect();
         session
-            .write(1, "hbin".to_string(), 0, data.clone())
+            .write(2, handle.handle, 0, data.clone())
             .await
             .unwrap();
 
