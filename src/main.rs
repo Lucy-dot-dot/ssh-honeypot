@@ -119,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 kex::DH_GEX_SHA1,
             ]),
             key: Preferred::DEFAULT.key,
+            host_key_certificates: Preferred::DEFAULT.host_key_certificates,
             cipher: Preferred::DEFAULT.cipher,
             mac: Preferred::DEFAULT.mac,
             compression: Preferred::DEFAULT.compression,
