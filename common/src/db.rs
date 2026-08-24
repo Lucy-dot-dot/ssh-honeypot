@@ -271,6 +271,24 @@ pub async fn initialize_database_pool(
     Ok(pool)
 }
 
+// Close out live sessions (end_time IS NULL) left behind by a previous run,
+// e.g. after a crash or kill, so they no longer show up as currently active.
+pub async fn close_stale_live_sessions(pool: &PgPool) -> Result<u64, Error> {
+    let now = Utc::now();
+
+    let result = query(
+        "UPDATE sessions
+         SET end_time = $1,
+             duration_seconds = EXTRACT(EPOCH FROM ($1 - start_time))
+         WHERE end_time IS NULL",
+    )
+    .bind(now)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 // Record authentication attempt in database and return the generated UUID
 async fn record_auth(
     pool: &PgPool,

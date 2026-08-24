@@ -70,6 +70,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Close out any live sessions left over from a previous run
+    match db::close_stale_live_sessions(&pool).await {
+        Ok(0) => log::debug!("No stale live sessions to close on startup"),
+        Ok(n) => log::info!("Closed {} stale live session(s) on startup", n),
+        Err(e) => log::error!("Failed to close stale live sessions on startup: {}", e),
+    }
+
     // Create a channel for database communications
     let (db_tx, db_rx) = mpsc::channel(100);
 
