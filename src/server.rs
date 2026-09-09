@@ -345,21 +345,14 @@ impl Handler for SshHandler {
 
             if data[0] == 4 {
                 log::debug!("Client requested closing of connection");
-                match self
-                    .tarpit_data(
-                        session,
-                        channel,
-                        "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        log::trace!("Send closing connection text to client")
-                    }
-                    Err(err) => {
-                        log::error!("Failed to send closing connection to client: {}", err)
-                    }
-                };
+                self.send_and_log(
+                    session,
+                    channel,
+                    "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
+                    "Send closing connection text to client",
+                    "Failed to send closing connection to client",
+                )
+                .await;
                 return Err(Error::Disconnect);
             }
             if data[0] == 127 || data[0] == 8 {
@@ -368,25 +361,25 @@ impl Handler for SshHandler {
                 // Send bell ascii code (ASCII 7) when trying to backspace on an empty command
                 if self.current_cmd.is_empty() {
                     log::trace!("current cmd is empty, so why are you still backspacing?");
-                    match self.tarpit_data(session, channel, &[7u8]).await {
-                        Ok(_) => {
-                            log::trace!("Sent bell code to client")
-                        }
-                        Err(err) => {
-                            log::error!("Failed to send bell code to client: {}", err)
-                        }
-                    };
+                    self.send_and_log(
+                        session,
+                        channel,
+                        &[7u8],
+                        "Sent bell code to client",
+                        "Failed to send bell code to client",
+                    )
+                    .await;
                     return Ok(());
                 }
 
-                match self.tarpit_data(session, channel, &[8u8, 32u8, 8u8]).await {
-                    Ok(_) => {
-                        log::trace!("Send backspace code to client")
-                    }
-                    Err(err) => {
-                        log::error!("Failed to send backspace code to client: {}", err)
-                    }
-                };
+                self.send_and_log(
+                    session,
+                    channel,
+                    &[8u8, 32u8, 8u8],
+                    "Send backspace code to client",
+                    "Failed to send backspace code to client",
+                )
+                .await;
                 self.current_cmd.pop();
                 return Ok(());
             }
@@ -396,14 +389,14 @@ impl Handler for SshHandler {
                 log::trace!("Received ctrl+c, clearing current command");
                 self.current_cmd = String::new();
                 let prompt = format!("\r\n{}", self.session_data.prompt);
-                match self.tarpit_data(session, channel, prompt.as_bytes()).await {
-                    Ok(_) => {
-                        log::trace!("Send prompt to client")
-                    }
-                    Err(err) => {
-                        log::error!("Failed to send prompt to client: {}", err)
-                    }
-                }
+                self.send_and_log(
+                    session,
+                    channel,
+                    prompt.as_bytes(),
+                    "Send prompt to client",
+                    "Failed to send prompt to client",
+                )
+                .await;
                 return Ok(());
             }
 
@@ -437,21 +430,14 @@ impl Handler for SshHandler {
                             self.session_data.auth_id
                         );
                         // Send goodbye message
-                        match self
-                            .tarpit_data(
-                                session,
-                                channel,
-                                "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
-                            )
-                            .await
-                        {
-                            Ok(_) => {
-                                log::trace!("Sent closing connection to client")
-                            }
-                            Err(err) => {
-                                log::error!("Failed to send closing connection to client: {}", err)
-                            }
-                        };
+                        self.send_and_log(
+                            session,
+                            channel,
+                            "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
+                            "Sent closing connection to client",
+                            "Failed to send closing connection to client",
+                        )
+                        .await;
                         // Close the channel
                         return Err(Error::Disconnect);
                     }
@@ -467,14 +453,14 @@ impl Handler for SshHandler {
                     // If the block is still incomplete (open if/for/while/case), prompt for more
                     if shell::parser::is_incomplete_block(&self.pending_block) {
                         self.current_cmd = String::new();
-                        match self.tarpit_data(session, channel, b"\r\n> ".as_ref()).await {
-                            Ok(_) => {
-                                log::trace!("Sent secondary (continuation) prompt to client")
-                            }
-                            Err(err) => {
-                                log::error!("Failed to send secondary prompt to client: {}", err)
-                            }
-                        }
+                        self.send_and_log(
+                            session,
+                            channel,
+                            b"\r\n> ",
+                            "Sent secondary (continuation) prompt to client",
+                            "Failed to send secondary prompt to client",
+                        )
+                        .await;
                         return Ok(());
                     }
 
@@ -484,73 +470,60 @@ impl Handler for SshHandler {
                     self.pending_block = String::new();
 
                     // Send the response
-                    match self.tarpit_data(session, channel, "\r\n".as_bytes()).await {
-                        Ok(_) => {
-                            log::trace!("Sent newline for command execution to client")
-                        }
-                        Err(err) => {
-                            log::error!("Failed to send newline to client: {}", err)
-                        }
-                    };
-                    match self
-                        .tarpit_data(session, channel, response.as_bytes())
-                        .await
-                    {
-                        Ok(_) => {
-                            log::trace!("Sent command result data to client")
-                        }
-                        Err(err) => {
-                            log::error!("Failed to send command result data to client: {}", err)
-                        }
-                    };
+                    self.send_and_log(
+                        session,
+                        channel,
+                        "\r\n".as_bytes(),
+                        "Sent newline for command execution to client",
+                        "Failed to send newline to client",
+                    )
+                    .await;
+                    self.send_and_log(
+                        session,
+                        channel,
+                        response.as_bytes(),
+                        "Sent command result data to client",
+                        "Failed to send command result data to client",
+                    )
+                    .await;
 
                     if exit_requested {
                         log::debug!(
                             "Closing session {} due to exit command in pipeline",
                             self.session_data.auth_id
                         );
-                        match self
-                            .tarpit_data(
-                                session,
-                                channel,
-                                "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
-                            )
-                            .await
-                        {
-                            Ok(_) => {
-                                log::trace!("Sent closing connection to client")
-                            }
-                            Err(err) => {
-                                log::error!("Failed to send closing connection to client: {}", err)
-                            }
-                        };
+                        self.send_and_log(
+                            session,
+                            channel,
+                            "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
+                            "Sent closing connection to client",
+                            "Failed to send closing connection to client",
+                        )
+                        .await;
                         return Err(Error::Disconnect);
                     }
 
                     let prompt = format!("\r\n{} ", self.session_data.prompt);
-                    match self.tarpit_data(session, channel, prompt.as_bytes()).await {
-                        Ok(_) => {
-                            log::trace!("Sent prompt to client")
-                        }
-                        Err(err) => {
-                            log::error!(
-                                "Failed to send prompt to client after command execution: {}",
-                                err
-                            )
-                        }
-                    };
+                    self.send_and_log(
+                        session,
+                        channel,
+                        prompt.as_bytes(),
+                        "Sent prompt to client",
+                        "Failed to send prompt to client after command execution",
+                    )
+                    .await;
                 } else {
                     log::trace!("Appending to command: {}", cmd);
                     if !cmd.is_empty() {
                         self.current_cmd += &*cmd;
-                        match self.tarpit_data(session, channel, cmd.as_bytes()).await {
-                            Ok(_) => {
-                                log::trace!("Sent character back to client")
-                            }
-                            Err(err) => {
-                                log::error!("Failed to send character back to client: {}", err)
-                            }
-                        };
+                        self.send_and_log(
+                            session,
+                            channel,
+                            cmd.as_bytes(),
+                            "Sent character back to client",
+                            "Failed to send character back to client",
+                        )
+                        .await;
                     }
                 }
             } else {
@@ -559,21 +532,14 @@ impl Handler for SshHandler {
                 // Check for CTRL+D (ASCII 4) in raw data
                 if data.contains(&4) {
                     // Send goodbye message and close connection
-                    match self
-                        .tarpit_data(
-                            session,
-                            channel,
-                            "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
-                        )
-                        .await
-                    {
-                        Ok(_) => {
-                            log::trace!("Sent logout message to client")
-                        }
-                        Err(err) => {
-                            log::error!("Failed to send logout message to client: {}", err)
-                        }
-                    };
+                    self.send_and_log(
+                        session,
+                        channel,
+                        "\r\nlogout\r\nConnection to host closed.\r\n".as_bytes(),
+                        "Sent logout message to client",
+                        "Failed to send logout message to client",
+                    )
+                    .await;
                     return Err(Error::Disconnect);
                 }
             }
@@ -597,25 +563,25 @@ impl Handler for SshHandler {
             // Send a welcome message
             let welcome = Self::generate_welcome_message(&self.welcome_message);
 
-            match self.tarpit_data(session, channel, welcome.as_bytes()).await {
-                Ok(_) => {
-                    log::trace!("Send welcome message to client")
-                }
-                Err(err) => {
-                    log::error!("Failed to send welcome message to client: {}", err)
-                }
-            };
+            self.send_and_log(
+                session,
+                channel,
+                welcome.as_bytes(),
+                "Send welcome message to client",
+                "Failed to send welcome message to client",
+            )
+            .await;
 
             // Send prompt
             let prompt = self.session_data.prompt.clone();
-            match self.tarpit_data(session, channel, prompt.as_bytes()).await {
-                Ok(_) => {
-                    log::trace!("Sent prompt to client")
-                }
-                Err(err) => {
-                    log::error!("Failed to send prompt to client: {}", err)
-                }
-            };
+            self.send_and_log(
+                session,
+                channel,
+                prompt.as_bytes(),
+                "Sent prompt to client",
+                "Failed to send prompt to client",
+            )
+            .await;
 
             Ok(())
         }
@@ -810,6 +776,21 @@ impl SshHandler {
             session.data(channel, data.to_vec())?;
         }
         Ok(())
+    }
+
+    async fn send_and_log(
+        &mut self,
+        session: &mut Session,
+        channel: ChannelId,
+        data: &[u8],
+        success_msg: &str,
+        error_msg: &str,
+    ) {
+        if let Err(err) = self.tarpit_data(session, channel, data).await {
+            log::error!("{}: {}", error_msg, err);
+        } else {
+            log::trace!("{}", success_msg);
+        }
     }
 
     async fn ensure_user_home_exists(&mut self) {
