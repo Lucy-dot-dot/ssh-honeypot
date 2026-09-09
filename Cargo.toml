@@ -39,7 +39,7 @@ reqwest = "0.13.4"
 common = { workspace = true }
 shell = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
-russh = "0.63.1"
+russh = "0.63.3"
 log = { workspace = true }
 env_logger = "0.11.11"
 async-trait = { workspace = true }
