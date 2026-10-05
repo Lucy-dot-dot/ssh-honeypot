@@ -1,7 +1,10 @@
-use ssh_honeypot::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
-use ssh_honeypot::db::DbMessage;
-use ssh_honeypot::ipapi;
 use crate::sftp::HoneypotSftpSession;
+use async_trait::async_trait;
+use chrono::{DateTime, Local, Utc};
+use rand::{Rng, RngExt, rng};
+use russh::keys::{HashAlg, PublicKey};
+use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session};
+use russh::{Channel, ChannelId, ChannelMsg, Error, server};
 use shell::commands::{
     CatCommand, CdCommand, ColonCommand, CommandContext, CommandDispatcher, CurlCommand,
     DateCommand, EchoCommand, ExitCommand, ExportCommand, FalseCommand, FreeCommand, IdCommand,
@@ -9,13 +12,10 @@ use shell::commands::{
     UnsetCommand, WgetCommand, WhoamiCommand,
 };
 use shell::filesystem::fs2::FileSystem;
-use async_trait::async_trait;
-use chrono::{DateTime, Local, Utc};
-use rand::{Rng, RngExt, rng};
-use russh::keys::{HashAlg, PublicKey};
-use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session};
-use russh::{Channel, ChannelId, ChannelMsg, Error, server};
 use ssh_encoding::Error as SshEncodingError;
+use ssh_honeypot::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
+use ssh_honeypot::db::DbMessage;
+use ssh_honeypot::ipapi;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;

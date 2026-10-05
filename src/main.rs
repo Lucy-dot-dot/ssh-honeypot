@@ -10,11 +10,11 @@ use ssh_honeypot::ipapi;
 use std::borrow::Cow;
 use std::fs::OpenOptions;
 
-use ssh_honeypot::abuseipdb::Client as AbuseIpClient;
 use crate::server::SshServerHandler;
 use russh::server::Server as _;
 use russh::*;
 use shell::filesystem::fs2::FileSystem;
+use ssh_honeypot::abuseipdb::Client as AbuseIpClient;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;

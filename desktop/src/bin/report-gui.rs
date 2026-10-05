@@ -1,7 +1,7 @@
-use eframe::egui;
-use sqlx::PgPool;
 use common::db::initialize_database_pool;
 use common::report::{ReportFormat, ReportGenerator};
+use eframe::egui;
+use sqlx::PgPool;
 use std::sync::mpsc;
 
 const DEFAULT_DB_URL: &str = "postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot";

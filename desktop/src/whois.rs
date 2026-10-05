@@ -349,14 +349,8 @@ mod tests {
         );
         assert_eq!(info.abuse_email.as_deref(), Some("abuse@example.net"));
         assert_eq!(info.abuse_name.as_deref(), Some("Abuse Desk"));
-        assert_eq!(
-            info.registration.as_deref(),
-            Some("2000-01-01T00:00:00Z")
-        );
-        assert_eq!(
-            info.last_changed.as_deref(),
-            Some("2020-02-02T00:00:00Z")
-        );
+        assert_eq!(info.registration.as_deref(), Some("2000-01-01T00:00:00Z"));
+        assert_eq!(info.last_changed.as_deref(), Some("2020-02-02T00:00:00Z"));
         assert_eq!(info.status.as_deref(), Some("active"));
         assert!(info.description.as_deref().unwrap().contains("second line"));
     }
@@ -371,10 +365,9 @@ mod tests {
 
     #[test]
     fn handles_empty_arrays() {
-        let value: Value = serde_json::from_str(
-            r#"{"entities":[],"events":[],"status":[],"remarks":[]}"#,
-        )
-        .unwrap();
+        let value: Value =
+            serde_json::from_str(r#"{"entities":[],"events":[],"status":[],"remarks":[]}"#)
+                .unwrap();
         let info = parse_rdap(&value);
         assert!(info.cidr.is_none());
         assert!(info.range.is_none());
