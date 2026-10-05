@@ -5,20 +5,23 @@
 //! IPs / passwords / usernames. Double-clicking an IP opens an IP report,
 //! double-clicking a password opens a password report, and double-clicking
 //! a session opens a detail window with the associated commands and files.
+//! The IP report window offers an "Abuse e-mail" action that opens a
+//! ready-to-copy abuse report e-mail (To/Subject/body) for the attacker's
+//! network abuse desk.
 //!
 //! Reports and details are rendered as floating `egui::Window` panels inside
 //! the same process so the async state is shared safely.
 
 use chrono::{DateTime, Utc};
-use eframe::egui;
-use egui::{Key, KeyboardShortcut, Modifiers};
-use sqlx::PgPool;
-use sqlx::postgres::PgListener;
 use common::dashboard::{Dashboard, DashboardSnapshot, ReportedIp, SessionDetail, TopData};
 use common::dashboard_config::DashboardConfig;
 use common::db::initialize_database_pool;
 use common::report::{ReportFormat, ReportGenerator};
 use desktop::whois::{WhoisClient, WhoisInfo};
+use eframe::egui;
+use egui::{Key, KeyboardShortcut, Modifiers};
+use sqlx::PgPool;
+use sqlx::postgres::PgListener;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -83,6 +86,19 @@ enum AppEvent {
     /// A reported-IP write (add / remove / edit notes) failed in the
     /// background. Surfaced as a transient error in the manager window.
     ReportedError(String),
+    /// The ready-to-copy abuse e-mail for an IP finished generating. `to`
+    /// is the RDAP abuse contact (may be `None` if the lookup found none).
+    AbuseEmailReady {
+        ip: String,
+        to: Option<String>,
+        subject: String,
+        body: String,
+    },
+    /// Abuse e-mail generation failed in the background.
+    AbuseEmailFailed {
+        ip: String,
+        error: String,
+    },
     /// A Postgres LISTEN/NOTIFY arrived on one of NOTIFY_CHANNELS. The payload
     /// names the channel so the UI can show which feed was touched.
     Notify(&'static str),
@@ -125,6 +141,10 @@ enum Action {
     },
     /// Re-fetch the contents of a single floating window (id).
     RefreshWindow(u64),
+    /// Open (or focus) the ready-to-copy abuse e-mail composer for an IP.
+    OpenAbuseEmail {
+        ip: String,
+    },
 }
 
 /// A floating sub-window.
@@ -171,6 +191,21 @@ enum OpenWindow {
         notes_edit: HashMap<String, String>,
         open: bool,
     },
+    /// Ready-to-copy abuse report e-mail for one IP: editable To / Subject /
+    /// body, plus copy-to-clipboard buttons. One per IP, reused when open.
+    AbuseEmail {
+        id: u64,
+        ip: String,
+        to: String,
+        subject: String,
+        body: String,
+        loading: bool,
+        error: Option<String>,
+        /// When the user last hit a copy button, for the transient "Copied!"
+        /// confirmation.
+        copied_at: Option<Instant>,
+        open: bool,
+    },
 }
 
 impl OpenWindow {
@@ -179,7 +214,8 @@ impl OpenWindow {
             OpenWindow::Report { id, .. }
             | OpenWindow::Session { id, .. }
             | OpenWindow::ReportedDetails { id, .. }
-            | OpenWindow::ReportedManager { id, .. } => *id,
+            | OpenWindow::ReportedManager { id, .. }
+            | OpenWindow::AbuseEmail { id, .. } => *id,
         }
     }
     fn is_open(&self) -> bool {
@@ -187,7 +223,8 @@ impl OpenWindow {
             OpenWindow::Report { open, .. }
             | OpenWindow::Session { open, .. }
             | OpenWindow::ReportedDetails { open, .. }
-            | OpenWindow::ReportedManager { open, .. } => *open,
+            | OpenWindow::ReportedManager { open, .. }
+            | OpenWindow::AbuseEmail { open, .. } => *open,
         }
     }
     fn set_open(&mut self, value: bool) {
@@ -195,7 +232,8 @@ impl OpenWindow {
             OpenWindow::Report { open, .. }
             | OpenWindow::Session { open, .. }
             | OpenWindow::ReportedDetails { open, .. }
-            | OpenWindow::ReportedManager { open, .. } => *open = value,
+            | OpenWindow::ReportedManager { open, .. }
+            | OpenWindow::AbuseEmail { open, .. } => *open = value,
         }
     }
 }
@@ -482,6 +520,109 @@ impl DashboardApp {
         });
     }
 
+    /// Open (or focus) the ready-to-copy abuse e-mail composer for `ip` and
+    /// kick off body generation plus an RDAP abuse-contact lookup.
+    fn open_abuse_email(&mut self, ctx: &egui::Context, ip: String) {
+        // Reuse an existing composer window for this IP instead of stacking
+        // duplicates; reopening it also regenerates the body.
+        let existing = self
+            .open_windows
+            .iter_mut()
+            .position(|w| matches!(w, OpenWindow::AbuseEmail { ip: i, .. } if i == &ip));
+        let idx = match existing {
+            Some(idx) => {
+                if let OpenWindow::AbuseEmail { open, subject, .. } = &mut self.open_windows[idx] {
+                    *open = true;
+                    if subject.is_empty() {
+                        *subject = format!("Abuse report: unauthorized SSH activity from {ip}");
+                    }
+                }
+                idx
+            }
+            None => {
+                let id = self.next_window_id;
+                self.next_window_id += 1;
+                self.open_windows.push(OpenWindow::AbuseEmail {
+                    id,
+                    ip: ip.clone(),
+                    to: String::new(),
+                    subject: format!("Abuse report: unauthorized SSH activity from {ip}"),
+                    body: String::new(),
+                    loading: true,
+                    error: None,
+                    copied_at: None,
+                    open: true,
+                });
+                self.focused_window_id = Some(id);
+                self.open_windows.len() - 1
+            }
+        };
+        if let OpenWindow::AbuseEmail {
+            loading,
+            error,
+            body,
+            ..
+        } = &mut self.open_windows[idx]
+        {
+            *loading = true;
+            *error = None;
+            body.clear();
+        }
+        if self.pool.is_none() {
+            if let OpenWindow::AbuseEmail { loading, error, .. } = &mut self.open_windows[idx] {
+                *loading = false;
+                *error = Some("Not connected to the database.".to_string());
+            }
+            return;
+        }
+        self.spawn_abuse_email(ctx, ip);
+    }
+
+    /// Kick off the background abuse e-mail generation for an IP: RDAP abuse
+    /// contact (best effort — the user can fill the To field in by hand) plus
+    /// the report body from the recorded auth attempts.
+    fn spawn_abuse_email(&self, ctx: &egui::Context, ip: String) {
+        let Some(pool) = self.pool.clone() else {
+            return;
+        };
+        let whois_client = self.whois_client.clone();
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        self.runtime.spawn(async move {
+            let generator = ReportGenerator::new(pool);
+            let to = whois_client
+                .lookup(&ip)
+                .await
+                .ok()
+                .and_then(|info| info.abuse_email);
+            let recipient = to
+                .as_deref()
+                .and_then(|e| e.split('@').next())
+                .map(str::to_string);
+            match generator
+                .generate_abuse_email(&ip, recipient.as_deref())
+                .await
+            {
+                Ok(body) => {
+                    let subject = format!("Abuse report: unauthorized SSH activity from {ip}");
+                    let _ = tx.send(AppEvent::AbuseEmailReady {
+                        ip,
+                        to,
+                        subject,
+                        body,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::AbuseEmailFailed {
+                        ip,
+                        error: e.to_string(),
+                    });
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     fn open_session(
         &mut self,
         ctx: &egui::Context,
@@ -539,7 +680,9 @@ impl DashboardApp {
         // ReportedDetails / ReportedManager read their data live from the
         // snapshot every frame, so a manual refresh is a no-op for them.
         let already_loading = match &self.open_windows[idx] {
-            OpenWindow::Report { loading, .. } | OpenWindow::Session { loading, .. } => *loading,
+            OpenWindow::Report { loading, .. }
+            | OpenWindow::Session { loading, .. }
+            | OpenWindow::AbuseEmail { loading, .. } => *loading,
             OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => return,
         };
         if already_loading {
@@ -549,11 +692,13 @@ impl DashboardApp {
         enum Job {
             Report(ReportKind, String),
             Session(String),
+            AbuseEmail(String),
         }
 
         let job = match &self.open_windows[idx] {
             OpenWindow::Report { kind, query, .. } => Job::Report(*kind, query.clone()),
             OpenWindow::Session { auth_id, .. } => Job::Session(auth_id.clone()),
+            OpenWindow::AbuseEmail { ip, .. } => Job::AbuseEmail(ip.clone()),
             OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => return,
         };
 
@@ -573,6 +718,16 @@ impl DashboardApp {
                 *loading = true;
                 *error = None;
             }
+            OpenWindow::AbuseEmail {
+                loading,
+                error,
+                body,
+                ..
+            } => {
+                *loading = true;
+                *error = None;
+                body.clear();
+            }
             OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => return,
         }
 
@@ -584,6 +739,7 @@ impl DashboardApp {
                 }
             }
             Job::Session(auth_id) => self.spawn_session(ctx, auth_id),
+            Job::AbuseEmail(ip) => self.spawn_abuse_email(ctx, ip),
         }
     }
 
@@ -878,6 +1034,60 @@ impl DashboardApp {
                 }
                 AppEvent::ReportedError(e) => {
                     self.reported_error = Some(e);
+                }
+                AppEvent::AbuseEmailReady {
+                    ip,
+                    to,
+                    subject,
+                    body,
+                } => {
+                    for w in self.open_windows.iter_mut() {
+                        if let OpenWindow::AbuseEmail {
+                            ip: i,
+                            to: t,
+                            subject: s,
+                            body: b,
+                            loading,
+                            error,
+                            copied_at,
+                            ..
+                        } = w
+                        {
+                            if *i == ip {
+                                // Fill the To field only if the user hasn't
+                                // already typed an address (RDAP may have no
+                                // abuse contact at all).
+                                if t.trim().is_empty() {
+                                    if let Some(addr) = to {
+                                        *t = addr;
+                                    }
+                                }
+                                *s = subject;
+                                *b = body;
+                                *loading = false;
+                                *error = None;
+                                *copied_at = None;
+                                break;
+                            }
+                        }
+                    }
+                }
+                AppEvent::AbuseEmailFailed { ip, error } => {
+                    for w in self.open_windows.iter_mut() {
+                        if let OpenWindow::AbuseEmail {
+                            ip: i,
+                            loading,
+                            error: e,
+                            ..
+                        } = w
+                        {
+                            if *i == ip {
+                                *loading = false;
+                                *e = Some(error);
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1197,7 +1407,11 @@ impl eframe::App for DashboardApp {
                         .resizable(true)
                         // IP reports need room for the WHOIS panel beside the
                         // report text; password reports stay narrow.
-                        .default_width(if *kind == ReportKind::Ip { 900.0 } else { 560.0 })
+                        .default_width(if *kind == ReportKind::Ip {
+                            900.0
+                        } else {
+                            560.0
+                        })
                         .default_height(440.0)
                         .show(&ctx, |ui| {
                             ui.horizontal(|ui| {
@@ -1217,6 +1431,18 @@ impl eframe::App for DashboardApp {
                                     }
                                     if let Some(org) = org {
                                         ui.label(format!("Org: {org}"));
+                                    }
+                                }
+                                if *kind == ReportKind::Ip {
+                                    ui.separator();
+                                    if ui
+                                        .button("Abuse e-mail\u{2026}")
+                                        .on_hover_text(
+                                            "Open a ready-to-copy abuse report e-mail for this IP",
+                                        )
+                                        .clicked()
+                                    {
+                                        actions.push(Action::OpenAbuseEmail { ip: query.clone() });
                                     }
                                 }
                             });
@@ -1299,6 +1525,113 @@ impl eframe::App for DashboardApp {
                                         );
                                     });
                             }
+                        })
+                }
+                OpenWindow::AbuseEmail {
+                    ip,
+                    to,
+                    subject,
+                    body,
+                    loading,
+                    error,
+                    copied_at,
+                    ..
+                } => {
+                    egui::Window::new(format!("Abuse e-mail \u{00b7} {ip}"))
+                        .id(egui::Id::new(id))
+                        .open(&mut open)
+                        .resizable(true)
+                        .default_width(680.0)
+                        .default_height(620.0)
+                        .show(&ctx, |ui| {
+                            if *loading {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label("Generating abuse e-mail…");
+                                });
+                                return;
+                            }
+                            if let Some(e) = error {
+                                ui.colored_label(RED, format!("Error: {e}"));
+                                ui.add_space(4.0);
+                            }
+                            // To / Subject header fields; both editable so the
+                            // user can redirect or reword before sending.
+                            egui::Grid::new(("abuse_email_meta", id))
+                                .min_col_width(60.0)
+                                .show(ui, |ui| {
+                                    ui.strong("To");
+                                    ui.add(
+                                        egui::TextEdit::singleline(to)
+                                            .hint_text("abuse@isp.example — not found via RDAP, fill in manually")
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                    ui.end_row();
+                                    ui.strong("Subject");
+                                    ui.add(
+                                        egui::TextEdit::singleline(subject)
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                    ui.end_row();
+                                });
+                            ui.add_space(6.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt(egui::Id::new(("abuse_email_body", id)))
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(body)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(f32::INFINITY)
+                                            .desired_rows(20),
+                                    );
+                                });
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button("Copy e-mail")
+                                    .on_hover_text(
+                                        "Copy To, Subject and body to the clipboard",
+                                    )
+                                    .clicked()
+                                {
+                                    let full = format!(
+                                        "To: {}\nSubject: {}\n\n{}",
+                                        to.trim(),
+                                        subject.trim(),
+                                        body
+                                    );
+                                    ctx.copy_text(full);
+                                    *copied_at = Some(Instant::now());
+                                }
+                                if ui
+                                    .button("Copy body only")
+                                    .on_hover_text("Copy just the e-mail body to the clipboard")
+                                    .clicked()
+                                {
+                                    ctx.copy_text(body.clone());
+                                    *copied_at = Some(Instant::now());
+                                }
+                                if let Some(when) = copied_at {
+                                    if when.elapsed() < Duration::from_secs(2) {
+                                        ui.colored_label(GREEN, "Copied!");
+                                        // Keep repainting until the hint
+                                        // expires so it disappears on time.
+                                        ctx.request_repaint_after(
+                                            Duration::from_millis(500),
+                                        );
+                                    }
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.colored_label(
+                                            GRAY,
+                                            "Paste into your mail client and add your signature",
+                                        );
+                                    },
+                                );
+                            });
                         })
                 }
                 OpenWindow::Session {
@@ -1647,6 +1980,7 @@ impl eframe::App for DashboardApp {
                 Action::UpdateReportedNotes { ip, notes } => {
                     self.spawn_update_reported_notes(&ctx, ip, notes)
                 }
+                Action::OpenAbuseEmail { ip } => self.open_abuse_email(&ctx, ip),
             }
         }
 

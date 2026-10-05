@@ -163,6 +163,28 @@ struct PasswordReportContext {
     all_ips: Vec<CountRow>,
 }
 
+/// Template context for the abuse-report e-mail body. Every free-form field is
+/// pre-formatted as a display string in Rust so the template stays free of
+/// conditional fallback logic.
+#[derive(Serialize)]
+struct AbuseEmailContext {
+    ip: String,
+    recipient: String,
+    isp: String,
+    org: String,
+    asn: String,
+    location: String,
+    abuse_score: String,
+    is_tor: bool,
+    first_seen: String,
+    last_seen: String,
+    total_attempts: usize,
+    unique_usernames: usize,
+    unique_passwords: usize,
+    top_usernames: Vec<CountRow>,
+    top_passwords: Vec<CountRow>,
+}
+
 /// Lazily-built, shared minijinja environment holding the report templates.
 ///
 /// Templates are embedded with `include_str!` so the environment is `'static`.
@@ -200,6 +222,11 @@ fn report_env() -> &'static Environment<'static> {
             include_str!("../templates/password_report.md"),
         )
         .expect("password_report.md template is valid");
+        env.add_template(
+            "abuse_email.txt",
+            include_str!("../templates/abuse_email.txt"),
+        )
+        .expect("abuse_email.txt template is valid");
         env
     })
 }
@@ -267,6 +294,84 @@ impl ReportGenerator {
                 self.generate_markdown_report(ip, &records, &conn_track, commands_total, &commands)
             }
         }
+    }
+
+    /// Generate a ready-to-copy abuse report e-mail body for an IP address.
+    ///
+    /// The body is filled from the recorded authentication attempts for `ip`
+    /// (aggregates, top usernames/passwords, threat intel). `recipient` is the
+    /// abuse desk's name from a WHOIS/RDAP lookup, if known.
+    pub async fn generate_abuse_email(
+        &self,
+        ip: &str,
+        recipient: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let records = self.get_auth_data_for_ip(ip).await?;
+        if records.is_empty() {
+            return Ok(format!("No data found for IP address: {ip}"));
+        }
+
+        let first = &records[0];
+        let isp = first.isp.clone().unwrap_or_else(|| "unknown".to_string());
+        let org = first.org.clone().unwrap_or_else(|| "unknown".to_string());
+        let asn = first
+            .as_info
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let location = match (first.country.as_deref(), first.city.as_deref()) {
+            (Some(country), Some(city)) => format!("{country}, {city}"),
+            (Some(country), None) => country.to_string(),
+            (None, Some(city)) => city.to_string(),
+            (None, None) => "unknown".to_string(),
+        };
+        let abuse_score = match (first.abuse_confidence_score, first.total_reports) {
+            (Some(score), Some(reports)) => {
+                format!("{score}% abuse confidence ({reports} prior reports)")
+            }
+            (Some(score), None) => format!("{score}% abuse confidence"),
+            (None, _) => "no AbuseIPDB data available".to_string(),
+        };
+
+        // records are ordered DESC: first() is newest, last() is oldest.
+        let first_seen = records
+            .last()
+            .map(|r| r.timestamp.to_rfc3339())
+            .unwrap_or_else(|| "unknown".to_string());
+        let last_seen = records
+            .first()
+            .map(|r| r.timestamp.to_rfc3339())
+            .unwrap_or_else(|| "unknown".to_string());
+        let unique_usernames = records
+            .iter()
+            .map(|r| &r.username)
+            .collect::<HashSet<_>>()
+            .len();
+        let unique_passwords = records
+            .iter()
+            .filter_map(|r| r.password.as_ref())
+            .collect::<HashSet<_>>()
+            .len();
+
+        let context = AbuseEmailContext {
+            ip: ip.to_string(),
+            recipient: recipient.unwrap_or("Sir or Madam").to_string(),
+            isp,
+            org,
+            asn,
+            location,
+            abuse_score,
+            is_tor: first.is_tor.unwrap_or(false),
+            first_seen,
+            last_seen,
+            total_attempts: records.len(),
+            unique_usernames,
+            unique_passwords,
+            top_usernames: count_top(records.iter().map(|r| r.username.clone()), 5),
+            top_passwords: count_top(records.iter().filter_map(|r| r.password.clone()), 5),
+        };
+
+        let template = report_env().get_template("abuse_email.txt")?;
+        Ok(template.render(context)?)
     }
 
     async fn get_conn_track_for_ip(&self, ip: &str) -> Result<Vec<ConnTrackRecord>, sqlx::Error> {
@@ -1022,6 +1127,52 @@ mod tests {
                 .unwrap_or_else(|e| panic!("rendering {name} failed: {e}"));
             assert!(!out.is_empty(), "{name} produced empty output");
         }
+    }
+
+    fn sample_abuse_email_context() -> AbuseEmailContext {
+        AbuseEmailContext {
+            ip: "203.0.113.5".to_string(),
+            recipient: "Abuse Desk".to_string(),
+            isp: "Example ISP".to_string(),
+            org: "Example Org".to_string(),
+            asn: "AS64500 Example AS".to_string(),
+            location: "Exampleland, City".to_string(),
+            abuse_score: "80% abuse confidence (42 prior reports)".to_string(),
+            is_tor: true,
+            first_seen: "2024-01-01T00:00:00+00:00".to_string(),
+            last_seen: "2024-01-02T00:00:00+00:00".to_string(),
+            total_attempts: 2,
+            unique_usernames: 2,
+            unique_passwords: 1,
+            top_usernames: vec![CountRow {
+                rank: 1,
+                value: "root".to_string(),
+                count: 1,
+            }],
+            top_passwords: vec![CountRow {
+                rank: 1,
+                value: "hunter2".to_string(),
+                count: 1,
+            }],
+        }
+    }
+
+    #[test]
+    fn templates_parse_and_render_abuse_email() {
+        let env = report_env();
+        let tmpl = env
+            .get_template("abuse_email.txt")
+            .expect("template exists");
+        let out = tmpl
+            .render(sample_abuse_email_context())
+            .unwrap_or_else(|e| panic!("rendering abuse_email.txt failed: {e}"));
+        assert!(!out.is_empty(), "abuse_email.txt produced empty output");
+        // Key content makes it into the rendered body.
+        assert!(out.contains("203.0.113.5"));
+        assert!(out.contains("Dear Abuse Desk"));
+        assert!(out.contains("root (1 attempts)"));
+        // Tor note is conditional and shown for flagged sources.
+        assert!(out.contains("Tor exit node"));
     }
 
     #[test]

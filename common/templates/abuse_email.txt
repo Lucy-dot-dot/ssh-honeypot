@@ -1,0 +1,47 @@
+Dear {{ recipient }},
+
+I operate an SSH honeypot: a research server that records unauthorized
+login attempts. I would like to report repeated SSH brute-force activity
+originating from an address allocated to your network.
+
+== Source details ==
+
+IP address:   {{ ip }}
+ISP:          {{ isp }}
+Organization: {{ org }}
+ASN:          {{ asn }}
+Location:     {{ location }}
+AbuseIPDB:    {{ abuse_score }}
+
+== Activity summary ==
+
+First seen:      {{ first_seen }}
+Last seen:       {{ last_seen }}
+Login attempts:  {{ total_attempts }}
+Usernames tried: {{ unique_usernames }} distinct
+Passwords tried: {{ unique_passwords }} distinct
+{% if is_tor %}
+The source has also been flagged as a Tor exit node.
+{% endif %}
+{% if top_usernames %}
+== Most attempted usernames ==
+
+{% for u in top_usernames %}{{ u.rank }}. {{ u.value }} ({{ u.count }} attempts)
+{% endfor %}
+{% endif %}{% if top_passwords %}
+== Most attempted passwords ==
+
+{% for p in top_passwords %}{{ p.rank }}. {{ p.value }} ({{ p.count }} attempts)
+{% endfor %}
+{% endif %}
+These connections were neither authorized nor solicited. Full timestamps
+and raw session logs for every attempt are available on request.
+
+If this traffic comes from a compromised host in your address space, I
+would appreciate it if you could investigate and take the appropriate
+action. Please let me know if you need additional data such as exact
+timestamps, extended logs, or packet captures.
+
+Best regards,
+[Your name]
+[Your contact information]
