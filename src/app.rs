@@ -1,5 +1,6 @@
 use crate::paths::PathManager;
 use clap::{ArgAction, Parser};
+use mysql_honeypot::{MysqlConfig, MysqlSettings};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
@@ -34,6 +35,7 @@ pub struct Config {
     pub server_id: Option<String>,
     pub welcome_message: Option<String>,
     pub hostname: Option<String>,
+    pub mysql: Option<MysqlConfig>,
 }
 
 impl Default for Config {
@@ -58,6 +60,7 @@ impl Default for Config {
             server_id: None,
             welcome_message: None,
             hostname: None,
+            mysql: None,
         }
     }
 }
@@ -154,6 +157,10 @@ pub struct CliArgs {
     /// Hostname displayed in shell prompt and commands (default: "server01")
     #[arg(long = "hostname", env = "HOSTNAME")]
     pub hostname: Option<String>,
+
+    /// Enable the MySQL honeypot module (listens on the [mysql] interfaces, default port 3306)
+    #[arg(long = "enable-mysql", env = "ENABLE_MYSQL", action = ArgAction::SetTrue)]
+    pub enable_mysql: bool,
 }
 
 #[derive(Debug)]
@@ -178,6 +185,7 @@ pub struct App {
     pub server_id: String,
     pub welcome_message: String,
     pub hostname: String,
+    pub mysql: MysqlSettings,
 }
 
 impl App {
@@ -333,6 +341,13 @@ impl App {
                 .hostname
                 .or(config.hostname)
                 .unwrap_or_else(|| "server01".to_string()),
+
+            mysql: {
+                let mysql_config = config.mysql.unwrap_or_default();
+                let mysql_enabled =
+                    Self::merge_clap_boolean_with_config(cli.enable_mysql, mysql_config.enabled);
+                mysql_config.resolve(mysql_enabled)
+            },
         }
     }
 

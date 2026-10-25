@@ -96,6 +96,7 @@ impl Handler for SshHandler {
             match self
                 .db_tx
                 .send(DbMessage::RecordAuth {
+                    module: ssh_honeypot::db::Module::Ssh,
                     timestamp: Utc::now(),
                     ip: peer_str,
                     username: user.to_string(),
@@ -178,6 +179,7 @@ impl Handler for SshHandler {
             match self
                 .db_tx
                 .send(DbMessage::RecordAuth {
+                    module: ssh_honeypot::db::Module::Ssh,
                     timestamp: Utc::now(),
                     ip: peer_str,
                     username: user.to_string(),

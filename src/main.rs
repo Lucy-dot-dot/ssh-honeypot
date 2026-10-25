@@ -50,6 +50,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Disable CLI interface: {}", app.disable_cli_interface);
     log::info!("Disable exec requests: {}", app.disable_exec);
     log::info!(
+        "MySQL module: {}",
+        if app.mysql.enabled {
+            format!(
+                "enabled on {:?} (reject_all_auth: {}, server_version: {})",
+                app.mysql.interfaces, app.mysql.reject_all_auth, app.mysql.server_version
+            )
+        } else {
+            "disabled".to_string()
+        }
+    );
+    log::info!(
         "Authentication BANNER: {}",
         app.authentication_banner.clone().unwrap_or_default()
     );
@@ -316,6 +327,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
         }))
+    }
+
+    // Start the MySQL module if enabled
+    if app.mysql.enabled {
+        for interface in app.mysql.interfaces.clone() {
+            let server = mysql_honeypot::server::MysqlServer::new(
+                db_tx.clone(),
+                app.mysql.clone(),
+                abuse_ip_client.clone(),
+                ip_api_client.clone(),
+            );
+            tasks.push(tokio::spawn(async move {
+                match TcpListener::bind(interface).await {
+                    Ok(listener) => {
+                        log::info!("Starting MySQL honeypot on {}", interface);
+                        server.run_on_listener(listener).await;
+                    }
+                    Err(err) => {
+                        log::error!("Failed to bind MySQL honeypot on {}: {:?}", interface, err);
+                    }
+                }
+            }));
+        }
     }
 
     // Ctrl+C handler for graceful shutdown

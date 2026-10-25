@@ -87,6 +87,42 @@ reject_all_auth = false
 disable_ipapi = false
 
 ##############################################################################
+# MySQL module
+##############################################################################
+[mysql]
+
+# Enable the MySQL honeypot module (can also be enabled with --enable-mysql)
+# Default: false
+enabled = false
+
+# Network interfaces for the MySQL module to listen on
+# Default: ["0.0.0.0:3306", "[::]:3306"]
+interfaces = [
+    "0.0.0.0:3306",        # IPv4 all interfaces
+    "[::]:3306",           # IPv6 all interfaces
+]
+
+# Reject all MySQL authentication attempts instead of accepting them
+# Default: false (honeypot mode - accepts all auth but still logs)
+reject_all_auth = false
+
+# MySQL server version string reported in the handshake packet
+# Default: "8.0.36-0ubuntu0.22.04.1"
+server_version = "8.0.36-0ubuntu0.22.04.1"
+
+# Support TLS connections (CLIENT_SSL is advertised so clients with
+# ssl-mode PREFERRED/REQUIRED can encrypt the connection). The clear
+# password auth switch is then sent over the encrypted channel.
+# Default: true
+enable_tls = true
+
+# Optional PEM certificate chain + private key to serve. When unset a
+# fresh self-signed certificate for "localhost" is generated at startup.
+# Both options must be set together.
+# tls_cert = "/etc/ssl/certs/honeypot.pem"
+# tls_key = "/etc/ssl/private/honeypot.key"
+
+##############################################################################
 # Environment Variable Equivalents
 ##############################################################################
 # All config options can also be set via environment variables:
@@ -110,5 +146,6 @@ disable_ipapi = false
 # ABUSE_IP_CACHE_CLEANUP_HOURS=24
 # REJECT_ALL_AUTH=true
 # DISABLE_IPAPI=true
+# ENABLE_MYSQL=true
 #
 # CLI arguments take precedence over config file, which takes precedence over environment variables.

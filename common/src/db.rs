@@ -3,6 +3,22 @@ use sqlx::types::uuid::Uuid;
 use sqlx::{Error, PgPool, Row, query};
 use tokio::sync::mpsc;
 
+/// Honeypot module that produced an event (ssh, mysql, ...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Module {
+    Ssh,
+    Mysql,
+}
+
+impl Module {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Module::Ssh => "ssh",
+            Module::Mysql => "mysql",
+        }
+    }
+}
+
 // Database message types
 #[derive(Debug)]
 pub enum DbMessage {
@@ -13,6 +29,7 @@ pub enum DbMessage {
         local_port: u16,
     },
     RecordAuth {
+        module: Module,
         timestamp: DateTime<Utc>,
         ip: String,
         username: String,
@@ -100,6 +117,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 };
             }
             DbMessage::RecordAuth {
+                module,
                 timestamp,
                 ip,
                 username,
@@ -112,8 +130,9 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 response_tx,
             } => {
                 log::trace!(
-                    "Recording {} auth attempt: user='{}' from {} (success={})",
+                    "Recording {} auth attempt (module: {}): user='{}' from {} (success={})",
                     auth_type,
+                    module.as_str(),
                     username,
                     ip,
                     successful
@@ -121,6 +140,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
 
                 let result = record_auth(
                     &pool,
+                    module,
                     timestamp,
                     ip,
                     username,
@@ -292,6 +312,7 @@ pub async fn close_stale_live_sessions(pool: &PgPool) -> Result<u64, Error> {
 // Record authentication attempt in database and return the generated UUID
 async fn record_auth(
     pool: &PgPool,
+    module: Module,
     timestamp: DateTime<Utc>,
     ip: String,
     username: String,
@@ -305,10 +326,11 @@ async fn record_auth(
     log::trace!("Recording auth attempt: {} from {}", username, ip);
 
     let row = query(
-        "INSERT INTO auth (timestamp, ip, username, auth_type, password, public_key, successful, abuseipdb_data, ipapi_data)
-         VALUES ($1, $2::inet, $3, $4, $5, $6, $7, $8, $9)
+        "INSERT INTO auth (module, timestamp, ip, username, auth_type, password, public_key, successful, abuseipdb_data, ipapi_data)
+         VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id"
     )
+    .bind(module.as_str())
     .bind(timestamp)
     .bind(&ip.to_string())
     .bind(username)
