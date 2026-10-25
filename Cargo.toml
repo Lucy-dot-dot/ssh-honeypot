@@ -56,7 +56,7 @@ serde = { workspace = true }
 toml = { workspace = true }
 directories = { workspace = true }
 rand = { workspace = true }
-russh-sftp = "2.4.0"
+russh-sftp = "3.0.1"
 hex = { workspace = true }
 sha2 = { workspace = true }
 infer = "0.22.0"
