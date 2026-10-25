@@ -45,7 +45,7 @@ common = { workspace = true }
 shell = { workspace = true }
 mysql-honeypot = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
-russh = "0.63.3"
+russh = "0.65.0"
 log = { workspace = true }
 env_logger = "0.11.11"
 async-trait = { workspace = true }

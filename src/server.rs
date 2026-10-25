@@ -2,8 +2,8 @@ use crate::sftp::HoneypotSftpSession;
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
 use rand::{Rng, RngExt, rng};
-use russh::keys::{HashAlg, PublicKey};
-use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session};
+use russh::keys::HashAlg;
+use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session, VerifiedPublicKey};
 use russh::{Channel, ChannelId, ChannelMsg, Error, server};
 use shell::commands::{
     CatCommand, CdCommand, ColonCommand, CommandContext, CommandDispatcher, CurlCommand,
@@ -148,7 +148,7 @@ impl Handler for SshHandler {
     fn auth_publickey(
         &mut self,
         user: &str,
-        public_key: &PublicKey,
+        public_key: VerifiedPublicKey<'_>,
     ) -> impl Future<Output = Result<Auth, Self::Error>> + Send {
         async move {
             self.user = Some(user.to_string());
@@ -156,7 +156,13 @@ impl Handler for SshHandler {
             if !self.disable_cli_interface {
                 self.ensure_user_home_exists().await;
             }
-            let key_str = format!("{}", public_key.key_data().fingerprint(HashAlg::Sha512));
+            let key_str = format!(
+                "{}",
+                public_key
+                    .public_key
+                    .key_data()
+                    .fingerprint(HashAlg::Sha512)
+            );
             let peer_str = self.peer.ip().to_string();
 
             // We'll get the actual UUID back from the database
