@@ -66,3 +66,8 @@ ssh-encoding = "0.3.0-rc.9"
 [profile.release]
 lto = true
 strip = true
+
+# Optimize dependencies in debug builds. Crypto code (rsa keygen, russh, sqlx)
+# is unusably slow otherwise while our own crates still compile fast.
+[profile.dev.package."*"]
+opt-level = 3
