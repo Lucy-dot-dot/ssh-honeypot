@@ -139,7 +139,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             key: Preferred::DEFAULT.key,
             host_key_certificates: Preferred::DEFAULT.host_key_certificates,
             cipher: Preferred::DEFAULT.cipher,
-            mac: Preferred::DEFAULT.mac,
+            mac: Cow::Borrowed(&[
+                // russh::negotiation::SAFE_HMAC_ORDER
+                mac::HMAC_SHA512_ETM,
+                mac::HMAC_SHA256_ETM,
+                mac::HMAC_SHA512,
+                mac::HMAC_SHA256,
+                // Old insecure MACs so legacy clients can connect
+                mac::HMAC_SHA1_ETM,
+                mac::HMAC_SHA1,
+            ]),
             compression: Preferred::DEFAULT.compression,
         },
         ..Default::default()
