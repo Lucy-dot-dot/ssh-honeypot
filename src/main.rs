@@ -338,8 +338,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 abuse_ip_client.clone(),
                 ip_api_client.clone(),
             );
+            let (disable_reuseaddr, disable_reuseport) =
+                (app.disable_so_reuseaddr, app.disable_so_reuseport);
             tasks.push(tokio::spawn(async move {
-                match TcpListener::bind(interface).await {
+                match create_socket_with_reuse(interface, disable_reuseaddr, disable_reuseport) {
                     Ok(listener) => {
                         log::info!("Starting MySQL honeypot on {}", interface);
                         server.run_on_listener(listener).await;
