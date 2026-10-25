@@ -14,3 +14,5 @@ minijinja = "2.21.0"
 directories = { workspace = true }
 toml = { workspace = true }
 log = { workspace = true }
+reqwest = { workspace = true, features = ["brotli", "deflate", "json", "query"] }
+webpki-root-certs = "1.0.9"

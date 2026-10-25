@@ -1,3 +1,1 @@
-pub mod abuseipdb;
-pub mod ipapi;
-pub use common::{dashboard, dashboard_config, db, report};
+pub use common::{abuseipdb, dashboard, dashboard_config, db, ipapi, report};
