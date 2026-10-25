@@ -36,6 +36,8 @@ pub struct Config {
     pub server_id: Option<String>,
     pub welcome_message: Option<String>,
     pub hostname: Option<String>,
+    pub bsi_motd: Option<bool>,
+    pub nsa_motd: Option<bool>,
     pub mysql: Option<MysqlConfig>,
     pub mssql: Option<MssqlConfig>,
 }
@@ -62,6 +64,8 @@ impl Default for Config {
             server_id: None,
             welcome_message: None,
             hostname: None,
+            bsi_motd: None,
+            nsa_motd: None,
             mysql: None,
             mssql: None,
         }
@@ -161,6 +165,15 @@ pub struct CliArgs {
     #[arg(long = "hostname", env = "HOSTNAME")]
     pub hostname: Option<String>,
 
+    /// Show a post-auth MOTD imitating a German BSI/ZITiS investigation notice.
+    /// The EVIDENCE RECORD ID shown contains the year and the UUID of the recorded auth attempt
+    #[arg(long = "bsi-motd", env = "BSI_MOTD", action = ArgAction::SetTrue)]
+    pub bsi_motd: bool,
+
+    /// Show a post-auth MOTD imitating an NSA/CSS classified collection notice
+    #[arg(long = "nsa-motd", env = "NSA_MOTD", action = ArgAction::SetTrue)]
+    pub nsa_motd: bool,
+
     /// Enable the MySQL honeypot module (listens on the [mysql] interfaces, default port 3306)
     #[arg(long = "enable-mysql", env = "ENABLE_MYSQL", action = ArgAction::SetTrue)]
     pub enable_mysql: bool,
@@ -192,6 +205,8 @@ pub struct App {
     pub server_id: String,
     pub welcome_message: String,
     pub hostname: String,
+    pub bsi_motd: bool,
+    pub nsa_motd: bool,
     pub mysql: MysqlSettings,
     pub mssql: MssqlSettings,
 }
@@ -349,6 +364,10 @@ impl App {
                 .hostname
                 .or(config.hostname)
                 .unwrap_or_else(|| "server01".to_string()),
+
+            bsi_motd: Self::merge_clap_boolean_with_config(cli.bsi_motd, config.bsi_motd),
+
+            nsa_motd: Self::merge_clap_boolean_with_config(cli.nsa_motd, config.nsa_motd),
 
             mysql: {
                 let mysql_config = config.mysql.unwrap_or_default();

@@ -14,6 +14,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }

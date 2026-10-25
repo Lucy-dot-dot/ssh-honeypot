@@ -121,6 +121,7 @@ The application supports extensive configuration via CLI arguments, environment 
 - SFTP subsystem support (`--enable-sftp`/`ENABLE_SFTP`)
 - Reject all authentication attempts (`--reject-all-auth`/`REJECT_ALL_AUTH`)
 - SSH server ID, welcome message, and hostname (`--server-id`, `--welcome-message`, `--hostname`)
+- Post-auth BSI MOTD (`--bsi-motd`/`BSI_MOTD`) and NSA MOTD (`--nsa-motd`/`NSA_MOTD`); the BSI notice's EVIDENCE RECORD ID embeds the year and the auth record UUID — auth UUIDs are generated client-side and passed via `DbMessage::RecordAuth.id`, so no database round-trip is needed to know them
 - Socket options for IPv6 compatibility (`-r`/`DISABLE_SO_REUSEPORT`, `-s`/`DISABLE_SO_REUSEADDR`)
 - AbuseIPDB integration (`--abuse-ip-db-api-key`/`ABUSE_IP_DB_API_KEY`)
 - IPAPI toggle (`--disable-ipapi`/`DISABLE_IPAPI`)

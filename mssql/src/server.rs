@@ -21,6 +21,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
+use uuid::Uuid;
 
 /// MSSQL (TDS) honeypot server. Mirrors the SSH and MySQL modules: every
 /// connection is recorded in conn_track, every login attempt in auth
@@ -697,10 +698,14 @@ impl Connection {
         abuseipdb_data: Option<serde_json::Value>,
         ipapi_data: Option<serde_json::Value>,
     ) -> Option<String> {
+        // Generate the auth record UUID client-side, so the exact id of the
+        // auth table row is known without any database round-trip
+        let auth_uuid = Uuid::new_v4();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         match self
             .db_tx
             .send(DbMessage::RecordAuth {
+                id: auth_uuid,
                 module: Module::Mssql,
                 timestamp: Utc::now(),
                 ip: ip.to_string(),

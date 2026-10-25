@@ -16,6 +16,7 @@ rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 rcgen = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }
