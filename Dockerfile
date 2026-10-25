@@ -44,5 +44,6 @@ COPY --from=builder --chown=1000:1000 /keys /keys
 
 EXPOSE 22
 EXPOSE 2222
+EXPOSE 3306
 
 ENTRYPOINT ["/ssh-honeypot"]

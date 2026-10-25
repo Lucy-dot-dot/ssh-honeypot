@@ -41,6 +41,7 @@ services:
     ports:
       - "2222:2222"
       - "22:22"
+      - "3306:3306"
     cap_drop:
       - ALL
     cap_add:
