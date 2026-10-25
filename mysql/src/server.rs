@@ -9,10 +9,9 @@ use chrono::{DateTime, Utc};
 use common::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
 use common::db::{DbMessage, Module};
 use common::ipapi;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use common::tls;
 use std::io;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -41,7 +40,12 @@ impl MysqlServer {
         abuse_ip_client: Option<Arc<AbuseIpClient>>,
         ip_api_client: Option<Arc<ipapi::Client>>,
     ) -> Self {
-        let tls_acceptor = build_tls_acceptor(&settings);
+        let tls_acceptor = tls::build_tls_acceptor(
+            "MySQL",
+            settings.enable_tls,
+            settings.tls_cert.as_deref(),
+            settings.tls_key.as_deref(),
+        );
         Self {
             db_tx,
             settings,
@@ -569,113 +573,4 @@ impl Connection {
             Err(e) => log::error!("Error sending MySQL session end record: {}", e),
         }
     }
-}
-
-/// Builds the TLS acceptor used to upgrade connections after an SSL request
-/// packet. Returns None when TLS support is disabled or no usable server
-/// identity could be obtained.
-fn build_tls_acceptor(settings: &MysqlSettings) -> Option<TlsAcceptor> {
-    if !settings.enable_tls {
-        log::info!("MySQL TLS support is disabled");
-        return None;
-    }
-
-    let (certs, key) = match (&settings.tls_cert, &settings.tls_key) {
-        (Some(cert_path), Some(key_path)) => match load_pem_identity(cert_path, key_path) {
-            Ok(identity) => {
-                log::info!(
-                    "MySQL TLS identity loaded from {} and {}",
-                    cert_path.display(),
-                    key_path.display()
-                );
-                identity
-            }
-            Err(err) => {
-                log::error!(
-                    "Failed to load MySQL TLS identity from {} and {}: {}",
-                    cert_path.display(),
-                    key_path.display(),
-                    err
-                );
-                return None;
-            }
-        },
-        (Some(_), None) | (None, Some(_)) => {
-            log::error!(
-                "mysql.tls_cert and mysql.tls_key must be configured together; \
-                 falling back to a generated self-signed certificate"
-            );
-            match generate_self_signed_identity() {
-                Ok(identity) => identity,
-                Err(err) => {
-                    log::error!(
-                        "Failed to generate a self-signed MySQL certificate: {}",
-                        err
-                    );
-                    return None;
-                }
-            }
-        }
-        (None, None) => match generate_self_signed_identity() {
-            Ok(identity) => identity,
-            Err(err) => {
-                log::error!(
-                    "Failed to generate a self-signed MySQL certificate: {}",
-                    err
-                );
-                return None;
-            }
-        },
-    };
-
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = match rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .and_then(|builder| builder.with_no_client_auth().with_single_cert(certs, key))
-    {
-        Ok(config) => config,
-        Err(err) => {
-            log::error!("Invalid MySQL TLS configuration: {}", err);
-            return None;
-        }
-    };
-
-    log::info!("MySQL TLS support enabled (self-signed or configured certificate)");
-    Some(TlsAcceptor::from(Arc::new(config)))
-}
-
-/// Generates an in-memory self-signed certificate for the TLS listener.
-fn generate_self_signed_identity()
--> io::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-    let identity = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("rcgen: {err}")))?;
-    let cert = CertificateDer::from(identity.cert);
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-        identity.signing_key.serialize_der(),
-    ));
-    Ok((vec![cert], key))
-}
-
-/// Loads a PEM encoded certificate chain and private key from disk.
-fn load_pem_identity(
-    cert_path: &Path,
-    key_path: &Path,
-) -> io::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-    let cert_file = std::fs::File::open(cert_path)?;
-    let certs: Vec<_> = rustls_pemfile::certs(&mut io::BufReader::new(cert_file))
-        .collect::<Result<_, _>>()
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("bad PEM: {err}")))?;
-    if certs.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "no certificates found",
-        ));
-    }
-
-    let key_file = std::fs::File::open(key_path)?;
-    let key = rustls_pemfile::private_key(&mut io::BufReader::new(key_file))
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("bad PEM: {err}")))?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no private key found"))?;
-
-    Ok((certs, key))
 }

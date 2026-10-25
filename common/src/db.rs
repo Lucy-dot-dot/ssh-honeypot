@@ -3,11 +3,12 @@ use sqlx::types::uuid::Uuid;
 use sqlx::{Error, PgPool, Row, query};
 use tokio::sync::mpsc;
 
-/// Honeypot module that produced an event (ssh, mysql, ...).
+/// Honeypot module that produced an event (ssh, mysql, mssql, ...).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Module {
     Ssh,
     Mysql,
+    Mssql,
 }
 
 impl Module {
@@ -15,6 +16,7 @@ impl Module {
         match self {
             Module::Ssh => "ssh",
             Module::Mysql => "mysql",
+            Module::Mssql => "mssql",
         }
     }
 }

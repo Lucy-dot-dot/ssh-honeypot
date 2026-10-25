@@ -76,6 +76,17 @@ Otherwise `cargo metadata` fails with "failed to load manifest for workspace mem
 - TLS is supported (`enable_tls`, default true): the handshake advertises CLIENT_SSL and, on an SSL request packet, the TCP stream is upgraded via tokio-rustls before the real handshake response is read; serves a generated self-signed certificate or a configured PEM pair (`tls_cert`/`tls_key`). Compression and prepared statements are not supported; queries are logged but answered with an empty OK (no result sets yet)
 - Records connections (conn_track), auth attempts (auth, `module = "mysql"`) and queries (commands)
 
+**MSSQL Module** (`mssql/`):
+- Separate workspace crate implementing a TDS (Microsoft SQL Server) wire protocol honeypot (default port 1433)
+- Enabled via `--enable-mssql` or the `[mssql]` config section (see config.toml.example)
+- Speaks the raw TDS protocol: PRELOGIN negotiation, optional TLS (ENCRYPT_OFF advertised by default, TDS 8.0 "strict" TLS-before-prelogin clients supported), LOGIN7 authentication, LOGINACK/ENVCHANGE/DONE responses
+- Authentication methods captured (auth_type in the auth table):
+  - SQL Server auth (`password`): LOGIN7 passwords are XOR 0xA5 obfuscated UTF-16LE and fully reversible
+  - Windows Integrated Auth (`ntlm`): server sends an NTLM type-2 challenge with realistic target info; the client's type-3 response is parsed and stored as a Net-NTLMv2 hash in hashcat -m 5600 format inside the password column. Kerberos/other SSPI mechanisms are recorded as `sspi` and rejected with error 18452
+  - Azure AD / Entra ID (`azure_ad_token` for bearer tokens in the SSPI slot, `azure_ad_password` for principal+secret logins)
+- `[mssql]` config adds `host_name` / `domain_name` used in NTLM challenges and error tokens
+- Post-login SQL batches and RPC calls are logged into commands (no result sets are produced)
+
 **IP Enrichment** (`common/src/abuseipdb.rs`, `common/src/ipapi.rs`):
 - Optional AbuseIPDB and ip-api lookups for connecting IPs, with in-memory caching
 - Used by both the SSH and MySQL modules
@@ -86,13 +97,15 @@ Otherwise `cargo metadata` fails with "failed to load manifest for workspace mem
 ### Key Files
 - `src/main.rs` - Application entry point and server setup
 - `src/server.rs` - SSH protocol implementation and session handling
-- `common/src/db.rs` - Database operations, data models and the `Module` enum (Ssh/Mysql)
+- `common/src/db.rs` - Database operations, data models and the `Module` enum (Ssh/Mysql/Mssql)
+- `common/src/tls.rs` - Shared TLS identity/acceptor helpers for the protocol modules
 - `src/app.rs` - Configuration (CLI args, env vars, config file merging)
 - `src/shell/commands/dispatcher.rs` - Command dispatch and pipe handling
 - `src/shell/filesystem/fs2.rs` - Virtual filesystem implementation
 - `src/keys.rs` - SSH host key generation and management
 - `src/paths.rs` - Platform config/data path management
 - `mysql/src/` - MySQL module (config, wire protocol, server)
+- `mssql/src/` - MSSQL module (config, TDS protocol, server, NTLM capture)
 - `common/migrations/` - PostgreSQL schema migrations
 - `base.tar.gz` - Default filesystem content (Debian 12 base system)
 
@@ -113,6 +126,7 @@ The application supports extensive configuration via CLI arguments, environment 
 - IPAPI toggle (`--disable-ipapi`/`DISABLE_IPAPI`)
 - Key folder (`-k`/`KEY_FOLDER`)
 - MySQL module toggle (`--enable-mysql`/`ENABLE_MYSQL`); `[mysql]` config section with `interfaces` (default 0.0.0.0:3306 and [::]:3306), `reject_all_auth`, `server_version`, `enable_tls` (default true), `tls_cert`/`tls_key` (optional PEM pair)
+- MSSQL module toggle (`--enable-mssql`/`ENABLE_MSSQL`); `[mssql]` config section with `interfaces` (default 0.0.0.0:1433 and [::]:1433), `reject_all_auth`, `server_version`, `enable_tls` (default true), `tls_cert`/`tls_key` (optional PEM pair), `host_name`/`domain_name` for NTLM challenges
 
 ### Database
 PostgreSQL is required. The docker-compose setup starts a PostgreSQL 16 service with schema initialization from `postgres-init/` and sqlx migrations in `migrations/`. New columns: `auth.module` distinguishes which honeypot module recorded an attempt (`ssh`, `mysql`).

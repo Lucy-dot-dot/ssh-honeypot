@@ -1,5 +1,6 @@
 use crate::paths::PathManager;
 use clap::{ArgAction, Parser};
+use mssql_honeypot::{MssqlConfig, MssqlSettings};
 use mysql_honeypot::{MysqlConfig, MysqlSettings};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -36,6 +37,7 @@ pub struct Config {
     pub welcome_message: Option<String>,
     pub hostname: Option<String>,
     pub mysql: Option<MysqlConfig>,
+    pub mssql: Option<MssqlConfig>,
 }
 
 impl Default for Config {
@@ -61,6 +63,7 @@ impl Default for Config {
             welcome_message: None,
             hostname: None,
             mysql: None,
+            mssql: None,
         }
     }
 }
@@ -161,6 +164,10 @@ pub struct CliArgs {
     /// Enable the MySQL honeypot module (listens on the [mysql] interfaces, default port 3306)
     #[arg(long = "enable-mysql", env = "ENABLE_MYSQL", action = ArgAction::SetTrue)]
     pub enable_mysql: bool,
+
+    /// Enable the MSSQL honeypot module (listens on the [mssql] interfaces, default port 1433)
+    #[arg(long = "enable-mssql", env = "ENABLE_MSSQL", action = ArgAction::SetTrue)]
+    pub enable_mssql: bool,
 }
 
 #[derive(Debug)]
@@ -186,6 +193,7 @@ pub struct App {
     pub welcome_message: String,
     pub hostname: String,
     pub mysql: MysqlSettings,
+    pub mssql: MssqlSettings,
 }
 
 impl App {
@@ -347,6 +355,13 @@ impl App {
                 let mysql_enabled =
                     Self::merge_clap_boolean_with_config(cli.enable_mysql, mysql_config.enabled);
                 mysql_config.resolve(mysql_enabled)
+            },
+
+            mssql: {
+                let mssql_config = config.mssql.unwrap_or_default();
+                let mssql_enabled =
+                    Self::merge_clap_boolean_with_config(cli.enable_mssql, mssql_config.enabled);
+                mssql_config.resolve(mssql_enabled)
             },
         }
     }

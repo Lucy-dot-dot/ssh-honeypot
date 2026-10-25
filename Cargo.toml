@@ -15,11 +15,12 @@ name = "report-generator"
 path = "src/bin/report_generator.rs"
 
 [workspace]
-members = ["desktop", "common", "shell", "mysql"]
+members = ["desktop", "common", "shell", "mysql", "mssql"]
 
 [workspace.dependencies]
 common = { path = "common" }
 mysql-honeypot = { path = "mysql" }
+mssql-honeypot = { path = "mssql" }
 shell = { path = "shell" }
 tokio = "1.53.1"
 async-trait = "0.1.92"
@@ -44,6 +45,7 @@ rcgen = "0.14"
 common = { workspace = true }
 shell = { workspace = true }
 mysql-honeypot = { workspace = true }
+mssql-honeypot = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 russh = "0.65.0"
 log = { workspace = true }

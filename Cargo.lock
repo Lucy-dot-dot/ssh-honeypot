@@ -1086,11 +1086,15 @@ dependencies = [
  "directories",
  "log",
  "minijinja",
+ "rcgen",
  "reqwest",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sqlx",
  "tokio",
+ "tokio-rustls",
  "toml",
  "webpki-root-certs",
 ]
@@ -3270,6 +3274,22 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
+]
+
+[[package]]
+name = "mssql-honeypot"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "common",
+ "log",
+ "rand",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "toml",
 ]
 
 [[package]]
@@ -5611,6 +5631,7 @@ dependencies = [
  "hex",
  "infer",
  "log",
+ "mssql-honeypot",
  "mysql-honeypot",
  "rand",
  "russh",

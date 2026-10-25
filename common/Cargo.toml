@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 chrono = { workspace = true }
 sqlx = { workspace = true }
-tokio = { workspace = true, features = ["sync", "macros"] }
+tokio = { workspace = true, features = ["sync", "macros", "net", "io-util"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
@@ -16,3 +16,7 @@ toml = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true, features = ["brotli", "deflate", "json", "query"] }
 webpki-root-certs = "1.0.9"
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rcgen = { workspace = true }

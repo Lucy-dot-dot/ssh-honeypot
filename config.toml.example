@@ -123,6 +123,51 @@ enable_tls = true
 # tls_key = "/etc/ssl/private/honeypot.key"
 
 ##############################################################################
+# MSSQL module
+##############################################################################
+[mssql]
+
+# Enable the MSSQL (Microsoft SQL Server / TDS) honeypot module
+# (can also be enabled with --enable-mssql)
+# Default: false
+enabled = false
+
+# Network interfaces for the MSSQL module to listen on
+# Default: ["0.0.0.0:1433", "[::]:1433"]
+interfaces = [
+    "0.0.0.0:1433",        # IPv4 all interfaces
+    "[::]:1433",           # IPv6 all interfaces
+]
+
+# Reject all MSSQL authentication attempts instead of accepting them
+# Default: false (honeypot mode - accepts all auth but still logs)
+reject_all_auth = false
+
+# SQL Server version string reported in the prelogin and login ack
+# Default: "16.0.1000.6" (SQL Server 2022 RTM)
+server_version = "16.0.1000.6"
+
+# Support TLS connections (ENCRYPT_OFF is advertised so clients can
+# encrypt the login sequence; TDS 8.0 "strict" clients are also served).
+# Default: true
+enable_tls = true
+
+# Optional PEM certificate chain + private key to serve. When unset a
+# fresh self-signed certificate is generated at startup.
+# Both options must be set together.
+# tls_cert = "/etc/ssl/certs/honeypot.pem"
+# tls_key = "/etc/ssl/private/honeypot.key"
+
+# Windows computer name presented in NTLM challenges and error messages
+# Default: "WIN-SERVER01"
+host_name = "WIN-SERVER01"
+
+# NetBIOS domain name presented in NTLM challenges. For a standalone
+# server this is normally identical to the computer name.
+# Default: same as host_name
+# domain_name = "WORKGROUP"
+
+##############################################################################
 # Environment Variable Equivalents
 ##############################################################################
 # All config options can also be set via environment variables:
@@ -147,5 +192,6 @@ enable_tls = true
 # REJECT_ALL_AUTH=true
 # DISABLE_IPAPI=true
 # ENABLE_MYSQL=true
+# ENABLE_MSSQL=true
 #
 # CLI arguments take precedence over config file, which takes precedence over environment variables.

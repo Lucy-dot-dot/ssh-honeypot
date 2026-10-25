@@ -61,6 +61,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
     log::info!(
+        "MSSQL module: {}",
+        if app.mssql.enabled {
+            format!(
+                "enabled on {:?} (reject_all_auth: {}, server_version: {}, host_name: {})",
+                app.mssql.interfaces,
+                app.mssql.reject_all_auth,
+                app.mssql.server_version,
+                app.mssql.host_name
+            )
+        } else {
+            "disabled".to_string()
+        }
+    );
+    log::info!(
         "Authentication BANNER: {}",
         app.authentication_banner.clone().unwrap_or_default()
     );
@@ -357,6 +371,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(err) => {
                         log::error!("Failed to bind MySQL honeypot on {}: {:?}", interface, err);
+                    }
+                }
+            }));
+        }
+    }
+
+    // Start the MSSQL module if enabled
+    if app.mssql.enabled {
+        for interface in app.mssql.interfaces.clone() {
+            let server = mssql_honeypot::server::MssqlServer::new(
+                db_tx.clone(),
+                app.mssql.clone(),
+                abuse_ip_client.clone(),
+                ip_api_client.clone(),
+            );
+            let (disable_reuseaddr, disable_reuseport) =
+                (app.disable_so_reuseaddr, app.disable_so_reuseport);
+            tasks.push(tokio::spawn(async move {
+                match create_socket_with_reuse(interface, disable_reuseaddr, disable_reuseport) {
+                    Ok(listener) => {
+                        log::info!("Starting MSSQL honeypot on {}", interface);
+                        server.run_on_listener(listener).await;
+                    }
+                    Err(err) => {
+                        log::error!("Failed to bind MSSQL honeypot on {}: {:?}", interface, err);
                     }
                 }
             }));
