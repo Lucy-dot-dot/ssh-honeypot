@@ -10,12 +10,13 @@ COPY Cargo.toml Cargo.lock ./
 COPY desktop/Cargo.toml desktop/
 COPY common/Cargo.toml common/
 COPY shell/Cargo.toml shell/
+COPY mysql/Cargo.toml mysql/
 # cargo chef prepare needs the bin/lib entry-points to exist
-RUN mkdir -p src/bin desktop/src/bin common/src shell/src && \
+RUN mkdir -p src/bin desktop/src/bin common/src shell/src mysql/src && \
     touch src/lib.rs src/main.rs \
           src/bin/report_generator.rs \
           desktop/src/bin/dashboard-gui.rs desktop/src/bin/report-gui.rs \
-          common/src/lib.rs shell/src/lib.rs
+          common/src/lib.rs shell/src/lib.rs mysql/src/lib.rs
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder

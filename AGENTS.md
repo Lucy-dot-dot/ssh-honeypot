@@ -21,6 +21,12 @@ This is an SSH honeypot server written in Rust that simulates an Ubuntu-like env
 - `docker-compose up -d` - Run containerized version
 - `docker-compose logs -f` - View container logs
 
+**Adding a new workspace crate:** the Docker build uses cargo-chef with a `planner` stage that only copies Cargo manifests and stubs out entry points (`Dockerfile`, "FROM chef AS planner"). When adding a member to `[workspace]` in Cargo.toml, you must also:
+1. `COPY <crate>/Cargo.toml <crate>/` in the planner stage
+2. Add `<crate>/src` to the `mkdir -p` and a `<crate>/src/lib.rs` stub to the `touch` in the `RUN` right below it
+
+Otherwise `cargo metadata` fails with "failed to load manifest for workspace member /app/<crate>" and the image build breaks in CI, even though `cargo build` works locally. Verify with `docker build --target planner .` before pushing.
+
 ### Testing and Development
 - `cargo test` - Run unit tests
 - `cargo clippy` - Run linter
