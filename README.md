@@ -51,6 +51,8 @@ docker compose up -d && docker compose logs -f ssh-honeypot
 
 The compose file publishes the honeypot on ports **22**, **2222**, **3306** (MySQL module) and **1433** (MSSQL module) of the host, and exposes Postgres on `127.0.0.1:5432` (so the GUIs can connect locally). By default it runs in **logging mode** (`DISABLE_CLI_INTERFACE=true`): it accepts logins and records credentials, but doesn't hand out a shell. Flip that off in `config.toml` to give attackers the full fake-shell experience.
 
+Additional protocol modules (MySQL, MSSQL, PostgreSQL) are disabled by default; enable them in `config.toml` (`[mysql]`, `[mssql]`, `[postgres]` → `enabled = true`) or with `--enable-mysql`, `--enable-mssql`, `--enable-postgres`. Each module captures connections, authentication attempts (PostgreSQL only advertises cleartext password authentication) and queries without executing any real SQL.
+
 A prebuilt image is published automatically to `ghcr.io/lucy-dot-dot/ssh-honeypot:master` on every push to `main`/`master`.
 
 ### Want the live dashboard?

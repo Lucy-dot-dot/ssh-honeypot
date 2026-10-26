@@ -4254,6 +4254,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-honeypot"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "common",
+ "log",
+ "rand",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5635,6 +5654,7 @@ dependencies = [
  "log",
  "mssql-honeypot",
  "mysql-honeypot",
+ "postgres-honeypot",
  "rand",
  "reqwest",
  "russh",

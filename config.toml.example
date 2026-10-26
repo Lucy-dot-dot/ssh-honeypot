@@ -180,6 +180,44 @@ host_name = "WIN-SERVER01"
 # domain_name = "WORKGROUP"
 
 ##############################################################################
+# PostgreSQL module
+##############################################################################
+[postgres]
+
+# Enable the PostgreSQL honeypot module (can also be enabled with
+# --enable-postgres)
+# Default: false
+enabled = false
+
+# Network interfaces for the PostgreSQL module to listen on
+# Default: ["0.0.0.0:5432", "[::]:5432"]
+interfaces = [
+    "0.0.0.0:5432",        # IPv4 all interfaces
+    "[::]:5432",           # IPv6 all interfaces
+]
+
+# Reject all PostgreSQL authentication attempts instead of accepting them
+# Default: false (honeypot mode - accepts all auth but still logs)
+reject_all_auth = false
+
+# server_version parameter reported to clients
+# Default: "15.6 (Ubuntu 15.6-1.pgdg22.04+1)"
+server_version = "15.6 (Ubuntu 15.6-1.pgdg22.04+1)"
+
+# Support TLS connections (SSLRequest is answered with 'S' so clients
+# with sslmode=require can encrypt the connection). Only cleartext
+# password authentication is offered - never MD5 or SCRAM - so the
+# password is transmitted in the clear (over TLS when enabled).
+# Default: true
+enable_tls = true
+
+# Optional PEM certificate chain + private key to serve. When unset a
+# fresh self-signed certificate is generated at startup.
+# Both options must be set together.
+# tls_cert = "/etc/ssl/certs/honeypot.pem"
+# tls_key = "/etc/ssl/private/honeypot.key"
+
+##############################################################################
 # Metrics endpoint (Prometheus)
 ##############################################################################
 [metrics]
@@ -226,6 +264,7 @@ interfaces = [
 # DISABLE_IPAPI=true
 # ENABLE_MYSQL=true
 # ENABLE_MSSQL=true
+# ENABLE_POSTGRES=true
 # ENABLE_METRICS=true
 # BSI_MOTD=true
 # NSA_MOTD=true

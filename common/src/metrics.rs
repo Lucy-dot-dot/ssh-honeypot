@@ -62,7 +62,10 @@ impl MetricsConfig {
             .filter(|v: &Vec<SocketAddr>| !v.is_empty())
             .unwrap_or_else(|| DEFAULT_METRICS_INTERFACES.to_vec());
 
-        MetricsSettings { enabled, interfaces }
+        MetricsSettings {
+            enabled,
+            interfaces,
+        }
     }
 }
 
@@ -94,6 +97,7 @@ pub struct Metrics {
     pub ssh: ModuleMetrics,
     pub mysql: ModuleMetrics,
     pub mssql: ModuleMetrics,
+    pub postgres: ModuleMetrics,
     /// Files uploaded via SFTP
     pub file_uploads_total: AtomicU64,
     /// Bytes uploaded via SFTP
@@ -113,6 +117,7 @@ impl Metrics {
             ssh: ModuleMetrics::default(),
             mysql: ModuleMetrics::default(),
             mssql: ModuleMetrics::default(),
+            postgres: ModuleMetrics::default(),
             file_uploads_total: AtomicU64::new(0),
             file_upload_bytes_total: AtomicU64::new(0),
             db_messages_total: AtomicU64::new(0),
@@ -127,6 +132,7 @@ impl Metrics {
             Module::Ssh => &self.ssh,
             Module::Mysql => &self.mysql,
             Module::Mssql => &self.mssql,
+            Module::Postgres => &self.postgres,
         }
     }
 
@@ -163,11 +169,11 @@ impl Metrics {
         m.sessions_ended_total.fetch_add(1, Ordering::Relaxed);
         // Saturating decrement: a crashed session that never sent an end
         // message must not make the gauge wrap around.
-        let _ = m.sessions_active.try_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |v| Some(v.saturating_sub(1)),
-        );
+        let _ = m
+            .sessions_active
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_sub(1))
+            });
     }
 
     pub fn record_file_upload(&self, bytes: u64) {
@@ -197,10 +203,11 @@ impl Metrics {
     pub fn render(&self) -> String {
         let mut out = String::with_capacity(4096);
 
-        let modules: [(&str, &ModuleMetrics); 3] = [
+        let modules: [(&str, &ModuleMetrics); 4] = [
             (Module::Ssh.as_str(), &self.ssh),
             (Module::Mysql.as_str(), &self.mysql),
             (Module::Mssql.as_str(), &self.mssql),
+            (Module::Postgres.as_str(), &self.postgres),
         ];
 
         push_module_family(
@@ -305,7 +312,12 @@ impl Metrics {
         );
 
         let name = "honeypot_uptime_seconds";
-        push_family_header(&mut out, name, "Time since the metrics registry was initialized.", "gauge");
+        push_family_header(
+            &mut out,
+            name,
+            "Time since the metrics registry was initialized.",
+            "gauge",
+        );
         out.push_str(name);
         out.push(' ');
         out.push_str(&format!("{:.3}\n", self.uptime_seconds()));
@@ -391,8 +403,13 @@ async fn handle_connection(mut stream: TcpStream) {
             write_simple_response(&mut stream, 404, "Not Found", "not found\n").await;
         }
         _ => {
-            write_simple_response(&mut stream, 405, "Method Not Allowed", "method not allowed\n")
-                .await;
+            write_simple_response(
+                &mut stream,
+                405,
+                "Method Not Allowed",
+                "method not allowed\n",
+            )
+            .await;
         }
     }
 }
@@ -411,12 +428,7 @@ fn status_text(code: u16) -> &'static str {
     }
 }
 
-async fn write_simple_response(
-    stream: &mut TcpStream,
-    code: u16,
-    status: &str,
-    body: &str,
-) {
+async fn write_simple_response(stream: &mut TcpStream, code: u16, status: &str, body: &str) {
     let response = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         code,
@@ -459,7 +471,7 @@ fn push_module_family(
     name: &str,
     help: &str,
     kind: &str,
-    modules: &[(&str, &ModuleMetrics); 3],
+    modules: &[(&str, &ModuleMetrics); 4],
     value: impl Fn(&ModuleMetrics) -> u64,
 ) {
     push_family_header(out, name, help, kind);
@@ -507,7 +519,10 @@ mod tests {
         .unwrap();
         let settings = config.resolve(true);
         assert!(settings.enabled);
-        assert_eq!(settings.interfaces, vec!["0.0.0.0:9154".parse::<SocketAddr>().unwrap()]);
+        assert_eq!(
+            settings.interfaces,
+            vec!["0.0.0.0:9154".parse::<SocketAddr>().unwrap()]
+        );
     }
 
     #[test]

@@ -43,6 +43,10 @@ services:
       - "22:22"
       - "3306:3306"
       - "1433:1433"
+      # PostgreSQL module. The default host port 5432 is already used by the
+      # postgres db service above (bound to 127.0.0.1 only) — publish the
+      # module on a different host port, or remove the db service mapping.
+      # - "5432:5432"
       # Metrics endpoint (requires [metrics] enabled = true or --enable-metrics in config.toml)
       # - "127.0.0.1:9154:9154"
     cap_drop:

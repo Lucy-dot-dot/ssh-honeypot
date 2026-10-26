@@ -76,6 +76,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
     log::info!(
+        "PostgreSQL module: {}",
+        if app.postgres.enabled {
+            format!(
+                "enabled on {:?} (reject_all_auth: {}, server_version: {})",
+                app.postgres.interfaces, app.postgres.reject_all_auth, app.postgres.server_version
+            )
+        } else {
+            "disabled".to_string()
+        }
+    );
+    log::info!(
         "Metrics endpoint: {}",
         if app.metrics.enabled {
             format!("enabled on {:?}", app.metrics.interfaces)
@@ -413,6 +424,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Start the PostgreSQL module if enabled
+    if app.postgres.enabled {
+        for interface in app.postgres.interfaces.clone() {
+            let server = postgres_honeypot::server::PostgresServer::new(
+                db_tx.clone(),
+                app.postgres.clone(),
+                abuse_ip_client.clone(),
+                ip_api_client.clone(),
+            );
+            let (disable_reuseaddr, disable_reuseport) =
+                (app.disable_so_reuseaddr, app.disable_so_reuseport);
+            tasks.push(tokio::spawn(async move {
+                match create_socket_with_reuse(interface, disable_reuseaddr, disable_reuseport) {
+                    Ok(listener) => {
+                        log::info!("Starting PostgreSQL honeypot on {}", interface);
+                        server.run_on_listener(listener).await;
+                    }
+                    Err(err) => {
+                        log::error!(
+                            "Failed to bind PostgreSQL honeypot on {}: {:?}",
+                            interface,
+                            err
+                        );
+                    }
+                }
+            }));
+        }
+    }
+
     // Start the Prometheus metrics endpoint if enabled
     if app.metrics.enabled {
         for interface in app.metrics.interfaces.clone() {
@@ -425,7 +465,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         MetricsServer.run_on_listener(listener).await;
                     }
                     Err(err) => {
-                        log::error!("Failed to bind metrics endpoint on {}: {:?}", interface, err);
+                        log::error!(
+                            "Failed to bind metrics endpoint on {}: {:?}",
+                            interface,
+                            err
+                        );
                     }
                 }
             }));

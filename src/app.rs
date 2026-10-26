@@ -2,6 +2,7 @@ use crate::paths::PathManager;
 use clap::{ArgAction, Parser};
 use mssql_honeypot::{MssqlConfig, MssqlSettings};
 use mysql_honeypot::{MysqlConfig, MysqlSettings};
+use postgres_honeypot::{PostgresConfig, PostgresSettings};
 use serde::{Deserialize, Serialize};
 use ssh_honeypot::metrics::{MetricsConfig, MetricsSettings};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -41,6 +42,7 @@ pub struct Config {
     pub nsa_motd: Option<bool>,
     pub mysql: Option<MysqlConfig>,
     pub mssql: Option<MssqlConfig>,
+    pub postgres: Option<PostgresConfig>,
     pub metrics: Option<MetricsConfig>,
 }
 
@@ -70,6 +72,7 @@ impl Default for Config {
             nsa_motd: None,
             mysql: None,
             mssql: None,
+            postgres: None,
             metrics: None,
         }
     }
@@ -185,6 +188,10 @@ pub struct CliArgs {
     #[arg(long = "enable-mssql", env = "ENABLE_MSSQL", action = ArgAction::SetTrue)]
     pub enable_mssql: bool,
 
+    /// Enable the PostgreSQL honeypot module (listens on the [postgres] interfaces, default port 5432)
+    #[arg(long = "enable-postgres", env = "ENABLE_POSTGRES", action = ArgAction::SetTrue)]
+    pub enable_postgres: bool,
+
     /// Enable the Prometheus metrics endpoint (listens on the [metrics] interfaces, default port 9154)
     #[arg(long = "enable-metrics", env = "ENABLE_METRICS", action = ArgAction::SetTrue)]
     pub enable_metrics: bool,
@@ -216,6 +223,7 @@ pub struct App {
     pub nsa_motd: bool,
     pub mysql: MysqlSettings,
     pub mssql: MssqlSettings,
+    pub postgres: PostgresSettings,
     pub metrics: MetricsSettings,
 }
 
@@ -389,6 +397,15 @@ impl App {
                 let mssql_enabled =
                     Self::merge_clap_boolean_with_config(cli.enable_mssql, mssql_config.enabled);
                 mssql_config.resolve(mssql_enabled)
+            },
+
+            postgres: {
+                let postgres_config = config.postgres.unwrap_or_default();
+                let postgres_enabled = Self::merge_clap_boolean_with_config(
+                    cli.enable_postgres,
+                    postgres_config.enabled,
+                );
+                postgres_config.resolve(postgres_enabled)
             },
 
             metrics: {

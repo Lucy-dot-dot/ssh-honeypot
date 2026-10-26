@@ -87,6 +87,15 @@ Otherwise `cargo metadata` fails with "failed to load manifest for workspace mem
 - `[mssql]` config adds `host_name` / `domain_name` used in NTLM challenges and error tokens
 - Post-login SQL batches and RPC calls are logged into commands (no result sets are produced)
 
+**PostgreSQL Module** (`postgres/`):
+- Separate workspace crate implementing a PostgreSQL wire protocol (v3.0) honeypot (default port 5432)
+- Enabled via `--enable-postgres` or the `[postgres]` config section (see config.toml.example)
+- Startup phase handles SSLRequest (TLS upgrade via tokio-rustls when `enable_tls`, 'N' otherwise), GSS encryption requests ('N'), CancelRequest (logged, silently closed) and the StartupMessage (`user`/`database`/`application_name` capture)
+- **Cleartext password auth only**: the server answers startup with `AuthenticationCleartextPassword` (code 3) and captures the `PasswordMessage` reply. MD5 and SCRAM-SHA-256 are never advertised so passwords arrive in the clear (TLS or not)
+- Post-auth: AuthenticationOk, realistic ParameterStatus values (configurable `server_version`, default `15.6 (Ubuntu 15.6-1.pgdg22.04+1)`), BackendKeyData, ReadyForQuery
+- Queries are logged into commands but answered without result sets: simple queries get an empty RowDescription + a CommandComplete tag derived from the first SQL keyword (EmptyQueryResponse for empty queries); the extended protocol (Parse/Bind/Describe/Execute/Close/Flush/Sync) is answered with the matching completion messages so libpq/JDBC clients stay in sync
+- Unknown frontend message types end the session with a FATAL `08P01` ErrorResponse, mirroring a real server
+
 **IP Enrichment** (`common/src/abuseipdb.rs`, `common/src/ipapi.rs`):
 - Optional AbuseIPDB and ip-api lookups for connecting IPs, with in-memory caching
 - Used by both the SSH and MySQL modules
@@ -107,6 +116,7 @@ Otherwise `cargo metadata` fails with "failed to load manifest for workspace mem
 - `src/paths.rs` - Platform config/data path management
 - `mysql/src/` - MySQL module (config, wire protocol, server)
 - `mssql/src/` - MSSQL module (config, TDS protocol, server, NTLM capture)
+- `postgres/src/` - PostgreSQL module (config, wire protocol, server)
 - `common/migrations/` - PostgreSQL schema migrations
 - `base.tar.gz` - Default filesystem content (Debian 12 base system)
 
@@ -129,10 +139,11 @@ The application supports extensive configuration via CLI arguments, environment 
 - Key folder (`-k`/`KEY_FOLDER`)
 - MySQL module toggle (`--enable-mysql`/`ENABLE_MYSQL`); `[mysql]` config section with `interfaces` (default 0.0.0.0:3306 and [::]:3306), `reject_all_auth`, `server_version`, `enable_tls` (default true), `tls_cert`/`tls_key` (optional PEM pair)
 - MSSQL module toggle (`--enable-mssql`/`ENABLE_MSSQL`); `[mssql]` config section with `interfaces` (default 0.0.0.0:1433 and [::]:1433), `reject_all_auth`, `server_version`, `enable_tls` (default true), `tls_cert`/`tls_key` (optional PEM pair), `host_name`/`domain_name` for NTLM challenges
+- PostgreSQL module toggle (`--enable-postgres`/`ENABLE_POSTGRES`); `[postgres]` config section with `interfaces` (default 0.0.0.0:5432 and [::]:5432), `reject_all_auth`, `server_version`, `enable_tls` (default true), `tls_cert`/`tls_key` (optional PEM pair)
 - Metrics endpoint toggle (`--enable-metrics`/`ENABLE_METRICS`, default off); `[metrics]` config section with `interfaces` (default 127.0.0.1:9154 and [::1]:9154). Serves Prometheus text format (0.0.4) on `/metrics`; counters are incremented centrally in `run_db_handler` (see `prometheus.yml.example` and the commented docker-compose services for scraping)
 
 ### Database
-PostgreSQL is required. The docker-compose setup starts a PostgreSQL 16 service with schema initialization from `postgres-init/` and sqlx migrations in `migrations/`. New columns: `auth.module` distinguishes which honeypot module recorded an attempt (`ssh`, `mysql`).
+PostgreSQL is required. The docker-compose setup starts a PostgreSQL 16 service with schema initialization from `postgres-init/` and sqlx migrations in `migrations/`. New columns: `auth.module` distinguishes which honeypot module recorded an attempt (`ssh`, `mysql`, `mssql`, `postgres`).
 
 ### Security Considerations
 This is defensive security software designed for honeypot deployment:
