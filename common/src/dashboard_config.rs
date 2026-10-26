@@ -27,9 +27,19 @@ pub struct DashboardConfig {
     /// Exposed as a quick toggle in the dashboard hotbar.
     #[serde(default = "default_show_geolocation")]
     pub show_geolocation: bool,
+
+    /// Whether the "Top Activity" section (top IPs / passwords / usernames) is
+    /// shown. When off, the dashboard also skips the top-N aggregate queries
+    /// entirely instead of just hiding the results.
+    #[serde(default = "default_show_top_activity")]
+    pub show_top_activity: bool,
 }
 
 fn default_show_geolocation() -> bool {
+    true
+}
+
+fn default_show_top_activity() -> bool {
     true
 }
 
@@ -38,6 +48,7 @@ impl Default for DashboardConfig {
         Self {
             excluded_ips: Vec::new(),
             show_geolocation: true,
+            show_top_activity: true,
         }
     }
 }
