@@ -49,7 +49,7 @@ docker compose pull
 docker compose up -d && docker compose logs -f ssh-honeypot
 ```
 
-The compose file publishes the honeypot on ports **22** and **2222** of the host, and exposes Postgres on `127.0.0.1:5432` (so the GUIs can connect locally). By default it runs in **logging mode** (`DISABLE_CLI_INTERFACE=true`): it accepts logins and records credentials, but doesn't hand out a shell. Flip that off in `config.toml` to give attackers the full fake-shell experience.
+The compose file publishes the honeypot on ports **22**, **2222**, **3306** (MySQL module) and **1433** (MSSQL module) of the host, and exposes Postgres on `127.0.0.1:5432` (so the GUIs can connect locally). By default it runs in **logging mode** (`DISABLE_CLI_INTERFACE=true`): it accepts logins and records credentials, but doesn't hand out a shell. Flip that off in `config.toml` to give attackers the full fake-shell experience.
 
 A prebuilt image is published automatically to `ghcr.io/lucy-dot-dot/ssh-honeypot:master` on every push to `main`/`master`.
 
@@ -114,6 +114,8 @@ Every option can be set via **CLI flag**, **environment variable**, or **TOML co
 | `--server-id` / `SERVER_ID` | The SSH version string attackers see |
 | `--welcome-message` / `WELCOME_MESSAGE` | The MOTD-style banner |
 | `--hostname` / `HOSTNAME` | Hostname shown in the fake shell prompt |
+| `--bsi-motd` / `BSI_MOTD` | Post-auth MOTD: fake BSI/ZITiS investigation notice — its EVIDENCE RECORD ID embeds the year and the real auth-record UUID |
+| `--nsa-motd` / `NSA_MOTD` | Post-auth MOTD: fake NSA/CSS classified collection notice |
 | `--authentication-banner` / `AUTHENTICATION_BANNER` | Pre-auth banner text |
 | `--base-tar-gz-path` / `BASE_TAR_GZ_PATH` | Custom fake-filesystem archive |
 | `--key-folder` / `KEY_FOLDER` | SSH server key directory |

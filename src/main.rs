@@ -10,11 +10,11 @@ use ssh_honeypot::ipapi;
 use std::borrow::Cow;
 use std::fs::OpenOptions;
 
-use ssh_honeypot::abuseipdb::Client as AbuseIpClient;
 use crate::server::SshServerHandler;
 use russh::server::Server as _;
 use russh::*;
 use shell::filesystem::fs2::FileSystem;
+use ssh_honeypot::abuseipdb::Client as AbuseIpClient;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -49,6 +49,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     log::info!("Disable CLI interface: {}", app.disable_cli_interface);
     log::info!("Disable exec requests: {}", app.disable_exec);
+    log::info!(
+        "MySQL module: {}",
+        if app.mysql.enabled {
+            format!(
+                "enabled on {:?} (reject_all_auth: {}, server_version: {})",
+                app.mysql.interfaces, app.mysql.reject_all_auth, app.mysql.server_version
+            )
+        } else {
+            "disabled".to_string()
+        }
+    );
+    log::info!(
+        "MSSQL module: {}",
+        if app.mssql.enabled {
+            format!(
+                "enabled on {:?} (reject_all_auth: {}, server_version: {}, host_name: {})",
+                app.mssql.interfaces,
+                app.mssql.reject_all_auth,
+                app.mssql.server_version,
+                app.mssql.host_name
+            )
+        } else {
+            "disabled".to_string()
+        }
+    );
     log::info!(
         "Authentication BANNER: {}",
         app.authentication_banner.clone().unwrap_or_default()
@@ -128,7 +153,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             key: Preferred::DEFAULT.key,
             host_key_certificates: Preferred::DEFAULT.host_key_certificates,
             cipher: Preferred::DEFAULT.cipher,
-            mac: Preferred::DEFAULT.mac,
+            mac: Cow::Borrowed(&[
+                // russh::negotiation::SAFE_HMAC_ORDER
+                mac::HMAC_SHA512_ETM,
+                mac::HMAC_SHA256_ETM,
+                mac::HMAC_SHA512,
+                mac::HMAC_SHA256,
+                // Old insecure MACs so legacy clients can connect
+                mac::HMAC_SHA1_ETM,
+                mac::HMAC_SHA1,
+            ]),
             compression: Preferred::DEFAULT.compression,
         },
         ..Default::default()
@@ -282,6 +316,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.reject_all_auth,
             ip_api_client.clone(),
             app.welcome_message.clone(),
+            app.bsi_motd,
+            app.nsa_motd,
             app.hostname.clone(),
             // Does not work the intended way because of NATting on dockers side if DNAT port != target port
             interface.port(),
@@ -316,6 +352,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
         }))
+    }
+
+    // Start the MySQL module if enabled
+    if app.mysql.enabled {
+        for interface in app.mysql.interfaces.clone() {
+            let server = mysql_honeypot::server::MysqlServer::new(
+                db_tx.clone(),
+                app.mysql.clone(),
+                abuse_ip_client.clone(),
+                ip_api_client.clone(),
+            );
+            let (disable_reuseaddr, disable_reuseport) =
+                (app.disable_so_reuseaddr, app.disable_so_reuseport);
+            tasks.push(tokio::spawn(async move {
+                match create_socket_with_reuse(interface, disable_reuseaddr, disable_reuseport) {
+                    Ok(listener) => {
+                        log::info!("Starting MySQL honeypot on {}", interface);
+                        server.run_on_listener(listener).await;
+                    }
+                    Err(err) => {
+                        log::error!("Failed to bind MySQL honeypot on {}: {:?}", interface, err);
+                    }
+                }
+            }));
+        }
+    }
+
+    // Start the MSSQL module if enabled
+    if app.mssql.enabled {
+        for interface in app.mssql.interfaces.clone() {
+            let server = mssql_honeypot::server::MssqlServer::new(
+                db_tx.clone(),
+                app.mssql.clone(),
+                abuse_ip_client.clone(),
+                ip_api_client.clone(),
+            );
+            let (disable_reuseaddr, disable_reuseport) =
+                (app.disable_so_reuseaddr, app.disable_so_reuseport);
+            tasks.push(tokio::spawn(async move {
+                match create_socket_with_reuse(interface, disable_reuseaddr, disable_reuseport) {
+                    Ok(listener) => {
+                        log::info!("Starting MSSQL honeypot on {}", interface);
+                        server.run_on_listener(listener).await;
+                    }
+                    Err(err) => {
+                        log::error!("Failed to bind MSSQL honeypot on {}: {:?}", interface, err);
+                    }
+                }
+            }));
+        }
     }
 
     // Ctrl+C handler for graceful shutdown

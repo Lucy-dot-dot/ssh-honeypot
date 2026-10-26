@@ -15,10 +15,12 @@ name = "report-generator"
 path = "src/bin/report_generator.rs"
 
 [workspace]
-members = ["desktop", "common", "shell"]
+members = ["desktop", "common", "shell", "mysql", "mssql"]
 
 [workspace.dependencies]
 common = { path = "common" }
+mysql-honeypot = { path = "mysql" }
+mssql-honeypot = { path = "mssql" }
 shell = { path = "shell" }
 tokio = "1.53.1"
 async-trait = "0.1.92"
@@ -34,12 +36,19 @@ rand = "0.10.2"
 hex = "0.4.3"
 sha2 = "0.11.0"
 reqwest = "0.13.4"
+uuid = { version = "1.26.1", features = ["v4"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls-pemfile = "2"
+rcgen = "0.14"
 
 [dependencies]
 common = { workspace = true }
 shell = { workspace = true }
+mysql-honeypot = { workspace = true }
+mssql-honeypot = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
-russh = "0.63.3"
+russh = "0.65.0"
 log = { workspace = true }
 env_logger = "0.11.11"
 async-trait = { workspace = true }
@@ -50,15 +59,19 @@ serde = { workspace = true }
 toml = { workspace = true }
 directories = { workspace = true }
 rand = { workspace = true }
-russh-sftp = "2.4.0"
+russh-sftp = "3.0.1"
 hex = { workspace = true }
 sha2 = { workspace = true }
 infer = "0.22.0"
-reqwest = { workspace = true, features = ["brotli", "deflate", "json", "query"] }
-webpki-root-certs = "1.0.9"
 serde_json = { workspace = true }
 ssh-encoding = "0.3.0-rc.9"
+uuid = { workspace = true }
 
 [profile.release]
 lto = true
 strip = true
+
+# Optimize dependencies in debug builds. Crypto code (rsa keygen, russh, sqlx)
+# is unusably slow otherwise while our own crates still compile fast.
+[profile.dev.package."*"]
+opt-level = 3

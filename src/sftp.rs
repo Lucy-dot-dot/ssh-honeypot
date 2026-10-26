@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
-use ssh_honeypot::db::DbMessage;
 use shell::filesystem::fs2::{FileContent, FileSystem};
+use ssh_honeypot::db::DbMessage;
 
 /*
 NOTE: This SFTP implementation is backed by a virtual filesystem (fs2).
@@ -330,11 +330,7 @@ impl Handler for HoneypotSftpSession {
                 }
             };
 
-            let filename = filepath
-                .rsplit('/')
-                .next()
-                .unwrap_or(&filepath)
-                .to_string();
+            let filename = filepath.rsplit('/').next().unwrap_or(&filepath).to_string();
 
             // Calculate SHA256 hash
             let hasher = Sha256::digest(&data);
@@ -353,19 +349,19 @@ impl Handler for HoneypotSftpSession {
                     let _ = fs_guard.create_file(&filepath);
                 }
 
-                if let Ok(entry) = fs_guard.get_file_mut(&filepath) {
-                    if let Some(FileContent::RegularFile(file_data)) = &mut entry.content {
-                        let file_data = Arc::make_mut(file_data);
-                        let required_size = (offset as usize) + data.len();
-                        if file_data.len() < required_size {
-                            file_data.resize(required_size, 0);
-                        }
-                        let start = offset as usize;
-                        let end = start + data.len();
-                        file_data[start..end].copy_from_slice(&data);
-
-                        entry.inode.i_size_lo = file_data.len() as u32;
+                if let Ok(entry) = fs_guard.get_file_mut(&filepath)
+                    && let Some(FileContent::RegularFile(file_data)) = &mut entry.content
+                {
+                    let file_data = Arc::make_mut(file_data);
+                    let required_size = (offset as usize) + data.len();
+                    if file_data.len() < required_size {
+                        file_data.resize(required_size, 0);
                     }
+                    let start = offset as usize;
+                    let end = start + data.len();
+                    file_data[start..end].copy_from_slice(&data);
+
+                    entry.inode.i_size_lo = file_data.len() as u32;
                 }
             }
 
@@ -874,7 +870,12 @@ impl Handler for HoneypotSftpSession {
                     language_tag: "".to_string(),
                 }),
                 Err(e) => {
-                    log::warn!("rename: failed to move '{}' -> '{}': {}", old_path, new_path, e);
+                    log::warn!(
+                        "rename: failed to move '{}' -> '{}': {}",
+                        old_path,
+                        new_path,
+                        e
+                    );
                     Ok(Status {
                         id,
                         status_code: StatusCode::Failure,
@@ -930,11 +931,7 @@ impl Handler for HoneypotSftpSession {
         let fs = self.fs.clone();
 
         async move {
-            log::info!(
-                "SFTP symlink request: {} -> {}",
-                link_path,
-                target_path
-            );
+            log::info!("SFTP symlink request: {} -> {}", link_path, target_path);
 
             let mut fs_guard = fs.write().await;
             match fs_guard.create_symlink(&link_path, &target_path) {
@@ -972,9 +969,7 @@ mod tests {
     //  Test helpers
     // ═══════════════════════════════════════════════════════════════
 
-    fn create_test_session(
-        fs: FileSystem,
-    ) -> (HoneypotSftpSession, mpsc::Receiver<DbMessage>) {
+    fn create_test_session(fs: FileSystem) -> (HoneypotSftpSession, mpsc::Receiver<DbMessage>) {
         let (db_tx, db_rx) = mpsc::channel(32);
         let fs = Arc::new(RwLock::new(fs));
         let session = HoneypotSftpSession::new(db_tx, fs, "test-auth-id".to_string());
@@ -1108,7 +1103,12 @@ mod tests {
 
         let flags = OpenFlags::WRITE | OpenFlags::CREATE;
         let handle = session
-            .open(1, "/home/test.txt".to_string(), flags, FileAttributes::default())
+            .open(
+                1,
+                "/home/test.txt".to_string(),
+                flags,
+                FileAttributes::default(),
+            )
             .await
             .unwrap();
 
@@ -1404,8 +1404,7 @@ mod tests {
 
         // Desired: read should return the bytes actually stored in the VFS
         assert_eq!(
-            result.data,
-            b"Hello, SFTP!",
+            result.data, b"Hello, SFTP!",
             "read should return actual file content, not zeros"
         );
     }
@@ -1439,8 +1438,7 @@ mod tests {
         let result = session.read(2, handle.handle, 4, 4).await.unwrap();
 
         assert_eq!(
-            result.data,
-            b"4567",
+            result.data, b"4567",
             "read(offset=4, len=4) should return the correct slice"
         );
     }
@@ -1492,8 +1490,7 @@ mod tests {
         let dir = session.opendir(1, "/data".to_string()).await.unwrap();
         let result = session.readdir(2, dir.handle).await.unwrap();
 
-        let names: Vec<&str> =
-            result.files.iter().map(|f| f.filename.as_str()).collect();
+        let names: Vec<&str> = result.files.iter().map(|f| f.filename.as_str()).collect();
 
         // Desired: readdir should list the real entries in the directory
         assert!(
@@ -1520,11 +1517,13 @@ mod tests {
 
         let (mut session, _rx) = create_test_session(fs);
 
-        let dir = session.opendir(1, "/unique_name".to_string()).await.unwrap();
+        let dir = session
+            .opendir(1, "/unique_name".to_string())
+            .await
+            .unwrap();
         let result = session.readdir(2, dir.handle).await.unwrap();
 
-        let names: Vec<&str> =
-            result.files.iter().map(|f| f.filename.as_str()).collect();
+        let names: Vec<&str> = result.files.iter().map(|f| f.filename.as_str()).collect();
 
         // The old hardcoded impl returned "config" and "data" — those should
         // never appear in an empty directory.
@@ -1547,8 +1546,7 @@ mod tests {
         let dir = session.opendir(1, "/d".to_string()).await.unwrap();
         let result = session.readdir(2, dir.handle).await.unwrap();
 
-        let names: Vec<&str> =
-            result.files.iter().map(|f| f.filename.as_str()).collect();
+        let names: Vec<&str> = result.files.iter().map(|f| f.filename.as_str()).collect();
 
         // Per SFTP spec, readdir should include "." and ".."
         assert!(names.contains(&"."), "readdir should include '.'");
@@ -1663,11 +1661,7 @@ mod tests {
         let (mut session, _rx) = create_test_session(fs);
 
         let status = session
-            .rename(
-                1,
-                "/old_name.txt".to_string(),
-                "/new_name.txt".to_string(),
-            )
+            .rename(1, "/old_name.txt".to_string(), "/new_name.txt".to_string())
             .await
             .unwrap();
         assert_eq!(status.status_code, StatusCode::Ok);
@@ -1748,10 +1742,7 @@ mod tests {
     async fn test_realpath_preserves_absolute_path() {
         let (mut session, _rx) = create_test_session(FileSystem::default());
 
-        let result = session
-            .realpath(1, "/abs/path".to_string())
-            .await
-            .unwrap();
+        let result = session.realpath(1, "/abs/path".to_string()).await.unwrap();
 
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].filename, "/abs/path");
@@ -1795,10 +1786,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = session
-            .read(5, read_handle.handle, 0, 1024)
-            .await
-            .unwrap();
+        let result = session.read(5, read_handle.handle, 0, 1024).await.unwrap();
 
         assert_eq!(
             result.data, payload,
@@ -1833,16 +1821,20 @@ mod tests {
             session.close(4, h.handle).await.unwrap();
         }
 
-        let dir = session
-            .opendir(5, "/workspace".to_string())
-            .await
-            .unwrap();
+        let dir = session.opendir(5, "/workspace".to_string()).await.unwrap();
         let result = session.readdir(6, dir.handle).await.unwrap();
-        let names: Vec<&str> =
-            result.files.iter().map(|f| f.filename.as_str()).collect();
+        let names: Vec<&str> = result.files.iter().map(|f| f.filename.as_str()).collect();
 
-        assert!(names.contains(&"a.txt"), "readdir should list a.txt, got: {:?}", names);
-        assert!(names.contains(&"b.txt"), "readdir should list b.txt, got: {:?}", names);
+        assert!(
+            names.contains(&"a.txt"),
+            "readdir should list a.txt, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"b.txt"),
+            "readdir should list b.txt, got: {:?}",
+            names
+        );
     }
 
     #[tokio::test]
@@ -1877,18 +1869,19 @@ mod tests {
         assert_eq!(st.attrs.size, Some(payload.len() as u64));
 
         // readdir on parent should list the file
-        let dir = session
-            .opendir(6, "/logs".to_string())
-            .await
-            .unwrap();
+        let dir = session.opendir(6, "/logs".to_string()).await.unwrap();
         let listing = session.readdir(7, dir.handle).await.unwrap();
-        let names: Vec<&str> =
-            listing.files.iter().map(|f| f.filename.as_str()).collect();
+        let names: Vec<&str> = listing.files.iter().map(|f| f.filename.as_str()).collect();
         assert!(names.contains(&"app.log"));
 
         // read back
         let rh = session
-            .open(8, "/logs/app.log".to_string(), OpenFlags::READ, FileAttributes::default())
+            .open(
+                8,
+                "/logs/app.log".to_string(),
+                OpenFlags::READ,
+                FileAttributes::default(),
+            )
             .await
             .unwrap();
         let data = session.read(9, rh.handle, 0, 1024).await.unwrap();
@@ -1928,13 +1921,22 @@ mod tests {
 
         // Rename
         session
-            .rename(4, "/tmp/original.txt".to_string(), "/tmp/renamed.txt".to_string())
+            .rename(
+                4,
+                "/tmp/original.txt".to_string(),
+                "/tmp/renamed.txt".to_string(),
+            )
             .await
             .unwrap();
 
         // Read from the new path
         let rh = session
-            .open(5, "/tmp/renamed.txt".to_string(), OpenFlags::READ, FileAttributes::default())
+            .open(
+                5,
+                "/tmp/renamed.txt".to_string(),
+                OpenFlags::READ,
+                FileAttributes::default(),
+            )
             .await
             .unwrap();
         let data = session.read(6, rh.handle, 0, 1024).await.unwrap();
@@ -1965,7 +1967,10 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            session.write(3, h.handle.clone(), 0, b"x".to_vec()).await.unwrap();
+            session
+                .write(3, h.handle.clone(), 0, b"x".to_vec())
+                .await
+                .unwrap();
             session.close(4, h.handle).await.unwrap();
         }
 
@@ -1978,8 +1983,7 @@ mod tests {
         // readdir should show the remaining two, not the deleted one
         let dir = session.opendir(6, "/docs".to_string()).await.unwrap();
         let result = session.readdir(7, dir.handle).await.unwrap();
-        let names: Vec<&str> =
-            result.files.iter().map(|f| f.filename.as_str()).collect();
+        let names: Vec<&str> = result.files.iter().map(|f| f.filename.as_str()).collect();
 
         assert!(names.contains(&"keep.txt"));
         assert!(names.contains(&"also_keep.txt"));
@@ -2004,14 +2008,28 @@ mod tests {
             .unwrap();
 
         // Write three non-contiguous chunks
-        session.write(2, h.handle.clone(), 0, b"AAAA".to_vec()).await.unwrap();
-        session.write(3, h.handle.clone(), 10, b"BBBB".to_vec()).await.unwrap();
-        session.write(4, h.handle.clone(), 20, b"CCCC".to_vec()).await.unwrap();
+        session
+            .write(2, h.handle.clone(), 0, b"AAAA".to_vec())
+            .await
+            .unwrap();
+        session
+            .write(3, h.handle.clone(), 10, b"BBBB".to_vec())
+            .await
+            .unwrap();
+        session
+            .write(4, h.handle.clone(), 20, b"CCCC".to_vec())
+            .await
+            .unwrap();
         session.close(5, h.handle).await.unwrap();
 
         // Read the whole file back
         let rh = session
-            .open(6, "/tmp/chunks.bin".to_string(), OpenFlags::READ, FileAttributes::default())
+            .open(
+                6,
+                "/tmp/chunks.bin".to_string(),
+                OpenFlags::READ,
+                FileAttributes::default(),
+            )
             .await
             .unwrap();
         let data = session.read(7, rh.handle, 0, 1024).await.unwrap();
@@ -2045,7 +2063,10 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            session.write(3, h.handle.clone(), 0, b"data".to_vec()).await.unwrap();
+            session
+                .write(3, h.handle.clone(), 0, b"data".to_vec())
+                .await
+                .unwrap();
             session.close(4, h.handle).await.unwrap();
         }
 
@@ -2110,7 +2131,12 @@ mod tests {
 
         // Read just the written portion
         let rh = session
-            .open(4, "/tmp/sparse.bin".to_string(), OpenFlags::READ, FileAttributes::default())
+            .open(
+                4,
+                "/tmp/sparse.bin".to_string(),
+                OpenFlags::READ,
+                FileAttributes::default(),
+            )
             .await
             .unwrap();
 
@@ -2161,7 +2187,10 @@ mod tests {
         let (mut session, _rx) = create_test_session(fs);
 
         let link_result = session.lstat(1, "/dir/link".to_string()).await.unwrap();
-        let target_result = session.lstat(2, "/dir/target.txt".to_string()).await.unwrap();
+        let target_result = session
+            .lstat(2, "/dir/target.txt".to_string())
+            .await
+            .unwrap();
 
         // lstat should not follow the symlink — both return attrs successfully
         assert!(link_result.attrs.size.is_some());
@@ -2188,7 +2217,12 @@ mod tests {
 
         // Write some data so size is meaningful
         session
-            .write(2, handle.handle.clone(), 0, b"100_bytes_of_payload_data_here_____________________!".to_vec())
+            .write(
+                2,
+                handle.handle.clone(),
+                0,
+                b"100_bytes_of_payload_data_here_____________________!".to_vec(),
+            )
             .await
             .unwrap();
 
@@ -2200,9 +2234,15 @@ mod tests {
     async fn test_fstat_returns_default_for_unknown_handle() {
         let (mut session, _rx) = create_session_with_tmp();
 
-        let result = session.fstat(1, "nonexistent_handle".to_string()).await.unwrap();
-        // Unknown handle should still return Ok with default attrs
-        assert!(result.attrs.size.is_some());
+        let result = session
+            .fstat(1, "nonexistent_handle".to_string())
+            .await
+            .unwrap();
+        // Unknown handle should still return Ok with default attrs.
+        // Since russh-sftp 2.4.0, FileAttributes::default() derives all
+        // fields as None (omitted attributes).
+        assert_eq!(result.attrs.size, None);
+        assert_eq!(result.attrs.permissions, None);
     }
 
     #[tokio::test]
@@ -2220,13 +2260,21 @@ mod tests {
 
         let stat_result = session.stat(1, "/home/file".to_string()).await.unwrap();
         let handle = session
-            .open(2, "/home/file".to_string(), OpenFlags::READ, FileAttributes::default())
+            .open(
+                2,
+                "/home/file".to_string(),
+                OpenFlags::READ,
+                FileAttributes::default(),
+            )
             .await
             .unwrap();
         let fstat_result = session.fstat(3, handle.handle).await.unwrap();
 
         assert_eq!(stat_result.attrs.size, fstat_result.attrs.size);
-        assert_eq!(stat_result.attrs.permissions, fstat_result.attrs.permissions);
+        assert_eq!(
+            stat_result.attrs.permissions,
+            fstat_result.attrs.permissions
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -2243,7 +2291,10 @@ mod tests {
         let mut attrs = FileAttributes::default();
         attrs.permissions = Some(0o100600);
 
-        let status = session.setstat(1, "/file.txt".to_string(), attrs).await.unwrap();
+        let status = session
+            .setstat(1, "/file.txt".to_string(), attrs)
+            .await
+            .unwrap();
         assert_eq!(status.status_code, StatusCode::Ok);
 
         let guard = session.fs.read().await;
@@ -2262,7 +2313,10 @@ mod tests {
         attrs.uid = Some(1000);
         attrs.gid = Some(1000);
 
-        session.setstat(1, "/file.txt".to_string(), attrs).await.unwrap();
+        session
+            .setstat(1, "/file.txt".to_string(), attrs)
+            .await
+            .unwrap();
 
         let guard = session.fs.read().await;
         let entry = guard.get_file("/file.txt").unwrap();
@@ -2280,7 +2334,10 @@ mod tests {
         let mut attrs = FileAttributes::default();
         attrs.mtime = Some(1234567890);
 
-        session.setstat(1, "/file.txt".to_string(), attrs).await.unwrap();
+        session
+            .setstat(1, "/file.txt".to_string(), attrs)
+            .await
+            .unwrap();
 
         let guard = session.fs.read().await;
         let entry = guard.get_file("/file.txt").unwrap();
@@ -2320,7 +2377,10 @@ mod tests {
         attrs.permissions = Some(0o100755);
         attrs.uid = Some(42);
 
-        let status = session.fsetstat(2, handle.handle.clone(), attrs).await.unwrap();
+        let status = session
+            .fsetstat(2, handle.handle.clone(), attrs)
+            .await
+            .unwrap();
         assert_eq!(status.status_code, StatusCode::Ok);
 
         let guard = session.fs.read().await;
@@ -2365,7 +2425,10 @@ mod tests {
 
         let (mut session, _rx) = create_test_session(fs);
 
-        let result = session.readlink(1, "/regular.txt".to_string()).await.unwrap();
+        let result = session
+            .readlink(1, "/regular.txt".to_string())
+            .await
+            .unwrap();
         // Non-symlink returns a dummy/empty entry
         assert_eq!(result.files.len(), 1);
         assert!(result.files[0].filename.is_empty());
@@ -2375,7 +2438,10 @@ mod tests {
     async fn test_readlink_returns_empty_for_missing_path() {
         let (mut session, _rx) = create_test_session(FileSystem::default());
 
-        let result = session.readlink(1, "/no_such_link".to_string()).await.unwrap();
+        let result = session
+            .readlink(1, "/no_such_link".to_string())
+            .await
+            .unwrap();
         assert_eq!(result.files.len(), 1);
         assert!(result.files[0].filename.is_empty());
     }
@@ -2413,7 +2479,11 @@ mod tests {
         let (mut session, _rx) = create_test_session(FileSystem::default());
 
         let status = session
-            .symlink(1, "/nonexistent_dir/link".to_string(), "/target".to_string())
+            .symlink(
+                1,
+                "/nonexistent_dir/link".to_string(),
+                "/target".to_string(),
+            )
             .await
             .unwrap();
         assert_eq!(status.status_code, StatusCode::Failure);
@@ -2448,12 +2518,19 @@ mod tests {
 
         // Create symlink
         session
-            .symlink(1, "/home/shortcut".to_string(), "/home/original.txt".to_string())
+            .symlink(
+                1,
+                "/home/shortcut".to_string(),
+                "/home/original.txt".to_string(),
+            )
             .await
             .unwrap();
 
         // Read it back
-        let result = session.readlink(2, "/home/shortcut".to_string()).await.unwrap();
+        let result = session
+            .readlink(2, "/home/shortcut".to_string())
+            .await
+            .unwrap();
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].filename, "/home/original.txt");
     }

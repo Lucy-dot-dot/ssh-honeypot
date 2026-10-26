@@ -1,5 +1,7 @@
 use crate::paths::PathManager;
 use clap::{ArgAction, Parser};
+use mssql_honeypot::{MssqlConfig, MssqlSettings};
+use mysql_honeypot::{MysqlConfig, MysqlSettings};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
@@ -34,6 +36,10 @@ pub struct Config {
     pub server_id: Option<String>,
     pub welcome_message: Option<String>,
     pub hostname: Option<String>,
+    pub bsi_motd: Option<bool>,
+    pub nsa_motd: Option<bool>,
+    pub mysql: Option<MysqlConfig>,
+    pub mssql: Option<MssqlConfig>,
 }
 
 impl Default for Config {
@@ -58,6 +64,10 @@ impl Default for Config {
             server_id: None,
             welcome_message: None,
             hostname: None,
+            bsi_motd: None,
+            nsa_motd: None,
+            mysql: None,
+            mssql: None,
         }
     }
 }
@@ -154,6 +164,23 @@ pub struct CliArgs {
     /// Hostname displayed in shell prompt and commands (default: "server01")
     #[arg(long = "hostname", env = "HOSTNAME")]
     pub hostname: Option<String>,
+
+    /// Show a post-auth MOTD imitating a German BSI/ZITiS investigation notice.
+    /// The EVIDENCE RECORD ID shown contains the year and the UUID of the recorded auth attempt
+    #[arg(long = "bsi-motd", env = "BSI_MOTD", action = ArgAction::SetTrue)]
+    pub bsi_motd: bool,
+
+    /// Show a post-auth MOTD imitating an NSA/CSS classified collection notice
+    #[arg(long = "nsa-motd", env = "NSA_MOTD", action = ArgAction::SetTrue)]
+    pub nsa_motd: bool,
+
+    /// Enable the MySQL honeypot module (listens on the [mysql] interfaces, default port 3306)
+    #[arg(long = "enable-mysql", env = "ENABLE_MYSQL", action = ArgAction::SetTrue)]
+    pub enable_mysql: bool,
+
+    /// Enable the MSSQL honeypot module (listens on the [mssql] interfaces, default port 1433)
+    #[arg(long = "enable-mssql", env = "ENABLE_MSSQL", action = ArgAction::SetTrue)]
+    pub enable_mssql: bool,
 }
 
 #[derive(Debug)]
@@ -178,6 +205,10 @@ pub struct App {
     pub server_id: String,
     pub welcome_message: String,
     pub hostname: String,
+    pub bsi_motd: bool,
+    pub nsa_motd: bool,
+    pub mysql: MysqlSettings,
+    pub mssql: MssqlSettings,
 }
 
 impl App {
@@ -333,6 +364,24 @@ impl App {
                 .hostname
                 .or(config.hostname)
                 .unwrap_or_else(|| "server01".to_string()),
+
+            bsi_motd: Self::merge_clap_boolean_with_config(cli.bsi_motd, config.bsi_motd),
+
+            nsa_motd: Self::merge_clap_boolean_with_config(cli.nsa_motd, config.nsa_motd),
+
+            mysql: {
+                let mysql_config = config.mysql.unwrap_or_default();
+                let mysql_enabled =
+                    Self::merge_clap_boolean_with_config(cli.enable_mysql, mysql_config.enabled);
+                mysql_config.resolve(mysql_enabled)
+            },
+
+            mssql: {
+                let mssql_config = config.mssql.unwrap_or_default();
+                let mssql_enabled =
+                    Self::merge_clap_boolean_with_config(cli.enable_mssql, mssql_config.enabled);
+                mssql_config.resolve(mssql_enabled)
+            },
         }
     }
 

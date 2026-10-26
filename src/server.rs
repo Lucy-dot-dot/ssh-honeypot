@@ -1,7 +1,10 @@
-use ssh_honeypot::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
-use ssh_honeypot::db::DbMessage;
-use ssh_honeypot::ipapi;
 use crate::sftp::HoneypotSftpSession;
+use async_trait::async_trait;
+use chrono::{DateTime, Local, Utc};
+use rand::{Rng, RngExt, rng};
+use russh::keys::HashAlg;
+use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session, VerifiedPublicKey};
+use russh::{Channel, ChannelId, ChannelMsg, Error, server};
 use shell::commands::{
     CatCommand, CdCommand, ColonCommand, CommandContext, CommandDispatcher, CurlCommand,
     DateCommand, EchoCommand, ExitCommand, ExportCommand, FalseCommand, FreeCommand, IdCommand,
@@ -9,18 +12,56 @@ use shell::commands::{
     UnsetCommand, WgetCommand, WhoamiCommand,
 };
 use shell::filesystem::fs2::FileSystem;
-use async_trait::async_trait;
-use chrono::{DateTime, Local, Utc};
-use rand::{Rng, RngExt, rng};
-use russh::keys::{HashAlg, PublicKey};
-use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session};
-use russh::{Channel, ChannelId, ChannelMsg, Error, server};
 use ssh_encoding::Error as SshEncodingError;
+use ssh_honeypot::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
+use ssh_honeypot::db::DbMessage;
+use ssh_honeypot::ipapi;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use uuid::Uuid;
+
+/// Post-auth MOTD imitating a German BSI/ZITiS investigation notice.
+/// `{year}` and `{auth_id}` are filled in per session.
+const BSI_MOTD_TEMPLATE: &str = r#"
+*******************************************************************************
+                      BUNDESAMT FÜR SICHERHEIT IN DER INFORMATIONSHYGIENE (BSI)
+                    ZENTRALE STELLE FÜR INFORMATIONSTECHNIK IM SICHERHEITSBEREICH
+                                                                   (ZITiS)
+
+WARNUNG / WARNING:
+Dieses System ist Teil der koordinierten Datenerfassungsoperation #43190
+gemäß § 5 BSI-Gesetz (BSIG) i.V.m. § 100a StPO.
+
+Ihre Verbindungsdaten (IP, Ports, TCP-Fingerprint, Payload-Signaturen)
+sowie kryptografische Schlüssel-Identifikatoren werden in Echtzeit protokolliert,
+forensisch gesichert und an das Bundeskriminalamt (BKA) übermittelt.
+
+UNAUTHORIZED ACCESS TERMINATION PROTOCOL INITIATED.
+EVIDENCE RECORD ID: DE-BSI-{year}-09A-{auth_id}
+*******************************************************************************
+"#;
+
+/// Post-auth MOTD imitating an NSA/CSS classified collection notice.
+const NSA_MOTD: &str = r#"
+===============================================================================
+[TOP SECRET // COMINT // NOFORN // ORCON]
+NATIONAL SECURITY AGENCY / CSS // UNITED STATES CYBER COMMAND
+SPECIAL SOURCE OPERATIONS - COLLECTION NODE ID: US-984XN-DE-04
+===============================================================================
+
+WARNING: UNAUTHORIZED ACCESS PROHIBITED UNDER 18 U.S.C. § 1030 / EO 12333.
+
+COORDINATED SENSOR MESH ACTIVE.
+PAYLOAD ACQUISITION MODE: FULL TELEMETRY STREAM
+SOURCE CONDUIT LOGGED TO TAO/ROC DIRECT INGEST.
+
+SESSION KEY RECORDED. AUTOMATED COUNTER-ENUMERATION PROTOCOL ARMED.
+DISCONNECT IMMEDIATELY TO AVOID FURTHER ESCALATION.
+===============================================================================
+"#;
 
 #[derive(Clone, Default)]
 // Store session data
@@ -55,6 +96,8 @@ pub struct SshHandler {
     reject_all_auth: bool,
     command_dispatcher: CommandDispatcher,
     welcome_message: String,
+    bsi_motd: bool,
+    nsa_motd: bool,
     ip_api_client: Option<Arc<ipapi::Client>>,
 }
 
@@ -91,11 +134,18 @@ impl Handler for SshHandler {
             // Get cached IPAPI data
             let ipapi_data = self.get_ipapi_data().await;
 
-            // Record authentication attempt in database and get the UUID back
+            // Generate the auth record UUID client-side, so the exact id of the
+            // auth table row is known without any database round-trip
+            let auth_uuid = Uuid::new_v4();
+            self.auth_id = Some(auth_uuid.to_string());
+
+            // Record authentication attempt in database
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             match self
                 .db_tx
                 .send(DbMessage::RecordAuth {
+                    id: auth_uuid,
+                    module: ssh_honeypot::db::Module::Ssh,
                     timestamp: Utc::now(),
                     ip: peer_str,
                     username: user.to_string(),
@@ -112,7 +162,6 @@ impl Handler for SshHandler {
                 Ok(_) => match response_rx.await {
                     Ok(Ok(auth_id)) => {
                         log::trace!("Recorded auth with UUID: {}", auth_id);
-                        self.auth_id = Some(auth_id);
                     }
                     Ok(Err(e)) => {
                         log::error!("Database error recording auth: {}", e);
@@ -147,7 +196,7 @@ impl Handler for SshHandler {
     fn auth_publickey(
         &mut self,
         user: &str,
-        public_key: &PublicKey,
+        public_key: VerifiedPublicKey<'_>,
     ) -> impl Future<Output = Result<Auth, Self::Error>> + Send {
         async move {
             self.user = Some(user.to_string());
@@ -155,7 +204,13 @@ impl Handler for SshHandler {
             if !self.disable_cli_interface {
                 self.ensure_user_home_exists().await;
             }
-            let key_str = format!("{}", public_key.key_data().fingerprint(HashAlg::Sha512));
+            let key_str = format!(
+                "{}",
+                public_key
+                    .public_key
+                    .key_data()
+                    .fingerprint(HashAlg::Sha512)
+            );
             let peer_str = self.peer.ip().to_string();
 
             // We'll get the actual UUID back from the database
@@ -173,11 +228,18 @@ impl Handler for SshHandler {
             // Get cached IPAPI data
             let ipapi_data = self.get_ipapi_data().await;
 
-            // Record authentication attempt in database and get the UUID back
+            // Generate the auth record UUID client-side, so the exact id of the
+            // auth table row is known without any database round-trip
+            let auth_uuid = Uuid::new_v4();
+            self.auth_id = Some(auth_uuid.to_string());
+
+            // Record authentication attempt in database
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             match self
                 .db_tx
                 .send(DbMessage::RecordAuth {
+                    id: auth_uuid,
+                    module: ssh_honeypot::db::Module::Ssh,
                     timestamp: Utc::now(),
                     ip: peer_str,
                     username: user.to_string(),
@@ -194,7 +256,6 @@ impl Handler for SshHandler {
                 Ok(_) => match response_rx.await {
                     Ok(Ok(auth_id)) => {
                         log::trace!("Recorded auth with UUID: {}", auth_id);
-                        self.auth_id = Some(auth_id);
                     }
                     Ok(Err(e)) => {
                         log::error!("Database error recording auth: {}", e);
@@ -572,6 +633,19 @@ impl Handler for SshHandler {
             )
             .await;
 
+            // Send the post-auth MOTD notices (if any are enabled)
+            let motd = self.generate_post_auth_motd();
+            if !motd.is_empty() {
+                self.send_and_log(
+                    session,
+                    channel,
+                    motd.as_bytes(),
+                    "Sent post-auth MOTD to client",
+                    "Failed to send post-auth MOTD to client",
+                )
+                .await;
+            }
+
             // Send prompt
             let prompt = self.session_data.prompt.clone();
             self.send_and_log(
@@ -886,6 +960,33 @@ impl SshHandler {
         None
     }
 
+    /// Build the combined post-auth MOTD text (CRLF line endings) for all
+    /// enabled notices. Returns an empty string when nothing is enabled.
+    fn generate_post_auth_motd(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        if self.bsi_motd {
+            match self.auth_id.as_deref() {
+                Some(auth_id) => parts.push(
+                    BSI_MOTD_TEMPLATE
+                        .replace("{year}", &Local::now().format("%Y").to_string())
+                        .replace("{auth_id}", auth_id),
+                ),
+                None => log::warn!("BSI MOTD enabled but no auth id was recorded for this session"),
+            }
+        }
+
+        if self.nsa_motd {
+            parts.push(NSA_MOTD.to_string());
+        }
+
+        if parts.is_empty() {
+            return String::new();
+        }
+
+        format!("\n{}\n", parts.join("\n").replace('\n', "\r\n"))
+    }
+
     /// Generate a welcome message with randomized system statistics
     fn generate_welcome_message(system_description: &str) -> String {
         let mut rng = rand::rng();
@@ -953,6 +1054,8 @@ pub struct SshServerHandler {
     reject_all_auth: bool,
     ip_api_client: Option<Arc<ipapi::Client>>,
     welcome_message: String,
+    bsi_motd: bool,
+    nsa_motd: bool,
     hostname: String,
 }
 
@@ -1120,6 +1223,8 @@ impl server::Server for SshServerHandler {
             reject_all_auth: self.reject_all_auth,
             command_dispatcher: Self::create_command_dispatcher(),
             welcome_message: self.welcome_message.clone(),
+            bsi_motd: self.bsi_motd,
+            nsa_motd: self.nsa_motd,
             ip_api_client: self.ip_api_client.clone(),
         }
     }
@@ -1196,6 +1301,8 @@ impl SshServerHandler {
         reject_all_auth: bool,
         ip_api_client: Option<Arc<ipapi::Client>>,
         welcome_message: String,
+        bsi_motd: bool,
+        nsa_motd: bool,
         hostname: String,
         local_port: u16,
     ) -> SshServerHandler {
@@ -1211,6 +1318,8 @@ impl SshServerHandler {
             reject_all_auth,
             ip_api_client,
             welcome_message,
+            bsi_motd,
+            nsa_motd,
             hostname,
             local_port,
         }
