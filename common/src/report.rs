@@ -185,6 +185,70 @@ struct AbuseEmailContext {
     top_passwords: Vec<CountRow>,
 }
 
+/// Template context for the generic e-mail draft. Unlike the abuse e-mail it
+/// carries no addressee, no geolocation/ISP data and no AbuseIPDB data — any
+/// recipient already knows their own network and reputation figures — and the
+/// signature is a `signer` placeholder the operator fills in before sending.
+#[derive(Serialize)]
+struct GenericEmailContext {
+    ip: String,
+    signer: String,
+    is_tor: bool,
+    first_seen: String,
+    last_seen: String,
+    total_attempts: usize,
+    unique_usernames: usize,
+    unique_passwords: usize,
+    top_usernames: Vec<CountRow>,
+    top_passwords: Vec<CountRow>,
+}
+
+/// Activity aggregates shared by the abuse e-mail and the generic e-mail
+/// draft, computed from the recorded auth attempts for one IP (ordered
+/// newest first).
+struct EmailSummary {
+    is_tor: bool,
+    first_seen: String,
+    last_seen: String,
+    total_attempts: usize,
+    unique_usernames: usize,
+    unique_passwords: usize,
+    top_usernames: Vec<CountRow>,
+    top_passwords: Vec<CountRow>,
+}
+
+/// Compute the e-mail activity summary for already-fetched `records`
+/// (ordered newest first, so `first()` is the last-seen attempt).
+fn summarize_attempts(records: &[AuthPasswordEnrichedRecord]) -> EmailSummary {
+    // records are ordered DESC: first() is newest, last() is oldest.
+    let first_seen = records
+        .last()
+        .map(|r| r.timestamp.to_rfc3339())
+        .unwrap_or_else(|| "unknown".to_string());
+    let last_seen = records
+        .first()
+        .map(|r| r.timestamp.to_rfc3339())
+        .unwrap_or_else(|| "unknown".to_string());
+    EmailSummary {
+        is_tor: records.first().is_some_and(|r| r.is_tor.unwrap_or(false)),
+        first_seen,
+        last_seen,
+        total_attempts: records.len(),
+        unique_usernames: records
+            .iter()
+            .map(|r| &r.username)
+            .collect::<HashSet<_>>()
+            .len(),
+        unique_passwords: records
+            .iter()
+            .filter_map(|r| r.password.as_ref())
+            .collect::<HashSet<_>>()
+            .len(),
+        top_usernames: count_top(records.iter().map(|r| r.username.clone()), 5),
+        top_passwords: count_top(records.iter().filter_map(|r| r.password.clone()), 5),
+    }
+}
+
 /// Lazily-built, shared minijinja environment holding the report templates.
 ///
 /// Templates are embedded with `include_str!` so the environment is `'static`.
@@ -227,6 +291,11 @@ fn report_env() -> &'static Environment<'static> {
             include_str!("../templates/abuse_email.txt"),
         )
         .expect("abuse_email.txt template is valid");
+        env.add_template(
+            "generic_email.txt",
+            include_str!("../templates/generic_email.txt"),
+        )
+        .expect("generic_email.txt template is valid");
         env
     })
 }
@@ -332,25 +401,7 @@ impl ReportGenerator {
             (None, _) => "no AbuseIPDB data available".to_string(),
         };
 
-        // records are ordered DESC: first() is newest, last() is oldest.
-        let first_seen = records
-            .last()
-            .map(|r| r.timestamp.to_rfc3339())
-            .unwrap_or_else(|| "unknown".to_string());
-        let last_seen = records
-            .first()
-            .map(|r| r.timestamp.to_rfc3339())
-            .unwrap_or_else(|| "unknown".to_string());
-        let unique_usernames = records
-            .iter()
-            .map(|r| &r.username)
-            .collect::<HashSet<_>>()
-            .len();
-        let unique_passwords = records
-            .iter()
-            .filter_map(|r| r.password.as_ref())
-            .collect::<HashSet<_>>()
-            .len();
+        let summary = summarize_attempts(&records);
 
         let context = AbuseEmailContext {
             ip: ip.to_string(),
@@ -360,17 +411,52 @@ impl ReportGenerator {
             asn,
             location,
             abuse_score,
-            is_tor: first.is_tor.unwrap_or(false),
-            first_seen,
-            last_seen,
-            total_attempts: records.len(),
-            unique_usernames,
-            unique_passwords,
-            top_usernames: count_top(records.iter().map(|r| r.username.clone()), 5),
-            top_passwords: count_top(records.iter().filter_map(|r| r.password.clone()), 5),
+            is_tor: summary.is_tor,
+            first_seen: summary.first_seen,
+            last_seen: summary.last_seen,
+            total_attempts: summary.total_attempts,
+            unique_usernames: summary.unique_usernames,
+            unique_passwords: summary.unique_passwords,
+            top_usernames: summary.top_usernames,
+            top_passwords: summary.top_passwords,
         };
 
         let template = report_env().get_template("abuse_email.txt")?;
+        Ok(template.render(context)?)
+    }
+
+    /// Generate a generic e-mail draft for an IP address, suitable for any
+    /// recipient: no addressee and none of the geolocation/ISP or AbuseIPDB
+    /// details the recipient already knows about their own network — just the
+    /// offending IP and the recorded activity summary. `signer` fills the
+    /// signature placeholder (default `[Your name]`, to be replaced before
+    /// sending).
+    pub async fn generate_generic_email(
+        &self,
+        ip: &str,
+        signer: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let records = self.get_auth_data_for_ip(ip).await?;
+        if records.is_empty() {
+            return Ok(format!("No data found for IP address: {ip}"));
+        }
+
+        let summary = summarize_attempts(&records);
+
+        let context = GenericEmailContext {
+            ip: ip.to_string(),
+            signer: signer.unwrap_or("[Your name]").to_string(),
+            is_tor: summary.is_tor,
+            first_seen: summary.first_seen,
+            last_seen: summary.last_seen,
+            total_attempts: summary.total_attempts,
+            unique_usernames: summary.unique_usernames,
+            unique_passwords: summary.unique_passwords,
+            top_usernames: summary.top_usernames,
+            top_passwords: summary.top_passwords,
+        };
+
+        let template = report_env().get_template("generic_email.txt")?;
         Ok(template.render(context)?)
     }
 
@@ -1173,6 +1259,52 @@ mod tests {
         assert!(out.contains("root (1 attempts)"));
         // Tor note is conditional and shown for flagged sources.
         assert!(out.contains("Tor exit node"));
+    }
+
+    fn sample_generic_email_context() -> GenericEmailContext {
+        GenericEmailContext {
+            ip: "203.0.113.5".to_string(),
+            signer: "[Your name]".to_string(),
+            is_tor: true,
+            first_seen: "2024-01-01T00:00:00+00:00".to_string(),
+            last_seen: "2024-01-02T00:00:00+00:00".to_string(),
+            total_attempts: 2,
+            unique_usernames: 2,
+            unique_passwords: 1,
+            top_usernames: vec![CountRow {
+                rank: 1,
+                value: "root".to_string(),
+                count: 1,
+            }],
+            top_passwords: vec![CountRow {
+                rank: 1,
+                value: "hunter2".to_string(),
+                count: 1,
+            }],
+        }
+    }
+
+    #[test]
+    fn templates_parse_and_render_generic_email() {
+        let env = report_env();
+        let tmpl = env
+            .get_template("generic_email.txt")
+            .expect("template exists");
+        let out = tmpl
+            .render(sample_generic_email_context())
+            .unwrap_or_else(|e| panic!("rendering generic_email.txt failed: {e}"));
+        assert!(!out.is_empty(), "generic_email.txt produced empty output");
+        // Key content makes it into the rendered body.
+        assert!(out.contains("203.0.113.5"));
+        // Generic addressee and the signature placeholder.
+        assert!(out.contains("To whom it may concern"));
+        assert!(out.contains("[Your name]"));
+        assert!(out.contains("root (1 attempts)"));
+        // Tor note is conditional and shown for flagged sources.
+        assert!(out.contains("Tor exit node"));
+        // No recipient-specific geolocation/ISP or AbuseIPDB data.
+        assert!(!out.contains("ISP"));
+        assert!(!out.contains("AbuseIPDB"));
     }
 
     #[test]

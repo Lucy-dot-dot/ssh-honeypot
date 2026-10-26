@@ -7,7 +7,9 @@
 //! a session opens a detail window with the associated commands and files.
 //! The IP report window offers an "Abuse e-mail" action that opens a
 //! ready-to-copy abuse report e-mail (To/Subject/body) for the attacker's
-//! network abuse desk.
+//! network abuse desk, plus a "Draft e-mail" action with a generic,
+//! recipient-agnostic draft (no geolocation/ISP or AbuseIPDB data and a
+//! `[Your name]` signature placeholder).
 //!
 //! Reports and details are rendered as floating `egui::Window` panels inside
 //! the same process so the async state is shared safely.
@@ -99,6 +101,17 @@ enum AppEvent {
         ip: String,
         error: String,
     },
+    /// The generic e-mail draft for an IP finished generating.
+    GenericEmailReady {
+        ip: String,
+        subject: String,
+        body: String,
+    },
+    /// Generic e-mail draft generation failed in the background.
+    GenericEmailFailed {
+        ip: String,
+        error: String,
+    },
     /// A Postgres LISTEN/NOTIFY arrived on one of NOTIFY_CHANNELS. The payload
     /// names the channel so the UI can show which feed was touched.
     Notify(&'static str),
@@ -143,6 +156,10 @@ enum Action {
     RefreshWindow(u64),
     /// Open (or focus) the ready-to-copy abuse e-mail composer for an IP.
     OpenAbuseEmail {
+        ip: String,
+    },
+    /// Open (or focus) the generic e-mail draft composer for an IP.
+    OpenEmailDraft {
         ip: String,
     },
 }
@@ -206,6 +223,23 @@ enum OpenWindow {
         copied_at: Option<Instant>,
         open: bool,
     },
+    /// Generic e-mail draft for one IP: like the abuse e-mail, but addressed
+    /// to nobody in particular — no geolocation/ISP or AbuseIPDB data (any
+    /// recipient already knows their own network) and a `[Your name]`
+    /// signature placeholder to fill in before sending. Editable Subject /
+    /// body plus copy-to-clipboard buttons. One per IP, reused when open.
+    EmailDraft {
+        id: u64,
+        ip: String,
+        subject: String,
+        body: String,
+        loading: bool,
+        error: Option<String>,
+        /// When the user last hit a copy button, for the transient "Copied!"
+        /// confirmation.
+        copied_at: Option<Instant>,
+        open: bool,
+    },
 }
 
 impl OpenWindow {
@@ -215,7 +249,8 @@ impl OpenWindow {
             | OpenWindow::Session { id, .. }
             | OpenWindow::ReportedDetails { id, .. }
             | OpenWindow::ReportedManager { id, .. }
-            | OpenWindow::AbuseEmail { id, .. } => *id,
+            | OpenWindow::AbuseEmail { id, .. }
+            | OpenWindow::EmailDraft { id, .. } => *id,
         }
     }
     fn is_open(&self) -> bool {
@@ -224,7 +259,8 @@ impl OpenWindow {
             | OpenWindow::Session { open, .. }
             | OpenWindow::ReportedDetails { open, .. }
             | OpenWindow::ReportedManager { open, .. }
-            | OpenWindow::AbuseEmail { open, .. } => *open,
+            | OpenWindow::AbuseEmail { open, .. }
+            | OpenWindow::EmailDraft { open, .. } => *open,
         }
     }
     fn set_open(&mut self, value: bool) {
@@ -233,7 +269,8 @@ impl OpenWindow {
             | OpenWindow::Session { open, .. }
             | OpenWindow::ReportedDetails { open, .. }
             | OpenWindow::ReportedManager { open, .. }
-            | OpenWindow::AbuseEmail { open, .. } => *open = value,
+            | OpenWindow::AbuseEmail { open, .. }
+            | OpenWindow::EmailDraft { open, .. } => *open = value,
         }
     }
 }
@@ -627,6 +664,90 @@ impl DashboardApp {
         });
     }
 
+    /// Open (or focus) the generic e-mail draft composer for `ip` and kick
+    /// off body generation. Unlike the abuse e-mail there is no RDAP lookup:
+    /// the draft is recipient-agnostic and has no To field to prefill.
+    fn open_email_draft(&mut self, ctx: &egui::Context, ip: String) {
+        // Reuse an existing draft window for this IP instead of stacking
+        // duplicates; reopening it also regenerates the body.
+        let existing = self
+            .open_windows
+            .iter_mut()
+            .position(|w| matches!(w, OpenWindow::EmailDraft { ip: i, .. } if i == &ip));
+        let idx = match existing {
+            Some(idx) => {
+                if let OpenWindow::EmailDraft { open, subject, .. } = &mut self.open_windows[idx] {
+                    *open = true;
+                    if subject.is_empty() {
+                        *subject = format!("Report: unauthorized SSH activity from {ip}");
+                    }
+                }
+                idx
+            }
+            None => {
+                let id = self.next_window_id;
+                self.next_window_id += 1;
+                self.open_windows.push(OpenWindow::EmailDraft {
+                    id,
+                    ip: ip.clone(),
+                    subject: format!("Report: unauthorized SSH activity from {ip}"),
+                    body: String::new(),
+                    loading: true,
+                    error: None,
+                    copied_at: None,
+                    open: true,
+                });
+                self.focused_window_id = Some(id);
+                self.open_windows.len() - 1
+            }
+        };
+        if let OpenWindow::EmailDraft {
+            loading,
+            error,
+            body,
+            ..
+        } = &mut self.open_windows[idx]
+        {
+            *loading = true;
+            *error = None;
+            body.clear();
+        }
+        if self.pool.is_none() {
+            if let OpenWindow::EmailDraft { loading, error, .. } = &mut self.open_windows[idx] {
+                *loading = false;
+                *error = Some("Not connected to the database.".to_string());
+            }
+            return;
+        }
+        self.spawn_email_draft(ctx, ip);
+    }
+
+    /// Kick off the background generic e-mail draft generation for an IP:
+    /// activity summary only, with the `[Your name]` signature placeholder.
+    fn spawn_email_draft(&self, ctx: &egui::Context, ip: String) {
+        let Some(pool) = self.pool.clone() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        self.runtime.spawn(async move {
+            let generator = ReportGenerator::new(pool);
+            match generator.generate_generic_email(&ip, None).await {
+                Ok(body) => {
+                    let subject = format!("Report: unauthorized SSH activity from {ip}");
+                    let _ = tx.send(AppEvent::GenericEmailReady { ip, subject, body });
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::GenericEmailFailed {
+                        ip,
+                        error: e.to_string(),
+                    });
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     fn open_session(
         &mut self,
         ctx: &egui::Context,
@@ -686,7 +807,8 @@ impl DashboardApp {
         let already_loading = match &self.open_windows[idx] {
             OpenWindow::Report { loading, .. }
             | OpenWindow::Session { loading, .. }
-            | OpenWindow::AbuseEmail { loading, .. } => *loading,
+            | OpenWindow::AbuseEmail { loading, .. }
+            | OpenWindow::EmailDraft { loading, .. } => *loading,
             OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => return,
         };
         if already_loading {
@@ -697,12 +819,14 @@ impl DashboardApp {
             Report(ReportKind, String),
             Session(String),
             AbuseEmail(String),
+            EmailDraft(String),
         }
 
         let job = match &self.open_windows[idx] {
             OpenWindow::Report { kind, query, .. } => Job::Report(*kind, query.clone()),
             OpenWindow::Session { auth_id, .. } => Job::Session(auth_id.clone()),
             OpenWindow::AbuseEmail { ip, .. } => Job::AbuseEmail(ip.clone()),
+            OpenWindow::EmailDraft { ip, .. } => Job::EmailDraft(ip.clone()),
             OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => return,
         };
 
@@ -732,6 +856,16 @@ impl DashboardApp {
                 *error = None;
                 body.clear();
             }
+            OpenWindow::EmailDraft {
+                loading,
+                error,
+                body,
+                ..
+            } => {
+                *loading = true;
+                *error = None;
+                body.clear();
+            }
             OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => return,
         }
 
@@ -744,6 +878,7 @@ impl DashboardApp {
             }
             Job::Session(auth_id) => self.spawn_session(ctx, auth_id),
             Job::AbuseEmail(ip) => self.spawn_abuse_email(ctx, ip),
+            Job::EmailDraft(ip) => self.spawn_email_draft(ctx, ip),
         }
     }
 
@@ -1097,6 +1232,44 @@ impl DashboardApp {
                                 *e = Some(error);
                                 break;
                             }
+                        }
+                    }
+                }
+                AppEvent::GenericEmailReady { ip, subject, body } => {
+                    for w in self.open_windows.iter_mut() {
+                        if let OpenWindow::EmailDraft {
+                            ip: i,
+                            subject: s,
+                            body: b,
+                            loading,
+                            error,
+                            copied_at,
+                            ..
+                        } = w
+                            && *i == ip
+                        {
+                            *s = subject;
+                            *b = body;
+                            *loading = false;
+                            *error = None;
+                            *copied_at = None;
+                            break;
+                        }
+                    }
+                }
+                AppEvent::GenericEmailFailed { ip, error } => {
+                    for w in self.open_windows.iter_mut() {
+                        if let OpenWindow::EmailDraft {
+                            ip: i,
+                            loading,
+                            error: e,
+                            ..
+                        } = w
+                            && *i == ip
+                        {
+                            *loading = false;
+                            *e = Some(error);
+                            break;
                         }
                     }
                 }
@@ -1462,6 +1635,15 @@ impl eframe::App for DashboardApp {
                                     {
                                         actions.push(Action::OpenAbuseEmail { ip: query.clone() });
                                     }
+                                    if ui
+                                        .button("Draft e-mail\u{2026}")
+                                        .on_hover_text(
+                                            "Open a generic e-mail draft for this IP (no recipient, no ISP/geo or AbuseIPDB data)",
+                                        )
+                                        .clicked()
+                                    {
+                                        actions.push(Action::OpenEmailDraft { ip: query.clone() });
+                                    }
                                 }
                             });
                             // For IP reports, surface the reported-IP flag and
@@ -1646,6 +1828,96 @@ impl eframe::App for DashboardApp {
                                         ui.colored_label(
                                             GRAY,
                                             "Paste into your mail client and add your signature",
+                                        );
+                                    },
+                                );
+                            });
+                        })
+                }
+                OpenWindow::EmailDraft {
+                    ip,
+                    subject,
+                    body,
+                    loading,
+                    error,
+                    copied_at,
+                    ..
+                } => {
+                    egui::Window::new(format!("E-mail draft \u{00b7} {ip}"))
+                        .id(egui::Id::new(id))
+                        .open(&mut open)
+                        .resizable(true)
+                        .default_width(680.0)
+                        .default_height(620.0)
+                        .show(&ctx, |ui| {
+                            if *loading {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label("Generating e-mail draft…");
+                                });
+                                return;
+                            }
+                            if let Some(e) = error {
+                                ui.colored_label(RED, format!("Error: {e}"));
+                                ui.add_space(4.0);
+                            }
+                            // Subject only — the draft is recipient-agnostic,
+                            // so there is no To field to fill.
+                            egui::Grid::new(("email_draft_meta", id))
+                                .min_col_width(60.0)
+                                .show(ui, |ui| {
+                                    ui.strong("Subject");
+                                    ui.add(
+                                        egui::TextEdit::singleline(subject)
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                    ui.end_row();
+                                });
+                            ui.add_space(6.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt(egui::Id::new(("email_draft_body", id)))
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(body)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(f32::INFINITY)
+                                            .desired_rows(20),
+                                    );
+                                });
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button("Copy e-mail")
+                                    .on_hover_text("Copy Subject and body to the clipboard")
+                                    .clicked()
+                                {
+                                    let full = format!("Subject: {}\n\n{}", subject.trim(), body);
+                                    ctx.copy_text(full);
+                                    *copied_at = Some(Instant::now());
+                                }
+                                if ui
+                                    .button("Copy body only")
+                                    .on_hover_text("Copy just the e-mail body to the clipboard")
+                                    .clicked()
+                                {
+                                    ctx.copy_text(body.clone());
+                                    *copied_at = Some(Instant::now());
+                                }
+                                if let Some(when) = copied_at
+                                    && when.elapsed() < Duration::from_secs(2)
+                                {
+                                    ui.colored_label(GREEN, "Copied!");
+                                    // Keep repainting until the hint
+                                    // expires so it disappears on time.
+                                    ctx.request_repaint_after(Duration::from_millis(500));
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.colored_label(
+                                            GRAY,
+                                            "Fill in the recipient and replace [Your name] in the signature",
                                         );
                                     },
                                 );
@@ -1999,6 +2271,7 @@ impl eframe::App for DashboardApp {
                     self.spawn_update_reported_notes(&ctx, ip, notes)
                 }
                 Action::OpenAbuseEmail { ip } => self.open_abuse_email(&ctx, ip),
+                Action::OpenEmailDraft { ip } => self.open_email_draft(&ctx, ip),
             }
         }
 
