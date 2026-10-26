@@ -7,6 +7,7 @@ mod sftp;
 use app::App;
 use ssh_honeypot::db::{self, initialize_database_pool, run_db_handler};
 use ssh_honeypot::ipapi;
+use ssh_honeypot::metrics::MetricsServer;
 use std::borrow::Cow;
 use std::fs::OpenOptions;
 
@@ -70,6 +71,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.mssql.server_version,
                 app.mssql.host_name
             )
+        } else {
+            "disabled".to_string()
+        }
+    );
+    log::info!(
+        "Metrics endpoint: {}",
+        if app.metrics.enabled {
+            format!("enabled on {:?}", app.metrics.interfaces)
         } else {
             "disabled".to_string()
         }
@@ -398,6 +407,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(err) => {
                         log::error!("Failed to bind MSSQL honeypot on {}: {:?}", interface, err);
+                    }
+                }
+            }));
+        }
+    }
+
+    // Start the Prometheus metrics endpoint if enabled
+    if app.metrics.enabled {
+        for interface in app.metrics.interfaces.clone() {
+            let (disable_reuseaddr, disable_reuseport) =
+                (app.disable_so_reuseaddr, app.disable_so_reuseport);
+            tasks.push(tokio::spawn(async move {
+                match create_socket_with_reuse(interface, disable_reuseaddr, disable_reuseport) {
+                    Ok(listener) => {
+                        log::info!("Starting metrics endpoint on {}", interface);
+                        MetricsServer.run_on_listener(listener).await;
+                    }
+                    Err(err) => {
+                        log::error!("Failed to bind metrics endpoint on {}: {:?}", interface, err);
                     }
                 }
             }));

@@ -3,6 +3,7 @@ use clap::{ArgAction, Parser};
 use mssql_honeypot::{MssqlConfig, MssqlSettings};
 use mysql_honeypot::{MysqlConfig, MysqlSettings};
 use serde::{Deserialize, Serialize};
+use ssh_honeypot::metrics::{MetricsConfig, MetricsSettings};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 
@@ -40,6 +41,7 @@ pub struct Config {
     pub nsa_motd: Option<bool>,
     pub mysql: Option<MysqlConfig>,
     pub mssql: Option<MssqlConfig>,
+    pub metrics: Option<MetricsConfig>,
 }
 
 impl Default for Config {
@@ -68,6 +70,7 @@ impl Default for Config {
             nsa_motd: None,
             mysql: None,
             mssql: None,
+            metrics: None,
         }
     }
 }
@@ -181,6 +184,10 @@ pub struct CliArgs {
     /// Enable the MSSQL honeypot module (listens on the [mssql] interfaces, default port 1433)
     #[arg(long = "enable-mssql", env = "ENABLE_MSSQL", action = ArgAction::SetTrue)]
     pub enable_mssql: bool,
+
+    /// Enable the Prometheus metrics endpoint (listens on the [metrics] interfaces, default port 9154)
+    #[arg(long = "enable-metrics", env = "ENABLE_METRICS", action = ArgAction::SetTrue)]
+    pub enable_metrics: bool,
 }
 
 #[derive(Debug)]
@@ -209,6 +216,7 @@ pub struct App {
     pub nsa_motd: bool,
     pub mysql: MysqlSettings,
     pub mssql: MssqlSettings,
+    pub metrics: MetricsSettings,
 }
 
 impl App {
@@ -381,6 +389,15 @@ impl App {
                 let mssql_enabled =
                     Self::merge_clap_boolean_with_config(cli.enable_mssql, mssql_config.enabled);
                 mssql_config.resolve(mssql_enabled)
+            },
+
+            metrics: {
+                let metrics_config = config.metrics.unwrap_or_default();
+                let metrics_enabled = Self::merge_clap_boolean_with_config(
+                    cli.enable_metrics,
+                    metrics_config.enabled,
+                );
+                metrics_config.resolve(metrics_enabled)
             },
         }
     }

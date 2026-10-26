@@ -1,0 +1,19 @@
+# Example Prometheus scrape configuration for the ssh-honeypot metrics
+# endpoint. Copy this file to prometheus.yml and uncomment the prometheus
+# service in docker-compose.yml (or run Prometheus manually).
+#
+# The endpoint must be enabled first: [metrics] enabled = true in
+# config.toml or --enable-metrics on the command line.
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: ssh-honeypot
+    metrics_path: /metrics
+    static_configs:
+      # From inside the docker network the honeypot is reachable by its
+      # service name. When scraping from the host, use the published port
+      # (see the commented 127.0.0.1:9154:9154 mapping in docker-compose.yml).
+      - targets:
+          - "ssh-honeypot:9154"

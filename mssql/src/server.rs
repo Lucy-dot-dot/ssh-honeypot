@@ -167,6 +167,7 @@ impl Connection {
         tokio::spawn(async move {
             match db_tx
                 .send(DbMessage::RecordConnect {
+                    module: Module::Mssql,
                     timestamp: Utc::now(),
                     ip,
                     port,
@@ -677,6 +678,7 @@ impl Connection {
         if let Err(e) = self
             .db_tx
             .send(DbMessage::RecordCommand {
+                module: Module::Mssql,
                 auth_id: auth_id.clone(),
                 timestamp: Utc::now(),
                 command: command.to_string(),
@@ -746,6 +748,7 @@ impl Connection {
         match self
             .db_tx
             .send(DbMessage::RecordSessionStart {
+                module: Module::Mssql,
                 auth_id: auth_id.to_string(),
                 start_time: Utc::now(),
                 response_tx,
@@ -785,6 +788,7 @@ impl Connection {
         match self
             .db_tx
             .send(DbMessage::RecordSessionEnd {
+                module: Module::Mssql,
                 session_id,
                 end_time,
                 duration_seconds: duration.num_seconds(),

@@ -99,6 +99,7 @@ Otherwise `cargo metadata` fails with "failed to load manifest for workspace mem
 - `src/server.rs` - SSH protocol implementation and session handling
 - `common/src/db.rs` - Database operations, data models and the `Module` enum (Ssh/Mysql/Mssql)
 - `common/src/tls.rs` - Shared TLS identity/acceptor helpers for the protocol modules
+- `common/src/metrics.rs` - Global lock-free metrics registry and Prometheus text-format exposition endpoint
 - `src/app.rs` - Configuration (CLI args, env vars, config file merging)
 - `src/shell/commands/dispatcher.rs` - Command dispatch and pipe handling
 - `src/shell/filesystem/fs2.rs` - Virtual filesystem implementation
@@ -128,6 +129,7 @@ The application supports extensive configuration via CLI arguments, environment 
 - Key folder (`-k`/`KEY_FOLDER`)
 - MySQL module toggle (`--enable-mysql`/`ENABLE_MYSQL`); `[mysql]` config section with `interfaces` (default 0.0.0.0:3306 and [::]:3306), `reject_all_auth`, `server_version`, `enable_tls` (default true), `tls_cert`/`tls_key` (optional PEM pair)
 - MSSQL module toggle (`--enable-mssql`/`ENABLE_MSSQL`); `[mssql]` config section with `interfaces` (default 0.0.0.0:1433 and [::]:1433), `reject_all_auth`, `server_version`, `enable_tls` (default true), `tls_cert`/`tls_key` (optional PEM pair), `host_name`/`domain_name` for NTLM challenges
+- Metrics endpoint toggle (`--enable-metrics`/`ENABLE_METRICS`, default off); `[metrics]` config section with `interfaces` (default 127.0.0.1:9154 and [::1]:9154). Serves Prometheus text format (0.0.4) on `/metrics`; counters are incremented centrally in `run_db_handler` (see `prometheus.yml.example` and the commented docker-compose services for scraping)
 
 ### Database
 PostgreSQL is required. The docker-compose setup starts a PostgreSQL 16 service with schema initialization from `postgres-init/` and sqlx migrations in `migrations/`. New columns: `auth.module` distinguishes which honeypot module recorded an attempt (`ssh`, `mysql`).

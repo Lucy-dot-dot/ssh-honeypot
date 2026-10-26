@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
 use shell::filesystem::fs2::{FileContent, FileSystem};
-use ssh_honeypot::db::DbMessage;
+use ssh_honeypot::db::{DbMessage, Module};
 
 /*
 NOTE: This SFTP implementation is backed by a virtual filesystem (fs2).
@@ -370,6 +370,7 @@ impl Handler for HoneypotSftpSession {
 
             match db_tx
                 .send(DbMessage::RecordFileUpload {
+                    module: Module::Ssh,
                     auth_id,
                     timestamp: Utc::now(),
                     filename,

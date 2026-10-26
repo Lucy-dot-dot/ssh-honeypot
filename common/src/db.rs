@@ -25,6 +25,7 @@ impl Module {
 #[derive(Debug)]
 pub enum DbMessage {
     RecordConnect {
+        module: Module,
         timestamp: DateTime<Utc>,
         ip: String,
         port: u16,
@@ -45,21 +46,25 @@ pub enum DbMessage {
         response_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
     RecordCommand {
+        module: Module,
         auth_id: String,
         timestamp: DateTime<Utc>,
         command: String,
     },
     RecordSessionStart {
+        module: Module,
         auth_id: String,
         start_time: DateTime<Utc>,
         response_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
     RecordSessionEnd {
+        module: Module,
         session_id: String,
         end_time: DateTime<Utc>,
         duration_seconds: i64,
     },
     RecordFileUpload {
+        module: Module,
         auth_id: String,
         timestamp: DateTime<Utc>,
         filename: String,
@@ -78,11 +83,13 @@ pub enum DbMessage {
 // Database handler function that runs in its own task
 pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
     log::trace!("Starting PostgreSQL database handler");
+    let metrics = crate::metrics::metrics();
 
     // Verify database connection
     match pool.acquire().await {
         Ok(_) => {
             log::trace!("Database connection pool initialized successfully");
+            metrics.set_db_handler_live(true);
         }
         Err(e) => {
             log::error!("Failed to acquire database connection: {}", e);
@@ -91,23 +98,27 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
             log::error!("🚨 ATTACK DATA WILL NOT BE SAVED 🚨");
             log::error!("🔥 HERE BE DRAGONS - FIX THIS NOW 🔥");
             log::error!("========================================");
+            metrics.set_db_handler_live(false);
             return;
         }
     }
 
     // Process database messages
     while let Some(msg) = rx.recv().await {
+        metrics.record_db_message();
         log::trace!(
             "Processing database message: {:?}",
             std::mem::discriminant(&msg)
         );
         match msg {
             DbMessage::RecordConnect {
+                module,
                 timestamp,
                 ip,
                 port,
                 local_port,
             } => {
+                metrics.record_connection(module);
                 log::trace!("Recording connection from {} at {}", ip, timestamp);
 
                 match record_connect(&pool, timestamp, ip, port, local_port).await {
@@ -115,6 +126,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                         log::trace!("Connection recorded");
                     }
                     Err(err) => {
+                        metrics.record_db_error();
                         log::error!("Failed to record connect event: {}", err);
                     }
                 };
@@ -133,6 +145,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 ipapi_data,
                 response_tx,
             } => {
+                metrics.record_auth(module, successful);
                 log::trace!(
                     "Recording {} auth attempt (module: {}): user='{}' from {} (success={})",
                     auth_type,
@@ -161,6 +174,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 let response = match result {
                     Ok(auth_id) => Ok(auth_id),
                     Err(e) => {
+                        metrics.record_db_error();
                         log::error!("Database error recording auth: {}", e);
                         Err(e.to_string())
                     }
@@ -168,24 +182,30 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 let _ = response_tx.send(response);
             }
             DbMessage::RecordCommand {
+                module,
                 auth_id,
                 timestamp,
                 command,
             } => {
+                metrics.record_command(module);
                 if let Err(e) = record_command(&pool, auth_id, timestamp, command).await {
+                    metrics.record_db_error();
                     log::error!("Database error recording command: {}", e);
                 }
             }
             DbMessage::RecordSessionStart {
+                module,
                 auth_id,
                 start_time,
                 response_tx,
             } => {
+                metrics.record_session_start(module);
                 let result = record_session_start(&pool, auth_id, start_time).await;
 
                 let response = match result {
                     Ok(session_id) => Ok(session_id),
                     Err(e) => {
+                        metrics.record_db_error();
                         log::error!("Database error recording session start: {}", e);
                         Err(e.to_string())
                     }
@@ -193,17 +213,21 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 let _ = response_tx.send(response);
             }
             DbMessage::RecordSessionEnd {
+                module,
                 session_id,
                 end_time,
                 duration_seconds,
             } => {
+                metrics.record_session_end(module);
                 if let Err(e) =
                     record_session_end(&pool, session_id, end_time, duration_seconds).await
                 {
+                    metrics.record_db_error();
                     log::error!("Database error recording session end: {}", e);
                 }
             }
             DbMessage::RecordFileUpload {
+                module: _,
                 auth_id,
                 timestamp,
                 filename,
@@ -216,6 +240,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 file_entropy,
                 binary_data,
             } => {
+                metrics.record_file_upload(file_size);
                 if let Err(e) = record_file_upload(
                     &pool,
                     auth_id,
@@ -232,6 +257,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
                 )
                 .await
                 {
+                    metrics.record_db_error();
                     log::error!("Database error recording file upload: {}", e);
                 }
             }
@@ -241,6 +267,7 @@ pub async fn run_db_handler(mut rx: mpsc::Receiver<DbMessage>, pool: PgPool) {
             }
         }
     }
+    metrics.set_db_handler_live(false);
     log::trace!("Database handler stopped");
 }
 

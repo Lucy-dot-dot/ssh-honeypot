@@ -180,6 +180,27 @@ host_name = "WIN-SERVER01"
 # domain_name = "WORKGROUP"
 
 ##############################################################################
+# Metrics endpoint (Prometheus)
+##############################################################################
+[metrics]
+
+# Expose application counters (connections, auth attempts, commands,
+# sessions, file uploads, db handler health) in Prometheus text format
+# (version 0.0.4) at http://<interface>:9154/metrics
+# (can also be enabled with --enable-metrics)
+# Default: false
+enabled = false
+
+# Network interfaces for the metrics endpoint to listen on.
+# Loopback-only by default so scrapers must run on the same host (or the
+# port must be published explicitly, e.g. in docker-compose).
+# Default: ["127.0.0.1:9154", "[::1]:9154"]
+interfaces = [
+    "127.0.0.1:9154",      # IPv4 loopback
+    "[::1]:9154",          # IPv6 loopback
+]
+
+##############################################################################
 # Environment Variable Equivalents
 ##############################################################################
 # All config options can also be set via environment variables:
@@ -205,6 +226,7 @@ host_name = "WIN-SERVER01"
 # DISABLE_IPAPI=true
 # ENABLE_MYSQL=true
 # ENABLE_MSSQL=true
+# ENABLE_METRICS=true
 # BSI_MOTD=true
 # NSA_MOTD=true
 #

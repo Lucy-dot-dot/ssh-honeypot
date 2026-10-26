@@ -14,7 +14,7 @@ use shell::commands::{
 use shell::filesystem::fs2::FileSystem;
 use ssh_encoding::Error as SshEncodingError;
 use ssh_honeypot::abuseipdb::{AbuseIpError, Client as AbuseIpClient};
-use ssh_honeypot::db::DbMessage;
+use ssh_honeypot::db::{DbMessage, Module};
 use ssh_honeypot::ipapi;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -333,6 +333,7 @@ impl Handler for SshHandler {
                     match self
                         .db_tx
                         .send(DbMessage::RecordSessionStart {
+                            module: Module::Ssh,
                             auth_id: auth_id.clone(),
                             start_time,
                             response_tx,
@@ -471,6 +472,7 @@ impl Handler for SshHandler {
                     match self
                         .db_tx
                         .send(DbMessage::RecordCommand {
+                            module: Module::Ssh,
                             auth_id: self.session_data.auth_id.clone(),
                             timestamp: Utc::now(),
                             command: self.current_cmd.clone(),
@@ -674,6 +676,7 @@ impl Handler for SshHandler {
             match self
                 .db_tx
                 .send(DbMessage::RecordCommand {
+                    module: Module::Ssh,
                     auth_id: self.session_data.auth_id.clone(),
                     timestamp: Utc::now(),
                     command: command.to_string(),
@@ -1185,6 +1188,7 @@ impl server::Server for SshServerHandler {
         tokio::spawn(async move {
             match db_tx
                 .send(DbMessage::RecordConnect {
+                    module: Module::Ssh,
                     ip: peer_addr.ip().to_string(),
                     port: peer_addr.port(),
                     timestamp: Utc::now(),
@@ -1445,6 +1449,7 @@ async fn handle_shell_session(
         Some(session_id) => {
             match db_tx
                 .send(DbMessage::RecordSessionEnd {
+                    module: Module::Ssh,
                     session_id: session_id.clone(),
                     end_time,
                     duration_seconds: duration.num_seconds(),
