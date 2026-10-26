@@ -332,8 +332,6 @@ impl DashboardApp {
         };
         self.is_loading_snapshot = true;
         self.snapshot_error = None;
-        self.top_loading = true;
-        self.top_error = None;
 
         // Fast path: cheap recent/live feeds + whatever top-N data is already
         // cached. Returns in milliseconds so the dashboard repaints instantly.
@@ -349,6 +347,12 @@ impl DashboardApp {
         // Slow path: (re)compute the top-N aggregates in the background. On a
         // warm cache this returns near-instantly; on a cold cache it takes a
         // few seconds, during which the top lists show a loading skeleton.
+        // Skipped entirely when the user has hidden the Top Activity section.
+        if !self.config.show_top_activity {
+            return;
+        }
+        self.top_loading = true;
+        self.top_error = None;
         let tx = self.tx.clone();
         let ctx_top = ctx.clone();
         self.runtime.spawn(async move {
@@ -757,19 +761,26 @@ impl DashboardApp {
                     self.snapshot_error = Some(e);
                 }
                 AppEvent::TopReady(Ok(mut top)) => {
-                    if !self.config.excluded_ips.is_empty() {
-                        top.ips.retain(|e| !self.config.is_excluded(&e.value));
+                    // The query may still have been in flight when the user
+                    // hid the Top Activity section; drop the result then.
+                    if self.config.show_top_activity {
+                        if !self.config.excluded_ips.is_empty() {
+                            top.ips.retain(|e| !self.config.is_excluded(&e.value));
+                        }
+                        // Merge the freshly computed top-N lists into whatever
+                        // snapshot we already have (it may be None if the main
+                        // snapshot hasn't landed yet, which is fine).
+                        let snap = self.snapshot.get_or_insert_with(DashboardSnapshot::default);
+                        snap.top_ips = top.ips;
+                        snap.top_passwords = top.passwords;
+                        snap.top_usernames = top.usernames;
+                        snap.top_fetched_at = top.fetched_at;
+                        self.top_loading = false;
+                        self.top_error = None;
                     }
-                    // Merge the freshly computed top-N lists into whatever
-                    // snapshot we already have (it may be None if the main
-                    // snapshot hasn't landed yet, which is fine).
-                    let snap = self.snapshot.get_or_insert_with(DashboardSnapshot::default);
-                    snap.top_ips = top.ips;
-                    snap.top_passwords = top.passwords;
-                    snap.top_usernames = top.usernames;
-                    snap.top_fetched_at = top.fetched_at;
-                    self.top_loading = false;
-                    self.top_error = None;
+                }
+                AppEvent::TopReady(Err(_)) if !self.config.show_top_activity => {
+                    // Stale in-flight query after the section was hidden.
                 }
                 AppEvent::TopReady(Err(e)) => {
                     self.top_loading = false;
@@ -961,6 +972,17 @@ impl eframe::App for DashboardApp {
                     self.config.show_geolocation = geo;
                     self.config.save();
                 }
+                let mut top = self.config.show_top_activity;
+                if ui.checkbox(&mut top, "Show Top Activity").changed() {
+                    self.config.show_top_activity = top;
+                    self.config.save();
+                    if !top {
+                        // Drop the loading skeleton / stale error so a later
+                        // re-enable starts from a clean state.
+                        self.top_loading = false;
+                        self.top_error = None;
+                    }
+                }
                 ui.separator();
                 ui.label("Exclude IP:");
                 let add_resp = ui.add(
@@ -1120,29 +1142,25 @@ impl eframe::App for DashboardApp {
                     // Disjoint immutable borrow of the reported-IP map (separate
                     // field from `self.snapshot`); threaded into every feed row.
                     let reported = &self.reported;
-                    let sections = [
+                    let mut sections = vec![
                         Section::LiveSessions,
                         Section::RecentAuths,
                         Section::RecentConnections,
                         Section::RecentSessions,
-                        Section::TopActivity,
                     ];
+                    if self.config.show_top_activity {
+                        sections.push(Section::TopActivity);
+                    }
                     for row in sections.chunks(n_cols) {
-                        ui.columns(n_cols, |cols| {
-                            for (i, section) in row.iter().enumerate() {
-                                if let Some(col_ui) = cols.get_mut(i) {
-                                    render_section(
-                                        col_ui,
-                                        snap,
-                                        reported,
-                                        &mut actions,
-                                        top_loading,
-                                        top_error,
-                                        *section,
-                                    );
-                                }
-                            }
-                        });
+                        render_section_row(
+                            ui,
+                            row,
+                            snap,
+                            reported,
+                            &mut actions,
+                            top_loading,
+                            top_error,
+                        );
                         ui.add_space(8.0);
                     }
                 } else {
@@ -1701,8 +1719,35 @@ fn render_section(
 /// so wide / 4K viewports use horizontal space instead of one tall column.
 fn column_count(avail_width: f32) -> usize {
     const MIN_SECTION_WIDTH: f32 = 460.0;
-    const MAX_COLUMNS: usize = 3;
+    const MAX_COLUMNS: usize = 5;
     ((avail_width / MIN_SECTION_WIDTH).floor() as usize).clamp(1, MAX_COLUMNS)
+}
+
+/// Horizontal gap between side-by-side dashboard sections.
+const SECTION_GAP: f32 = 40.0;
+
+/// Lay `row` out side-by-side with each block hugging its content width,
+/// like flex items on a row, instead of stretching into equal-width
+/// columns which strand dead space between the tables.
+fn render_section_row(
+    ui: &mut egui::Ui,
+    row: &[Section],
+    snap: &DashboardSnapshot,
+    reported: &HashMap<String, ReportedIp>,
+    actions: &mut Vec<Action>,
+    top_loading: bool,
+    top_error: Option<&str>,
+) {
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+        for (i, section) in row.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(SECTION_GAP);
+            }
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                render_section(ui, snap, reported, actions, top_loading, top_error, *section);
+            });
+        }
+    });
 }
 
 fn render_live_sessions(
@@ -1912,34 +1957,24 @@ fn render_top_lists(
     if let Some(e) = error {
         ui.colored_label(RED, format!("Top stats error: {e}"));
     }
-    ui.columns(3, |cols| {
-        render_top_list(
-            &mut cols[0],
-            "Top IPs",
-            &snap.top_ips,
-            reported,
-            actions,
-            Some(ReportKind::Ip),
-            loading,
-        );
-        render_top_list(
-            &mut cols[1],
-            "Top Passwords",
-            &snap.top_passwords,
-            reported,
-            actions,
-            Some(ReportKind::Password),
-            loading,
-        );
-        render_top_list(
-            &mut cols[2],
-            "Top Usernames",
-            &snap.top_usernames,
-            reported,
-            actions,
-            None,
-            loading,
-        );
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+        let lists = [
+            ("Top IPs", &snap.top_ips, Some(ReportKind::Ip)),
+            (
+                "Top Passwords",
+                &snap.top_passwords,
+                Some(ReportKind::Password),
+            ),
+            ("Top Usernames", &snap.top_usernames, None),
+        ];
+        for (i, (title, entries, kind)) in lists.into_iter().enumerate() {
+            if i > 0 {
+                ui.add_space(SECTION_GAP);
+            }
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                render_top_list(ui, title, entries, reported, actions, kind, loading);
+            });
+        }
     });
 }
 
@@ -2002,7 +2037,19 @@ fn render_top_list(
 fn section_header(ui: &mut egui::Ui, text: &str) {
     ui.add_space(6.0);
     ui.label(egui::RichText::new(text).strong().size(15.0));
-    ui.separator();
+    // Underline that hugs the header text. A plain `ui.separator()` would
+    // stretch across the whole remaining width, inflating content-sized
+    // flex blocks to viewport width and pushing later sections off-screen.
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(15.0),
+        egui::Color32::TRANSPARENT,
+    );
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(galley.size().x, 2.0), egui::Sense::hover());
+    ui.painter().line_segment(
+        [rect.left_center(), rect.right_center()],
+        ui.visuals().widgets.noninteractive.bg_stroke,
+    );
 }
 
 fn link_label(ui: &mut egui::Ui, text: &str, tip: &str) -> egui::Response {
