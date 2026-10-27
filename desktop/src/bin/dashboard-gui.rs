@@ -1284,60 +1284,53 @@ impl eframe::App for DashboardApp {
         self.poll_events(&ctx);
         self.maybe_auto_refresh(&ctx);
 
-        let mut screenshot_to_copy = None;
-
-        ctx.input(|i| {
-            for event in &i.events {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    screenshot_to_copy = Some((**image).clone());
-                }
-            }
-        });
-
-        if let Some(image) = screenshot_to_copy {
-            ui.ctx().copy_image(image.clone());
-            #[cfg(target_os = "windows")]
-            {
-                use clipboard_win::{
-                    formats::{CF_DIB, RawData},
-                    set_clipboard,
-                };
-                use image::codecs::bmp::BmpEncoder;
-                use image::{ExtendedColorType, ImageEncoder};
-
-                let raw_bytes: Vec<u8> = image
-                    .pixels
-                    .iter()
-                    .flat_map(|color| color.to_array())
-                    .collect();
-
-                let width = image.size[0] as u32;
-                let height = image.size[1] as u32;
-
-                let mut bmp_buffer = Vec::new();
-                let encoder = BmpEncoder::new(&mut bmp_buffer);
-
-                // Encode as standard BMP instead of PNG
-                if encoder
-                    .write_image(&raw_bytes, width, height, ExtendedColorType::Rgba8)
-                    .is_ok()
-                {
-                    println!("Time to copy {} kbytes", bmp_buffer.len() / 1024);
-
-                    // CF_DIB is universally mapped to format ID 8 in the Win32 API.
-                    // Slicing [14..] strips the BITMAPFILEHEADER, leaving a perfect DIB payload.
-                    if bmp_buffer.len() > 14 {
-                        let _ = set_clipboard(RawData(CF_DIB), &bmp_buffer[14..]);
-                    }
-                }
-            }
-        }
-
         let f2_pressed =
             ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::F2)));
 
         if f2_pressed {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            // egui 0.37: screenshots arrive via a one-shot callback instead of
+            // an input event. The callback runs once the integration has read
+            // the rendered pixels; it does not request a new frame, but none is
+            // needed since we only touch the clipboard here.
+            let ctx = ctx.clone();
+            ctx.request_screenshot(move |screenshot| {
+                ctx.copy_image(screenshot.as_ref().clone());
+                #[cfg(target_os = "windows")]
+                {
+                    use clipboard_win::{
+                        formats::{CF_DIB, RawData},
+                        set_clipboard,
+                    };
+                    use image::codecs::bmp::BmpEncoder;
+                    use image::{ExtendedColorType, ImageEncoder};
+
+                    let raw_bytes: Vec<u8> = screenshot
+                        .pixels
+                        .iter()
+                        .flat_map(|color| color.to_array())
+                        .collect();
+
+                    let width = screenshot.size[0] as u32;
+                    let height = screenshot.size[1] as u32;
+
+                    let mut bmp_buffer = Vec::new();
+                    let encoder = BmpEncoder::new(&mut bmp_buffer);
+
+                    // Encode as standard BMP instead of PNG
+                    if encoder
+                        .write_image(&raw_bytes, width, height, ExtendedColorType::Rgba8)
+                        .is_ok()
+                    {
+                        println!("Time to copy {} kbytes", bmp_buffer.len() / 1024);
+
+                        // CF_DIB is universally mapped to format ID 8 in the Win32 API.
+                        // Slicing [14..] strips the BITMAPFILEHEADER, leaving a perfect DIB payload.
+                        if bmp_buffer.len() > 14 {
+                            let _ = set_clipboard(RawData(CF_DIB), &bmp_buffer[14..]);
+                        }
+                    }
+                }
+            });
         }
 
         let mut actions: Vec<Action> = Vec::new();
@@ -1703,7 +1696,7 @@ impl eframe::App for DashboardApp {
 
                                     let right = &mut columns[1];
                                     egui::ScrollArea::vertical()
-                                        .id_salt(egui::Id::new(("whois_col", id)))
+                                        .id_salt(egui::Id::unique(("whois_col", id)))
                                         .auto_shrink([false, false])
                                         .show(right, |ui| {
                                             render_whois_panel(
@@ -1738,7 +1731,7 @@ impl eframe::App for DashboardApp {
                     ..
                 } => {
                     egui::Window::new(format!("Abuse e-mail \u{00b7} {ip}"))
-                        .id(egui::Id::new(id))
+                        .id(egui::Id::unique(id))
                         .open(&mut open)
                         .resizable(true)
                         .default_width(680.0)
@@ -1776,7 +1769,7 @@ impl eframe::App for DashboardApp {
                                 });
                             ui.add_space(6.0);
                             egui::ScrollArea::vertical()
-                                .id_salt(egui::Id::new(("abuse_email_body", id)))
+                                .id_salt(egui::Id::unique(("abuse_email_body", id)))
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.add(
@@ -1844,7 +1837,7 @@ impl eframe::App for DashboardApp {
                     ..
                 } => {
                     egui::Window::new(format!("E-mail draft \u{00b7} {ip}"))
-                        .id(egui::Id::new(id))
+                        .id(egui::Id::unique(id))
                         .open(&mut open)
                         .resizable(true)
                         .default_width(680.0)
@@ -1875,7 +1868,7 @@ impl eframe::App for DashboardApp {
                                 });
                             ui.add_space(6.0);
                             egui::ScrollArea::vertical()
-                                .id_salt(egui::Id::new(("email_draft_body", id)))
+                                .id_salt(egui::Id::unique(("email_draft_body", id)))
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.add(
@@ -1935,7 +1928,7 @@ impl eframe::App for DashboardApp {
                 } => {
                     let screen = ctx.content_rect();
                     egui::Window::new(format!("Session · {ip}"))
-                        .id(egui::Id::new(id))
+                        .id(egui::Id::unique(id))
                         .open(&mut open)
                         .resizable(true)
                         .default_width(640.0)
@@ -2073,7 +2066,7 @@ impl eframe::App for DashboardApp {
                 }
                 OpenWindow::ReportedDetails { ip, .. } => {
                     egui::Window::new(format!("Reported \u{00b7} {ip}"))
-                        .id(egui::Id::new(id))
+                        .id(egui::Id::unique(id))
                         .open(&mut open)
                         .resizable(true)
                         .default_width(440.0)
@@ -2130,7 +2123,7 @@ impl eframe::App for DashboardApp {
                     ..
                 } => {
                     egui::Window::new(format!("Reported IPs ({})", reported_list.len()))
-                        .id(egui::Id::new(id))
+                        .id(egui::Id::unique(id))
                         .open(&mut open)
                         .resizable(true)
                         .default_width(640.0)
@@ -2228,7 +2221,7 @@ impl eframe::App for DashboardApp {
 
             // If this window was the topmost area under the pointer when the
             // primary button went down, it becomes the focused window.
-            if clicked_layer.is_some_and(|l| l.id == egui::Id::new(id)) {
+            if clicked_layer.is_some_and(|l| l.id.value() == id) {
                 new_focus = Some(id);
             }
             w.set_open(open);
