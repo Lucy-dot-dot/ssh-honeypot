@@ -78,6 +78,8 @@ pub struct SshHandler {
     peer: SocketAddr,
     user: Option<String>,
     auth_id: Option<String>,
+    // conn_track row this connection is recorded under
+    conn_id: Uuid,
     session_data: SessionData,
     db_tx: mpsc::Sender<DbMessage>,
     current_cmd: String,
@@ -145,6 +147,7 @@ impl Handler for SshHandler {
                 .db_tx
                 .send(DbMessage::RecordAuth {
                     id: auth_uuid,
+                    conn_id: self.conn_id,
                     module: ssh_honeypot::db::Module::Ssh,
                     timestamp: Utc::now(),
                     ip: peer_str,
@@ -239,6 +242,7 @@ impl Handler for SshHandler {
                 .db_tx
                 .send(DbMessage::RecordAuth {
                     id: auth_uuid,
+                    conn_id: self.conn_id,
                     module: ssh_honeypot::db::Module::Ssh,
                     timestamp: Utc::now(),
                     ip: peer_str,
@@ -1185,9 +1189,13 @@ impl server::Server for SshServerHandler {
 
         let db_tx = self.db_tx.clone();
         let local_port = self.local_port;
+        // Generate the conn_track UUID client-side so auth attempts on this
+        // connection can reference it without any database round-trip
+        let conn_uuid = Uuid::new_v4();
         tokio::spawn(async move {
             match db_tx
                 .send(DbMessage::RecordConnect {
+                    id: conn_uuid,
                     module: Module::Ssh,
                     ip: peer_addr.ip().to_string(),
                     port: peer_addr.port(),
@@ -1209,6 +1217,7 @@ impl server::Server for SshServerHandler {
             peer: peer_addr,
             user: None,
             auth_id: None,
+            conn_id: conn_uuid,
             session_data: SessionData::default(),
             db_tx: self.db_tx.clone(),
             current_cmd: String::new(),

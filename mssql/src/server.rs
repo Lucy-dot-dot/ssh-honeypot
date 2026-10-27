@@ -147,10 +147,13 @@ impl Connection {
     async fn handle_connection(&self, stream: TcpStream, peer: SocketAddr, local_port: u16) {
         let ip = peer.ip().to_string();
 
-        self.record_connect(&ip, peer.port(), local_port);
+        // Generate the conn_track UUID client-side so auth attempts on this
+        // connection can reference it without any database round-trip
+        let conn_uuid = Uuid::new_v4();
+        self.record_connect(conn_uuid, &ip, peer.port(), local_port);
         self.warm_ip_caches(&ip);
 
-        if let Err(err) = self.run_session(stream, &ip, peer).await {
+        if let Err(err) = self.run_session(stream, &ip, peer, conn_uuid).await {
             match err.kind() {
                 std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset => {
                     log::debug!("MSSQL connection from {} closed abruptly: {}", peer, err);
@@ -161,12 +164,13 @@ impl Connection {
     }
 
     /// Fire and forget conn_track record
-    fn record_connect(&self, ip: &str, port: u16, local_port: u16) {
+    fn record_connect(&self, id: Uuid, ip: &str, port: u16, local_port: u16) {
         let db_tx = self.db_tx.clone();
         let ip = ip.to_string();
         tokio::spawn(async move {
             match db_tx
                 .send(DbMessage::RecordConnect {
+                    id,
                     module: Module::Mssql,
                     timestamp: Utc::now(),
                     ip,
@@ -257,7 +261,7 @@ impl Connection {
     /// optional login encryption, LOGIN7 authentication (SQL auth, NTLM or
     /// Azure AD) and the post-login request loop. Returns the first IO
     /// error encountered.
-    async fn run_session(&self, stream: TcpStream, ip: &str, peer: SocketAddr) -> io::Result<()> {
+    async fn run_session(&self, stream: TcpStream, ip: &str, peer: SocketAddr, conn_id: Uuid) -> io::Result<()> {
         let mut transport = if peek_is_tls_client_hello(&stream).await? {
             // TDS 8.0 "strict encryption": TLS before prelogin
             let Some(acceptor) = &self.tls_acceptor else {
@@ -380,6 +384,7 @@ impl Connection {
         let ipapi_data = self.ipapi_data(ip).await;
         let auth_id = self
             .record_auth(
+                conn_id,
                 ip,
                 &auth.username,
                 auth.password.take(),
@@ -692,6 +697,7 @@ impl Connection {
     #[allow(clippy::too_many_arguments)]
     async fn record_auth(
         &self,
+        conn_id: Uuid,
         ip: &str,
         username: &str,
         password: Option<String>,
@@ -708,6 +714,7 @@ impl Connection {
             .db_tx
             .send(DbMessage::RecordAuth {
                 id: auth_uuid,
+                conn_id,
                 module: Module::Mssql,
                 timestamp: Utc::now(),
                 ip: ip.to_string(),
