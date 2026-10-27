@@ -1586,7 +1586,7 @@ impl eframe::App for DashboardApp {
                 } => {
                     let title = report_title(*kind, query);
                     egui::Window::new(title)
-                        .id(egui::Id::new(id))
+                        .id(egui::Id::unique(id))
                         .open(&mut open)
                         .resizable(true)
                         // IP reports need room for the WHOIS panel beside the
@@ -1680,7 +1680,7 @@ impl eframe::App for DashboardApp {
                                     let left = &mut columns[0];
                                     if !*loading && !text.is_empty() {
                                         egui::ScrollArea::vertical()
-                                            .id_salt(egui::Id::new(("ip_report_text_col", id)))
+                                            .id_salt(egui::Id::unique(("ip_report_text_col", id)))
                                             .auto_shrink([false, false])
                                             .show(left, |ui| {
                                                 ui.add(
@@ -1768,62 +1768,84 @@ impl eframe::App for DashboardApp {
                                     ui.end_row();
                                 });
                             ui.add_space(6.0);
-                            egui::ScrollArea::vertical()
-                                .id_salt(egui::Id::unique(("abuse_email_body", id)))
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::TextEdit::multiline(body)
-                                            .font(egui::TextStyle::Monospace)
-                                            .desired_width(f32::INFINITY)
-                                            .desired_rows(20),
+                            // Bottom-up layout for everything below the header
+                            // fields: the action row is emitted first so it is
+                            // pinned to the bottom edge, and the body
+                            // ScrollArea only receives the height left above
+                            // it. In plain top-down order the ScrollArea would
+                            // consume the entire remaining height, pushing the
+                            // action row past the window frame — and because a
+                            // window auto-expands to fit its content, it would
+                            // then grow by the row's height every frame until
+                            // it filled the screen.
+                            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .button("Copy e-mail")
+                                        .on_hover_text(
+                                            "Copy To, Subject and body to the clipboard",
+                                        )
+                                        .clicked()
+                                    {
+                                        let full = format!(
+                                            "To: {}\nSubject: {}\n\n{}",
+                                            to.trim(),
+                                            subject.trim(),
+                                            body
+                                        );
+                                        ctx.copy_text(full);
+                                        *copied_at = Some(Instant::now());
+                                    }
+                                    if ui
+                                        .button("Copy body only")
+                                        .on_hover_text(
+                                            "Copy just the e-mail body to the clipboard",
+                                        )
+                                        .clicked()
+                                    {
+                                        ctx.copy_text(body.clone());
+                                        *copied_at = Some(Instant::now());
+                                    }
+                                    if let Some(when) = copied_at {
+                                        if when.elapsed() < Duration::from_secs(2) {
+                                            ui.colored_label(GREEN, "Copied!");
+                                            // Keep repainting until the hint
+                                            // expires so it disappears on time.
+                                            ctx.request_repaint_after(
+                                                Duration::from_millis(500),
+                                            );
+                                        }
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.colored_label(
+                                                GRAY,
+                                                "Paste into your mail client and add your signature",
+                                            );
+                                        },
                                     );
                                 });
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button("Copy e-mail")
-                                    .on_hover_text(
-                                        "Copy To, Subject and body to the clipboard",
-                                    )
-                                    .clicked()
-                                {
-                                    let full = format!(
-                                        "To: {}\nSubject: {}\n\n{}",
-                                        to.trim(),
-                                        subject.trim(),
-                                        body
-                                    );
-                                    ctx.copy_text(full);
-                                    *copied_at = Some(Instant::now());
-                                }
-                                if ui
-                                    .button("Copy body only")
-                                    .on_hover_text("Copy just the e-mail body to the clipboard")
-                                    .clicked()
-                                {
-                                    ctx.copy_text(body.clone());
-                                    *copied_at = Some(Instant::now());
-                                }
-                                if let Some(when) = copied_at {
-                                    if when.elapsed() < Duration::from_secs(2) {
-                                        ui.colored_label(GREEN, "Copied!");
-                                        // Keep repainting until the hint
-                                        // expires so it disappears on time.
-                                        ctx.request_repaint_after(
-                                            Duration::from_millis(500),
+                                ui.add_space(4.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt(egui::Id::unique(("abuse_email_body", id)))
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        // ScrollArea content inherits the
+                                        // bottom-up layout, but the e-mail body
+                                        // should still read top-down.
+                                        ui.with_layout(
+                                            egui::Layout::top_down(egui::Align::LEFT),
+                                            |ui| {
+                                                ui.add(
+                                                    egui::TextEdit::multiline(body)
+                                                        .font(egui::TextStyle::Monospace)
+                                                        .desired_width(f32::INFINITY)
+                                                        .desired_rows(20),
+                                                );
+                                            },
                                         );
-                                    }
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.colored_label(
-                                            GRAY,
-                                            "Paste into your mail client and add your signature",
-                                        );
-                                    },
-                                );
+                                    });
                             });
                         })
                 }
@@ -1867,53 +1889,70 @@ impl eframe::App for DashboardApp {
                                     ui.end_row();
                                 });
                             ui.add_space(6.0);
-                            egui::ScrollArea::vertical()
-                                .id_salt(egui::Id::unique(("email_draft_body", id)))
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::TextEdit::multiline(body)
-                                            .font(egui::TextStyle::Monospace)
-                                            .desired_width(f32::INFINITY)
-                                            .desired_rows(20),
+                            // Bottom-up layout as in the abuse e-mail window:
+                            // action row pinned to the bottom edge, body
+                            // ScrollArea sized to the remaining height above
+                            // it, so the window no longer grows every frame.
+                            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .button("Copy e-mail")
+                                        .on_hover_text("Copy Subject and body to the clipboard")
+                                        .clicked()
+                                    {
+                                        let full =
+                                            format!("Subject: {}\n\n{}", subject.trim(), body);
+                                        ctx.copy_text(full);
+                                        *copied_at = Some(Instant::now());
+                                    }
+                                    if ui
+                                        .button("Copy body only")
+                                        .on_hover_text(
+                                            "Copy just the e-mail body to the clipboard",
+                                        )
+                                        .clicked()
+                                    {
+                                        ctx.copy_text(body.clone());
+                                        *copied_at = Some(Instant::now());
+                                    }
+                                    if let Some(when) = copied_at
+                                        && when.elapsed() < Duration::from_secs(2)
+                                    {
+                                        ui.colored_label(GREEN, "Copied!");
+                                        // Keep repainting until the hint
+                                        // expires so it disappears on time.
+                                        ctx.request_repaint_after(Duration::from_millis(500));
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.colored_label(
+                                                GRAY,
+                                                "Fill in the recipient and replace [Your name] in the signature",
+                                            );
+                                        },
                                     );
                                 });
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button("Copy e-mail")
-                                    .on_hover_text("Copy Subject and body to the clipboard")
-                                    .clicked()
-                                {
-                                    let full = format!("Subject: {}\n\n{}", subject.trim(), body);
-                                    ctx.copy_text(full);
-                                    *copied_at = Some(Instant::now());
-                                }
-                                if ui
-                                    .button("Copy body only")
-                                    .on_hover_text("Copy just the e-mail body to the clipboard")
-                                    .clicked()
-                                {
-                                    ctx.copy_text(body.clone());
-                                    *copied_at = Some(Instant::now());
-                                }
-                                if let Some(when) = copied_at
-                                    && when.elapsed() < Duration::from_secs(2)
-                                {
-                                    ui.colored_label(GREEN, "Copied!");
-                                    // Keep repainting until the hint
-                                    // expires so it disappears on time.
-                                    ctx.request_repaint_after(Duration::from_millis(500));
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.colored_label(
-                                            GRAY,
-                                            "Fill in the recipient and replace [Your name] in the signature",
+                                ui.add_space(4.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt(egui::Id::unique(("email_draft_body", id)))
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        // ScrollArea content inherits the
+                                        // bottom-up layout, but the e-mail body
+                                        // should still read top-down.
+                                        ui.with_layout(
+                                            egui::Layout::top_down(egui::Align::LEFT),
+                                            |ui| {
+                                                ui.add(
+                                                    egui::TextEdit::multiline(body)
+                                                        .font(egui::TextStyle::Monospace)
+                                                        .desired_width(f32::INFINITY)
+                                                        .desired_rows(20),
+                                                );
+                                            },
                                         );
-                                    },
-                                );
+                                    });
                             });
                         })
                 }
