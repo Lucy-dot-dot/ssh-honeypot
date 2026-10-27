@@ -1292,9 +1292,9 @@ impl eframe::App for DashboardApp {
             // an input event. The callback runs once the integration has read
             // the rendered pixels; it does not request a new frame, but none is
             // needed since we only touch the clipboard here.
-            let ctx = ctx.clone();
+            let cb_ctx = ctx.clone();
             ctx.request_screenshot(move |screenshot| {
-                ctx.copy_image(screenshot.as_ref().clone());
+                cb_ctx.copy_image(screenshot.as_ref().clone());
                 #[cfg(target_os = "windows")]
                 {
                     use clipboard_win::{
