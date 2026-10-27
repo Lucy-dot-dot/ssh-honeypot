@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 common = { workspace = true }
-eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow"] }
-egui = { version = "0.36.2", default-features = false, features = ["default_fonts"]}
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow"] }
+egui = { version = "0.37.0", default-features = false, features = ["default_fonts"]}
 sqlx = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 chrono = { workspace = true }
@@ -15,7 +15,7 @@ reqwest = { workspace = true, features = ["json"] }
 serde_json = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-eframe = { version = "0.36.2", features = ["x11", "wayland"] }
+eframe = { version = "0.37.0", features = ["x11", "wayland"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 clipboard-win = "5.4.1"
