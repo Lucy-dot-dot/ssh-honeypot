@@ -261,7 +261,13 @@ impl Connection {
     /// optional login encryption, LOGIN7 authentication (SQL auth, NTLM or
     /// Azure AD) and the post-login request loop. Returns the first IO
     /// error encountered.
-    async fn run_session(&self, stream: TcpStream, ip: &str, peer: SocketAddr, conn_id: Uuid) -> io::Result<()> {
+    async fn run_session(
+        &self,
+        stream: TcpStream,
+        ip: &str,
+        peer: SocketAddr,
+        conn_id: Uuid,
+    ) -> io::Result<()> {
         let mut transport = if peek_is_tls_client_hello(&stream).await? {
             // TDS 8.0 "strict encryption": TLS before prelogin
             let Some(acceptor) = &self.tls_acceptor else {

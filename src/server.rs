@@ -9,7 +9,7 @@ use shell::commands::{
     CatCommand, CdCommand, ColonCommand, CommandContext, CommandDispatcher, CurlCommand,
     DateCommand, EchoCommand, ExitCommand, ExportCommand, FalseCommand, FreeCommand, IdCommand,
     LsCommand, PsCommand, PwdCommand, SudoCommand, TestCommand, TrueCommand, UnameCommand,
-    UnsetCommand, WgetCommand, WhoamiCommand,
+    UnsetCommand, WgetCommand, WhichCommand, WhoamiCommand,
 };
 use shell::filesystem::fs2::FileSystem;
 use ssh_encoding::Error as SshEncodingError;
@@ -85,6 +85,9 @@ pub struct SshHandler {
     current_cmd: String,
     pending_block: String,
     cwd: String,
+    /// Exit status of the last executed command line (reported via SSH
+    /// exit-status and expanded for `$?` on subsequent lines).
+    last_exit_code: i32,
     hostname: String,
     disable_cli_interface: bool,
     disable_exec: bool,
@@ -310,6 +313,11 @@ impl Handler for SshHandler {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async move {
             log::debug!("Channel EOF on channel: {}, closing channel", channel);
+            // Report the last command's exit status before closing, mirroring
+            // a shell that exits on EOF (e.g. Ctrl-D).
+            if let Err(e) = session.exit_status_request(channel, self.last_exit_code as u32) {
+                log::error!("Failed to send exit status request: {}", e);
+            }
             session.close(channel)?;
             Ok(())
         }
@@ -559,6 +567,13 @@ impl Handler for SshHandler {
                             "Closing session {} due to exit command in pipeline",
                             self.session_data.auth_id
                         );
+                        // Report the final exit status before tearing down the
+                        // channel, like a real shell does.
+                        if let Err(e) =
+                            session.exit_status_request(channel, self.last_exit_code as u32)
+                        {
+                            log::error!("Failed to send exit status request: {}", e);
+                        }
                         self.send_and_log(
                             session,
                             channel,
@@ -797,12 +812,19 @@ impl SshHandler {
             self.fs2.clone(),
             self.session_data.auth_id.clone(),
         );
+        // Seed `$?` with the status of the previous command line so the
+        // dispatcher expands it correctly.
+        context.env_vars.insert(
+            shell::parser::EXIT_STATUS_VAR.to_string(),
+            self.last_exit_code.to_string(),
+        );
 
         // Use the new dispatcher for all commands (handles parsing, pipes, &&/||, sequencing)
         let outcome = self.command_dispatcher.execute(&cmd, &mut context).await;
 
         // Update cwd from context in case it changed (e.g., from cd command)
         self.cwd = context.cwd.clone();
+        self.last_exit_code = outcome.exit_code;
 
         (outcome.output, outcome.exit_requested)
     }
@@ -1223,6 +1245,7 @@ impl server::Server for SshServerHandler {
             current_cmd: String::new(),
             pending_block: String::new(),
             cwd: String::from("/home/user"),
+            last_exit_code: 0,
             hostname: self.hostname.clone(),
             disable_cli_interface: self.disable_cli_interface,
             disable_exec: self.disable_exec,
@@ -1403,6 +1426,9 @@ impl SshServerHandler {
         dispatcher
             .registry_mut()
             .register_command(Arc::new(UnsetCommand));
+        dispatcher
+            .registry_mut()
+            .register_command(Arc::new(WhichCommand));
 
         // Register stateful commands
         dispatcher

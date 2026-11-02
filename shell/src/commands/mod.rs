@@ -14,6 +14,7 @@ pub mod ps_command;
 pub mod registry;
 pub mod test_command;
 pub mod uname_command;
+pub mod which_command;
 
 // New trait-based exports
 pub use builtin_commands::{
@@ -34,3 +35,4 @@ pub use ps_command::PsCommand;
 pub use registry::CommandRegistry;
 pub use test_command::TestCommand;
 pub use uname_command::UnameCommand;
+pub use which_command::WhichCommand;

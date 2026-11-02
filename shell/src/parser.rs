@@ -12,6 +12,19 @@
 
 use std::collections::HashMap;
 
+/// Placeholder emitted for `$?` / `${?}` during parse-time expansion.
+///
+/// The exit status of a command is only known when that command actually runs,
+/// but this parser expands variables for a whole line up front. Instead of
+/// baking in a constant, `$?` expands to this sentinel and the dispatcher
+/// substitutes the live exit status right before each pipeline executes
+/// (see `CommandDispatcher::run_pipeline`).
+pub const EXIT_STATUS_SENTINEL: &str = "\u{1}";
+
+/// Environment variable name under which the dispatcher publishes the last
+/// exit status (so `$?` in later lines expands to it).
+pub const EXIT_STATUS_VAR: &str = "?";
+
 /// A separator/operator discovered while scanning the raw line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sep {
@@ -490,7 +503,9 @@ fn expand_vars(s: &str, env: &HashMap<String, String>) -> String {
             continue;
         }
         if nc == '?' {
-            out.push('0');
+            // Deferred expansion: the dispatcher replaces the sentinel with the
+            // live exit status just before the pipeline runs.
+            out.push_str(EXIT_STATUS_SENTINEL);
             i += 2;
             continue;
         }
@@ -525,6 +540,11 @@ fn expand_vars(s: &str, env: &HashMap<String, String>) -> String {
 /// all parameter-expansion operators (`:-`, `:+`, `:=`, `:?`, `-`, `+`, `#`,
 /// `##`, `%`, `%%`, `/`, `//`, and length `${#var}`).
 fn expand_brace(inner: &str, env: &HashMap<String, String>) -> String {
+    // `${?}` behaves like `$?` (deferred exit-status expansion).
+    if inner == "?" {
+        return EXIT_STATUS_SENTINEL.to_string();
+    }
+
     // `${#NAME}` -> string length of NAME's value.
     if let Some(rest) = inner.strip_prefix('#') {
         if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
@@ -1593,6 +1613,49 @@ mod tests {
                 assert_eq!(first_cmd_name(&branches[0].1), Some("echo".to_string()));
             }
             other => panic!("expected If, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dollar_question_expands_to_sentinel_not_zero() {
+        let e = env();
+        let script = parse_script("echo failed-$?", &e, "/home/root");
+        match &script.nodes[0] {
+            Node::Seq(list) => {
+                let cmd = &list.items[0].pipeline.commands[0];
+                assert_eq!(cmd.name, "echo");
+                // The live status is substituted at run time; parse time must
+                // NOT bake in a literal "0".
+                assert_eq!(cmd.args[0], format!("failed-{}", EXIT_STATUS_SENTINEL));
+            }
+            other => panic!("expected Seq, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dollar_question_brace_form_expands_to_sentinel() {
+        let e = env();
+        let script = parse_script("echo ${?}", &e, "/home/root");
+        match &script.nodes[0] {
+            Node::Seq(list) => {
+                let cmd = &list.items[0].pipeline.commands[0];
+                assert_eq!(cmd.args[0], EXIT_STATUS_SENTINEL);
+            }
+            other => panic!("expected Seq, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn exit_takes_numeric_argument() {
+        let e = env();
+        let script = parse_script("exit 5", &e, "/home/root");
+        match &script.nodes[0] {
+            Node::Seq(list) => {
+                let cmd = &list.items[0].pipeline.commands[0];
+                assert_eq!(cmd.name, "exit");
+                assert_eq!(cmd.args, &["5".to_string()]);
+            }
+            other => panic!("expected Seq, got {:?}", other),
         }
     }
 

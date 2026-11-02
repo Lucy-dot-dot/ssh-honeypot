@@ -12,6 +12,9 @@ pub struct ExecutionOutcome {
     pub output: String,
     /// Whether the user requested the session to end (`exit` / `logout`).
     pub exit_requested: bool,
+    /// Exit status of the last command that ran (bash semantics: 0 success,
+    /// 1 generic failure, 126 permission denied, 127 command not found).
+    pub exit_code: i32,
 }
 
 /// Handles command parsing and execution.
@@ -23,8 +26,30 @@ pub struct CommandDispatcher {
 struct PipeResult {
     stdout: String,
     stderr: String,
-    success: bool,
+    /// Exit status of the pipeline's last executed command.
+    exit_code: i32,
     exit_requested: bool,
+}
+
+/// Map a command error to a bash-style exit status.
+fn error_exit_code(e: &CommandError) -> i32 {
+    match e {
+        CommandError::SilentFailure => 1,
+        CommandError::NotFound(_) => 127,
+        CommandError::PermissionDenied(_) => 126,
+        CommandError::InvalidArguments(_)
+        | CommandError::FilesystemError(_)
+        | CommandError::ExecutionError(_) => 1,
+    }
+}
+
+/// Replace the parser's `$?` sentinel with the live exit status.
+fn expand_exit_status(s: &str, code: i32) -> String {
+    if s.contains(parser::EXIT_STATUS_SENTINEL) {
+        s.replace(parser::EXIT_STATUS_SENTINEL, &code.to_string())
+    } else {
+        s.to_string()
+    }
 }
 
 #[allow(dead_code)]
@@ -57,6 +82,7 @@ impl CommandDispatcher {
             return ExecutionOutcome {
                 output: String::new(),
                 exit_requested: false,
+                exit_code: 0,
             };
         }
 
@@ -65,6 +91,7 @@ impl CommandDispatcher {
             return ExecutionOutcome {
                 output: String::new(),
                 exit_requested: false,
+                exit_code: 0,
             };
         }
 
@@ -74,13 +101,19 @@ impl CommandDispatcher {
             .unwrap_or_else(|| format!("/home/{}", context.username));
         let script = parser::parse_script(&resolved, &context.env_vars, &home);
 
-        let (stdout, stderr, exit, _) = self.run_nodes(&script.nodes, context).await;
+        let (stdout, stderr, exit, code) = self.run_nodes(&script.nodes, context).await;
         let mut output = stdout;
         output.push_str(&stderr);
+        // Publish the final status so later lines (and command substitutions)
+        // observe it through `$?`.
+        context
+            .env_vars
+            .insert(parser::EXIT_STATUS_VAR.to_string(), code.to_string());
 
         ExecutionOutcome {
             output,
             exit_requested: exit,
+            exit_code: code,
         }
     }
 
@@ -172,16 +205,16 @@ impl CommandDispatcher {
     }
 
     /// Run a full command list honouring `&&` / `||` / `;` sequencing.
-    /// Returns `(stdout, stderr, exit_requested, last_success)`.
+    /// Returns `(stdout, stderr, exit_requested, last_exit_code)`.
     async fn run_command_list(
         &self,
         list: &CommandList,
         context: &mut CommandContext,
-    ) -> (String, String, bool, bool) {
+    ) -> (String, String, bool, i32) {
         let mut stdout = String::new();
         let mut stderr = String::new();
         let mut exit = false;
-        let mut last_success = true;
+        let mut last_exit = 0;
         let mut should_run = true;
 
         for item in &list.items {
@@ -190,52 +223,61 @@ impl CommandDispatcher {
                 stdout.push_str(&r.stdout);
                 stderr.push_str(&r.stderr);
                 exit |= r.exit_requested;
-                last_success = r.success;
+                last_exit = r.exit_code;
+                // Publish after every pipeline so `false || echo $?` and
+                // friends observe the intermediate status.
+                context
+                    .env_vars
+                    .insert(parser::EXIT_STATUS_VAR.to_string(), last_exit.to_string());
+                if exit {
+                    // `exit`/`logout` fired: stop the whole list like bash.
+                    break;
+                }
             }
             should_run = match item.op {
                 AndOp::Then => true,
-                AndOp::And => last_success,
-                AndOp::Or => !last_success,
+                AndOp::And => last_exit == 0,
+                AndOp::Or => last_exit != 0,
             };
         }
 
-        (stdout, stderr, exit, last_success)
+        (stdout, stderr, exit, last_exit)
     }
 
     /// Run a sequence of parsed nodes (control flow + command lists).
-    /// Returns `(stdout, stderr, exit_requested, last_success)`.
+    /// Returns `(stdout, stderr, exit_requested, last_exit_code)`.
     /// Boxed to break the async recursion cycle with `run_node` (nested control
     /// flow like `if` inside `if`).
     fn run_nodes<'a>(
         &'a self,
         nodes: &'a [parser::Node],
         context: &'a mut CommandContext,
-    ) -> Pin<Box<dyn Future<Output = (String, String, bool, bool)> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = (String, String, bool, i32)> + Send + 'a>> {
         Box::pin(async move {
             let mut stdout = String::new();
             let mut stderr = String::new();
             let mut exit = false;
-            let mut last_success = true;
+            let mut last_exit = 0;
             for node in nodes {
-                let (o, e, ex, succ) = self.run_node(node, context).await;
+                let (o, e, ex, code) = self.run_node(node, context).await;
                 stdout.push_str(&o);
                 stderr.push_str(&e);
                 exit |= ex;
-                last_success = succ;
+                last_exit = code;
                 if exit {
                     break;
                 }
             }
-            (stdout, stderr, exit, last_success)
+            (stdout, stderr, exit, last_exit)
         })
     }
 
-    /// Execute a single parsed node. Returns `(stdout, stderr, exit, success)`.
+    /// Execute a single parsed node. Returns `(stdout, stderr, exit, exit_code)`.
     async fn run_node(
         &self,
         node: &parser::Node,
         context: &mut CommandContext,
-    ) -> (String, String, bool, bool) {
+    ) -> (String, String, bool, i32) {
         match node {
             parser::Node::Seq(list) => self.run_command_list(list, context).await,
             parser::Node::If {
@@ -245,37 +287,37 @@ impl CommandDispatcher {
                 let mut stdout = String::new();
                 let mut stderr = String::new();
                 for (cond, body) in branches {
-                    let (o, e, _ex, succ) = self.run_nodes(cond, context).await;
+                    let (o, e, _ex, code) = self.run_nodes(cond, context).await;
                     stdout.push_str(&o);
                     stderr.push_str(&e);
-                    if succ {
-                        let (o2, e2, ex2, _) = self.run_nodes(body, context).await;
+                    if code == 0 {
+                        let (o2, e2, ex2, c2) = self.run_nodes(body, context).await;
                         stdout.push_str(&o2);
                         stderr.push_str(&e2);
-                        return (stdout, stderr, ex2, true);
+                        return (stdout, stderr, ex2, c2);
                     }
                 }
                 if let Some(els) = else_body {
-                    let (o, e, ex, _) = self.run_nodes(els, context).await;
+                    let (o, e, ex, code) = self.run_nodes(els, context).await;
                     stdout.push_str(&o);
                     stderr.push_str(&e);
-                    return (stdout, stderr, ex, true);
+                    return (stdout, stderr, ex, code);
                 }
-                (stdout, stderr, false, true)
+                (stdout, stderr, false, 0)
             }
             parser::Node::For { var, words, body } => {
                 let mut stdout = String::new();
                 let mut stderr = String::new();
                 let mut exit = false;
-                let mut last_success = true;
+                let mut last_exit = 0;
                 let saved = context.env_vars.get(var).cloned();
                 for w in words {
                     context.env_vars.insert(var.clone(), w.clone());
-                    let (o, e, ex, succ) = self.run_nodes(body, context).await;
+                    let (o, e, ex, code) = self.run_nodes(body, context).await;
                     stdout.push_str(&o);
                     stderr.push_str(&e);
                     exit |= ex;
-                    last_success = succ;
+                    last_exit = code;
                     if exit {
                         break;
                     }
@@ -288,15 +330,15 @@ impl CommandDispatcher {
                         context.env_vars.remove(var);
                     }
                 }
-                (stdout, stderr, exit, last_success)
+                (stdout, stderr, exit, last_exit)
             }
             parser::Node::While { cond, body, until } => {
                 let mut stdout = String::new();
                 let mut stderr = String::new();
                 let mut exit = false;
                 for _ in 0..10000 {
-                    let (_o, _e, _ex, succ) = self.run_nodes(cond, context).await;
-                    let keep_going = if *until { !succ } else { succ };
+                    let (_o, _e, _ex, code) = self.run_nodes(cond, context).await;
+                    let keep_going = if *until { code != 0 } else { code == 0 };
                     if !keep_going {
                         break;
                     }
@@ -308,7 +350,7 @@ impl CommandDispatcher {
                         break;
                     }
                 }
-                (stdout, stderr, exit, true)
+                (stdout, stderr, exit, 0)
             }
         }
     }
@@ -322,15 +364,47 @@ impl CommandDispatcher {
     ) -> PipeResult {
         let mut stdout = String::new();
         let mut stderr_acc = String::new();
-        let mut success = true;
+        let mut exit_code = 0;
         let mut exit_requested = false;
+
+        // Status of the previous pipeline: `$?` inside this pipeline (any
+        // stage) expands to it, matching bash which expands a pipeline's
+        // words before it starts running.
+        let prev_exit: i32 = context
+            .env_vars
+            .get(parser::EXIT_STATUS_VAR)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
 
         for (idx, cmd) in pipeline.commands.iter().enumerate() {
             if cmd.name.is_empty() {
                 continue;
             }
-            if cmd.name == "exit" || cmd.name == "logout" {
+
+            // Defer `$?` expansion until execution time: substitute the
+            // previous pipeline's status now, before anything runs.
+            let name = expand_exit_status(&cmd.name, prev_exit);
+            let args: Vec<String> = cmd
+                .args
+                .iter()
+                .map(|a| expand_exit_status(a, prev_exit))
+                .collect();
+
+            if name == "exit" || name == "logout" {
                 exit_requested = true;
+                exit_code = match args.first() {
+                    None => prev_exit,
+                    Some(arg) => match arg.trim().parse::<i32>() {
+                        Ok(n) => n & 0xFF,
+                        Err(_) => {
+                            stderr_acc.push_str(&format!(
+                                "bash: exit: {}: numeric argument required\r\n",
+                                arg
+                            ));
+                            2
+                        }
+                    },
+                };
                 break;
             }
 
@@ -342,43 +416,43 @@ impl CommandDispatcher {
             };
 
             // Bare variable assignment `VAR=value` (RHS already expanded).
-            if let Some((var, val)) = parser::parse_assignment(&cmd.name) {
+            if let Some((var, val)) = parser::parse_assignment(&name) {
                 context.env_vars.insert(var, val);
-                if cmd.args.is_empty() {
-                    success = true;
+                if args.is_empty() {
+                    exit_code = 0;
                     continue;
                 }
                 // `VAR=value command args`: set env var then run the real command.
-                let real_name = cmd.args[0].clone();
-                let real_args: Vec<String> = cmd.args[1..].to_vec();
-                let (mut out, mut err, succ) = self
+                let real_name = args[0].clone();
+                let real_args: Vec<String> = args[1..].to_vec();
+                let (mut out, mut err, code) = self
                     .dispatch_one(&real_name, &real_args, &stdin, is_first, context)
                     .await;
                 Self::apply_redirects(&mut out, &mut err, &cmd.redirects);
                 stdout = out;
                 stderr_acc.push_str(&err);
-                success = succ;
+                exit_code = code;
                 continue;
             }
 
-            let (mut out, mut err, succ) = self
-                .dispatch_one(&cmd.name, &cmd.args, &stdin, is_first, context)
+            let (mut out, mut err, code) = self
+                .dispatch_one(&name, &args, &stdin, is_first, context)
                 .await;
             Self::apply_redirects(&mut out, &mut err, &cmd.redirects);
             stdout = out;
             stderr_acc.push_str(&err);
-            success = succ;
+            exit_code = code;
         }
 
         PipeResult {
             stdout,
             stderr: stderr_acc,
-            success,
+            exit_code,
             exit_requested,
         }
     }
 
-    /// Dispatch a single command/filter, returning `(stdout, stderr, success)`.
+    /// Dispatch a single command/filter, returning `(stdout, stderr, exit_code)`.
     async fn dispatch_one(
         &self,
         name: &str,
@@ -386,34 +460,38 @@ impl CommandDispatcher {
         stdin: &str,
         is_first: bool,
         context: &mut CommandContext,
-    ) -> (String, String, bool) {
+    ) -> (String, String, i32) {
         if name.is_empty() {
-            return (String::new(), String::new(), true);
+            return (String::new(), String::new(), 0);
         }
-        if filters::is_filter(name) && (!is_first || !self.registry.has_command(name)) {
-            match filters::apply_filter(name, args, stdin, context).await {
-                Some((out, succ)) => (out, String::new(), succ),
-                None => (
-                    String::new(),
-                    format!("bash: {}: command not found\r\n", name),
-                    false,
-                ),
+
+        // Commands invoked through a path ("/usr/bin/cat", "./echo", "../bin/ls")
+        // resolve to their basename so they hit the same implementation as the
+        // bare name. Filters and registry lookups both use the resolved name.
+        let path_base = resolve_command_path(name);
+        let lookup = path_base.unwrap_or(name);
+        let not_found = if path_base.is_some() {
+            // bash reports a different error for path-qualified commands.
+            format!("bash: {}: No such file or directory\r\n", name)
+        } else {
+            format!("bash: {}: command not found\r\n", name)
+        };
+
+        if filters::is_filter(lookup) && (!is_first || !self.registry.has_command(lookup)) {
+            match filters::apply_filter(lookup, args, stdin, context).await {
+                Some((out, succ)) => (out, String::new(), i32::from(!succ)),
+                None => (String::new(), not_found, 127),
             }
-        } else if self.registry.has_command(name) {
-            match self.registry.execute_command(name, args, context).await {
-                Ok(out) => (out, String::new(), true),
+        } else if self.registry.has_command(lookup) {
+            match self.registry.execute_command(lookup, args, context).await {
+                Ok(out) => (out, String::new(), 0),
                 Err(e) => {
-                    let succ = matches!(e, CommandError::SilentFailure);
                     let msg = format!("{}\r\n", e);
-                    (String::new(), msg, succ)
+                    (String::new(), msg, error_exit_code(&e))
                 }
             }
         } else {
-            (
-                String::new(),
-                format!("bash: {}: command not found\r\n", name),
-                false,
-            )
+            (String::new(), not_found, 127)
         }
     }
 
@@ -461,6 +539,18 @@ impl Default for CommandDispatcher {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Resolve a command invoked through a path to its basename:
+/// `/usr/bin/cat` -> `cat`, `./echo` -> `echo`, `../bin/ls` -> `ls`.
+/// Returns `None` when the name contains no path component or the path
+/// is empty (`/`, `foo/`), in which case the name is used as-is.
+fn resolve_command_path(name: &str) -> Option<&str> {
+    if !name.contains('/') {
+        return None;
+    }
+    let base = name.trim_end_matches('/').rsplit('/').next()?;
+    if base.is_empty() { None } else { Some(base) }
 }
 
 /// Find the end of a `$(...)` command substitution. `start` is the index just
@@ -598,6 +688,107 @@ mod tests {
         let mut ctx = make_context();
         let out = d.execute("echo hello world", &mut ctx).await;
         assert!(out.output.contains("hello world"));
+    }
+
+    #[tokio::test]
+    async fn full_path_command_resolves_to_bare_name() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("/bin/echo hello via-path", &mut ctx).await;
+        assert!(
+            out.output.contains("hello via-path"),
+            "output was: {}",
+            out.output
+        );
+    }
+
+    #[tokio::test]
+    async fn usr_bin_cat_resolves_to_cat() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("echo piped-input | /usr/bin/cat", &mut ctx).await;
+        assert!(
+            out.output.contains("piped-input"),
+            "output was: {}",
+            out.output
+        );
+    }
+
+    #[tokio::test]
+    async fn relative_path_command_resolves() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("./echo relative-path", &mut ctx).await;
+        assert!(
+            out.output.contains("relative-path"),
+            "output was: {}",
+            out.output
+        );
+
+        let out = d.execute("echo x | ../bin/grep x", &mut ctx).await;
+        assert!(out.output.contains("x"), "output was: {}", out.output);
+    }
+
+    #[tokio::test]
+    async fn path_filter_as_pipeline_stage() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("echo alpha | /usr/bin/grep beta", &mut ctx).await;
+        assert!(
+            !out.output.contains("alpha"),
+            "filter should have consumed input; output was: {}",
+            out.output
+        );
+
+        let out = d.execute("echo alpha | /bin/grep alpha", &mut ctx).await;
+        assert!(out.output.contains("alpha"), "output was: {}", out.output);
+    }
+
+    #[tokio::test]
+    async fn full_path_unknown_command_bash_error() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("/usr/bin/definitely-not-real", &mut ctx).await;
+        assert!(
+            out.output
+                .contains("bash: /usr/bin/definitely-not-real: No such file or directory"),
+            "output was: {}",
+            out.output
+        );
+
+        // Bare unknown names keep the classic "command not found" message.
+        let out = d.execute("definitely-not-real", &mut ctx).await;
+        assert!(
+            out.output
+                .contains("bash: definitely-not-real: command not found"),
+            "output was: {}",
+            out.output
+        );
+    }
+
+    #[tokio::test]
+    async fn assignment_prefix_with_full_path_command() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        // `VAR=value cmd args` runs the path-qualified command with the env set.
+        let out = d.execute("V=hello /usr/bin/echo hi", &mut ctx).await;
+        assert!(out.output.contains("hi"), "output was: {}", out.output);
+        assert!(
+            !out.output.contains("command not found"),
+            "output was: {}",
+            out.output
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_command_path_basics() {
+        assert_eq!(resolve_command_path("/usr/bin/cat"), Some("cat"));
+        assert_eq!(resolve_command_path("/bin/ls"), Some("ls"));
+        assert_eq!(resolve_command_path("./echo"), Some("echo"));
+        assert_eq!(resolve_command_path("../bin/sh"), Some("sh"));
+        assert_eq!(resolve_command_path("foo/"), Some("foo"));
+        assert_eq!(resolve_command_path("cat"), None);
+        assert_eq!(resolve_command_path("/"), None);
     }
 
     #[tokio::test]
@@ -826,5 +1017,212 @@ echo "LAST:$last_output"
         ] {
             assert!(!output.contains(bad), "leaked {:?}:\n{}", bad, output);
         }
+    }
+
+    #[tokio::test]
+    async fn true_exit_code_zero() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("true", &mut ctx).await;
+        assert_eq!(out.exit_code, 0);
+        assert!(!out.exit_requested);
+    }
+
+    #[tokio::test]
+    async fn false_exit_code_one() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("false", &mut ctx).await;
+        assert_eq!(out.exit_code, 1);
+        assert!(!out.exit_requested);
+    }
+
+    #[tokio::test]
+    async fn command_not_found_exit_127() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("nosuchcmd123", &mut ctx).await;
+        assert_eq!(out.exit_code, 127);
+        assert!(out.output.contains("command not found"));
+    }
+
+    #[tokio::test]
+    async fn path_command_not_found_exit_127() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("/nonexistent/dir/tool", &mut ctx).await;
+        assert_eq!(out.exit_code, 127);
+        assert!(out.output.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn failing_command_propagates_code() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("cat /does/not/exist", &mut ctx).await;
+        assert_eq!(out.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn dollar_question_same_line_false_then_echo() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("false; echo $?", &mut ctx).await;
+        assert_eq!(out.exit_code, 0, "echo succeeds");
+        assert!(
+            out.output.contains("\n1\r\n") || out.output.contains("1\r\n"),
+            "got: {:?}",
+            out.output
+        );
+    }
+
+    #[tokio::test]
+    async fn dollar_question_expands_zero_after_success() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("true; echo $?", &mut ctx).await;
+        assert!(out.output.contains("0\r\n"), "got: {:?}", out.output);
+    }
+
+    #[tokio::test]
+    async fn dollar_question_brace_form() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("false; echo ${?}", &mut ctx).await;
+        assert!(out.output.contains("1\r\n"), "got: {:?}", out.output);
+    }
+
+    #[tokio::test]
+    async fn dollar_question_across_lines() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("false", &mut ctx).await;
+        assert_eq!(out.exit_code, 1);
+        let out2 = d.execute("echo status=$?", &mut ctx).await;
+        assert!(out2.output.contains("status=1"), "got: {:?}", out2.output);
+    }
+
+    #[tokio::test]
+    async fn andor_or_takes_right_branch_on_failure() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("false && echo yes || echo no", &mut ctx).await;
+        assert!(!out.output.contains("yes\r\n"));
+        assert!(out.output.contains("no\r\n"));
+        assert_eq!(out.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn andor_failing_or_chain_reports_code() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("nosuchcmd || false", &mut ctx).await;
+        assert_eq!(out.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn exit_with_numeric_argument() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("exit 5", &mut ctx).await;
+        assert!(out.exit_requested);
+        assert_eq!(out.exit_code, 5);
+        assert!(
+            !out.output.contains("numeric"),
+            "no error expected: {:?}",
+            out.output
+        );
+    }
+
+    #[tokio::test]
+    async fn exit_with_non_numeric_argument() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("exit abc", &mut ctx).await;
+        assert!(out.exit_requested);
+        assert_eq!(out.exit_code, 2);
+        assert!(out.output.contains("numeric argument required"));
+    }
+
+    #[tokio::test]
+    async fn exit_without_argument_uses_last_status() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("false; exit", &mut ctx).await;
+        assert!(out.exit_requested);
+        assert_eq!(out.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn exit_status_wraps_to_u8() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("exit 300", &mut ctx).await;
+        assert_eq!(out.exit_code, 300 & 0xFF);
+    }
+
+    #[tokio::test]
+    async fn filter_no_match_exit_one() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d
+            .execute("echo hello | grep -q nonexistent", &mut ctx)
+            .await;
+        assert_eq!(out.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_is_last_stage() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("echo hello | grep -q hello", &mut ctx).await;
+        assert_eq!(out.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn bare_assignment_exit_zero() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("FOO=bar", &mut ctx).await;
+        assert_eq!(out.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn assignment_prefix_command_code() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("FOO=bar false", &mut ctx).await;
+        assert_eq!(out.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn exit_in_middle_of_pipeline_suppresses_later_stages() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("exit 7; echo unreachable", &mut ctx).await;
+        assert_eq!(out.exit_code, 7);
+        assert!(!out.output.contains("unreachable"));
+    }
+
+    #[tokio::test]
+    async fn andor_first_status_visible_in_branch() {
+        // bash: `false || echo $?` prints 1 (the status of the failed left side).
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("false || echo $?", &mut ctx).await;
+        assert!(
+            out.output.contains("\n1\r\n") || out.output.trim_end().ends_with('1'),
+            "got: {:?}",
+            out.output
+        );
+        assert_eq!(out.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn dollar_question_in_command_args() {
+        let d = make_dispatcher();
+        let mut ctx = make_context();
+        let out = d.execute("false; echo status-$?", &mut ctx).await;
+        assert!(out.output.contains("status-1"), "got: {:?}", out.output);
     }
 }
