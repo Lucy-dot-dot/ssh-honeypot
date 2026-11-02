@@ -19,6 +19,7 @@ const DEFAULT_TOP_TTL: Duration = Duration::from_secs(60);
 /// A recent connection-tracking row (conn_track table).
 #[derive(Debug, Clone, FromRow)]
 pub struct RecentConnRow {
+    pub conn_id: String,
     pub timestamp: DateTime<Utc>,
     pub ip: String,
     pub port: Option<i32>,
@@ -28,6 +29,10 @@ pub struct RecentConnRow {
 /// A recent authentication attempt (auth table).
 #[derive(Debug, Clone, FromRow)]
 pub struct RecentAuthRow {
+    pub auth_id: String,
+    /// conn_track row this attempt was observed on (None for rows recorded
+    /// before migration 015 added the FK).
+    pub conn_id: Option<String>,
     pub timestamp: DateTime<Utc>,
     pub ip: String,
     pub username: String,
@@ -81,7 +86,45 @@ pub struct FileRow {
     pub file_entropy: Option<f64>,
 }
 
-/// Full detail for one auth/session: auth fields + commands + files.
+/// A recent command row (commands table joined to auth for context).
+#[derive(Debug, Clone, FromRow)]
+pub struct RecentCommandRow {
+    pub command_id: String,
+    pub auth_id: String,
+    pub ip: String,
+    pub username: String,
+    pub timestamp: DateTime<Utc>,
+    pub command: String,
+}
+
+/// One auth attempt observed on a connection (connection detail view).
+#[derive(Debug, Clone, FromRow)]
+pub struct ConnAuthRow {
+    pub auth_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub ip: String,
+    pub username: String,
+    pub password: Option<String>,
+    pub auth_type: Option<String>,
+    pub successful: Option<bool>,
+    /// The (latest) session spawned by this attempt, if any.
+    pub session_id: Option<String>,
+    pub command_count: i64,
+}
+
+/// Full detail for one conn_track row: connection fields + its auth attempts.
+#[derive(Debug, Clone)]
+pub struct ConnectionDetail {
+    pub conn_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub ip: String,
+    pub port: Option<i32>,
+    pub local_port: Option<i32>,
+    pub auths: Vec<ConnAuthRow>,
+}
+
+/// Full detail for one auth/session: auth fields + session + connection +
+/// commands + files.
 #[derive(Debug, Clone)]
 pub struct SessionDetail {
     pub auth_id: String,
@@ -94,6 +137,16 @@ pub struct SessionDetail {
     pub country_code: Option<String>,
     pub isp: Option<String>,
     pub city: Option<String>,
+    /// The (latest) SSH session spawned by this auth attempt, if any.
+    pub session_id: Option<String>,
+    pub session_start: Option<DateTime<Utc>>,
+    pub session_end: Option<DateTime<Utc>>,
+    pub duration_seconds: Option<i64>,
+    /// The conn_track row this attempt was observed on (`None` for rows that
+    /// predate migration 015).
+    pub conn_id: Option<String>,
+    pub conn_timestamp: Option<DateTime<Utc>>,
+    pub conn_port: Option<i32>,
     pub commands: Vec<CommandRow>,
     pub files: Vec<FileRow>,
 }
@@ -124,6 +177,7 @@ pub struct DashboardSnapshot {
     pub top_fetched_at: Option<DateTime<Utc>>,
     pub recent_connections: Vec<RecentConnRow>,
     pub recent_auths: Vec<RecentAuthRow>,
+    pub recent_commands: Vec<RecentCommandRow>,
     pub live_sessions: Vec<LiveSessionRow>,
     pub recent_sessions: Vec<EndedSessionRow>,
     pub top_ips: Vec<TopEntry>,
@@ -242,6 +296,7 @@ impl Dashboard {
         let (
             recent_connections,
             recent_auths,
+            recent_commands,
             live_sessions,
             recent_sessions,
             top_ips,
@@ -251,6 +306,7 @@ impl Dashboard {
         ) = tokio::try_join!(
             self.recent_connections(20),
             self.recent_auths(40),
+            self.recent_commands(40),
             self.live_sessions(),
             self.recent_sessions(20),
             self.top_ips(15),
@@ -264,6 +320,7 @@ impl Dashboard {
             top_fetched_at: self.top_fetched_at(),
             recent_connections,
             recent_auths,
+            recent_commands,
             live_sessions,
             recent_sessions,
             top_ips,
@@ -290,9 +347,17 @@ impl Dashboard {
     /// milliseconds; pair it with [`Self::refresh_top`] to (re)compute the
     /// expensive aggregates in the background.
     pub async fn main_snapshot(&self) -> Result<DashboardSnapshot, sqlx::Error> {
-        let (recent_connections, recent_auths, live_sessions, recent_sessions, reported_ips) = tokio::try_join!(
+        let (
+            recent_connections,
+            recent_auths,
+            recent_commands,
+            live_sessions,
+            recent_sessions,
+            reported_ips,
+        ) = tokio::try_join!(
             self.recent_connections(20),
             self.recent_auths(40),
+            self.recent_commands(40),
             self.live_sessions(),
             self.recent_sessions(20),
             self.reported_ips(),
@@ -304,6 +369,7 @@ impl Dashboard {
             top_fetched_at: top.fetched_at,
             recent_connections,
             recent_auths,
+            recent_commands,
             live_sessions,
             recent_sessions,
             top_ips: top.ips,
@@ -335,7 +401,7 @@ impl Dashboard {
     pub async fn recent_connections(&self, limit: i64) -> Result<Vec<RecentConnRow>, sqlx::Error> {
         sqlx::query_as::<_, RecentConnRow>(
             r#"
-            SELECT timestamp, host(ip) AS ip, port, local_port
+            SELECT id::text AS conn_id, timestamp, host(ip) AS ip, port, local_port
             FROM conn_track
             ORDER BY timestamp DESC
             LIMIT $1
@@ -350,9 +416,32 @@ impl Dashboard {
     pub async fn recent_auths(&self, limit: i64) -> Result<Vec<RecentAuthRow>, sqlx::Error> {
         sqlx::query_as::<_, RecentAuthRow>(
             r#"
-            SELECT timestamp, host(ip) AS ip, username, password, auth_type, successful
+            SELECT id::text AS auth_id, conn_id::text AS conn_id, timestamp, host(ip) AS ip,
+                   username, password, auth_type, successful
             FROM auth
             ORDER BY timestamp DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Most recent commands, joined to auth for IP/username context.
+    pub async fn recent_commands(&self, limit: i64) -> Result<Vec<RecentCommandRow>, sqlx::Error> {
+        sqlx::query_as::<_, RecentCommandRow>(
+            r#"
+            SELECT
+                c.id::text       AS command_id,
+                c.auth_id::text  AS auth_id,
+                host(a.ip)       AS ip,
+                a.username       AS username,
+                c.timestamp      AS timestamp,
+                c.command        AS command
+            FROM commands c
+            JOIN auth a ON a.id = c.auth_id
+            ORDER BY c.timestamp DESC
             LIMIT $1
             "#,
         )
@@ -525,7 +614,62 @@ impl Dashboard {
         Ok(rows)
     }
 
-    /// Full detail for one auth id: enriched auth fields + commands + uploaded files.
+    /// Full detail for one conn_track row: connection fields plus every auth
+    /// attempt observed on it (drill-down for the connections feed).
+    pub async fn connection_detail(&self, conn_id: &str) -> Result<ConnectionDetail, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT id::text AS conn_id, timestamp, host(ip) AS ip, port, local_port
+            FROM conn_track
+            WHERE id = $1::uuid
+            "#,
+        )
+        .bind(conn_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let row = match row {
+            Some(r) => r,
+            None => return Err(sqlx::Error::RowNotFound),
+        };
+
+        // One row per auth attempt on this connection, in observation order,
+        // with the latest session and a command count for the drill-down
+        // preview (auth → session → commands).
+        let auths = sqlx::query_as::<_, ConnAuthRow>(
+            r#"
+            SELECT
+                a.id::text      AS auth_id,
+                a.timestamp     AS timestamp,
+                host(a.ip)      AS ip,
+                a.username      AS username,
+                a.password      AS password,
+                a.auth_type     AS auth_type,
+                a.successful    AS successful,
+                (SELECT s.id::text FROM sessions s
+                 WHERE s.auth_id = a.id ORDER BY s.start_time DESC LIMIT 1) AS session_id,
+                (SELECT COUNT(*) FROM commands cmd
+                 WHERE cmd.auth_id = a.id)::int8 AS command_count
+            FROM auth a
+            WHERE a.conn_id = $1::uuid
+            ORDER BY a.timestamp ASC
+            "#,
+        )
+        .bind(conn_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(ConnectionDetail {
+            conn_id: row.get("conn_id"),
+            timestamp: row.get("timestamp"),
+            ip: row.get("ip"),
+            port: row.get("port"),
+            local_port: row.get("local_port"),
+            auths,
+        })
+    }
+
+    /// Full detail for one auth id: enriched auth fields + session + connection
+    /// + commands + uploaded files.
     pub async fn session_detail(&self, auth_id: &str) -> Result<SessionDetail, sqlx::Error> {
         let row = sqlx::query(
             r#"
@@ -537,12 +681,24 @@ impl Dashboard {
                 a.auth_type         AS auth_type,
                 a.password          AS password,
                 a.successful        AS successful,
-                COALESCE(ab.country_code, ip.country_code) AS country_code,
-                ip.isp              AS isp,
-                ip.city             AS city
+                COALESCE(ab.country_code, ipc.country_code) AS country_code,
+                ipc.isp             AS isp,
+                ipc.city            AS city,
+                s.id::text          AS session_id,
+                s.start_time        AS session_start,
+                s.end_time          AS session_end,
+                s.duration_seconds  AS duration_seconds,
+                ct.id::text         AS conn_id,
+                ct.timestamp        AS conn_timestamp,
+                ct.port             AS conn_port
             FROM auth a
             LEFT JOIN abuse_ip_cache ab ON ab.ip = a.ip
-            LEFT JOIN ipapi_cache ip ON ip.ip = a.ip
+            LEFT JOIN ipapi_cache ipc ON ipc.ip = a.ip
+            LEFT JOIN LATERAL (
+                SELECT id, start_time, end_time, duration_seconds
+                FROM sessions WHERE auth_id = a.id ORDER BY start_time DESC LIMIT 1
+            ) s ON TRUE
+            LEFT JOIN conn_track ct ON ct.id = a.conn_id
             WHERE a.id = $1::uuid
             "#,
         )
@@ -598,6 +754,13 @@ impl Dashboard {
             country_code: row.get("country_code"),
             isp: row.get("isp"),
             city: row.get("city"),
+            session_id: row.get("session_id"),
+            session_start: row.get("session_start"),
+            session_end: row.get("session_end"),
+            duration_seconds: row.get("duration_seconds"),
+            conn_id: row.get("conn_id"),
+            conn_timestamp: row.get("conn_timestamp"),
+            conn_port: row.get("conn_port"),
             commands,
             files,
         })

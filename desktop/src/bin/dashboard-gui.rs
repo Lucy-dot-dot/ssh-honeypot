@@ -1,10 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Live-activity dashboard for the SSH honeypot.
 //!
-//! Shows recent connections, auth attempts, live/ended sessions and top
-//! IPs / passwords / usernames. Double-clicking an IP opens an IP report,
-//! double-clicking a password opens a password report, and double-clicking
-//! a session opens a detail window with the associated commands and files.
+//! Shows recent connections, auth attempts, commands, live/ended sessions and
+//! top IPs / passwords / usernames. Every feed row is drillable via the FK
+//! chain conn_track → auth → session → commands, in both directions:
+//! double-clicking a connection row opens its auth attempts, an auth or
+//! command row opens its session detail (commands + uploaded files), and a
+//! session detail links back up to its connection. IP / password cells keep
+//! opening their aggregate reports.
+//!
 //! The IP report window offers an "Abuse e-mail" action that opens a
 //! ready-to-copy abuse report e-mail (To/Subject/body) for the attacker's
 //! network abuse desk, plus a "Draft e-mail" action with a generic,
@@ -15,7 +19,9 @@
 //! the same process so the async state is shared safely.
 
 use chrono::{DateTime, Utc};
-use common::dashboard::{Dashboard, DashboardSnapshot, ReportedIp, SessionDetail, TopData};
+use common::dashboard::{
+    ConnectionDetail, Dashboard, DashboardSnapshot, ReportedIp, SessionDetail, TopData,
+};
 use common::dashboard_config::DashboardConfig;
 use common::db::initialize_database_pool;
 use common::report::{ReportFormat, ReportGenerator};
@@ -85,6 +91,10 @@ enum AppEvent {
         auth_id: String,
         result: Result<SessionDetail, String>,
     },
+    ConnectionReady {
+        conn_id: String,
+        result: Result<ConnectionDetail, String>,
+    },
     /// A reported-IP write (add / remove / edit notes) failed in the
     /// background. Surfaced as a transient error in the manager window.
     ReportedError(String),
@@ -128,6 +138,13 @@ enum Action {
         ip: String,
         username: String,
         start_time: Option<DateTime<Utc>>,
+    },
+    /// Open the connection detail window for a conn_track row: drill down
+    /// from a connections-feed row, or drill up from a session's
+    /// connection link.
+    OpenConnection {
+        conn_id: String,
+        ip: String,
     },
     /// Open the read-only reported-IP details window for an IP.
     OpenReportedDetails {
@@ -192,6 +209,19 @@ enum OpenWindow {
         error: Option<String>,
         open: bool,
     },
+    /// Connection detail: the conn_track row plus every auth attempt observed
+    /// on it, each double-clickable into its session detail. Opened by
+    /// double-clicking a connections-feed row (down-drill) or the connection
+    /// link inside a session window (up-drill).
+    Connection {
+        id: u64,
+        conn_id: String,
+        ip: String,
+        detail: Option<ConnectionDetail>,
+        loading: bool,
+        error: Option<String>,
+        open: bool,
+    },
     /// Read-only view of a reported-IP flag (IP + timestamp + notes). Opened by
     /// double-clicking the marker in front of a reported IP. The contents are
     /// read live from the app's reported map every frame, so the window tracks
@@ -247,6 +277,7 @@ impl OpenWindow {
         match self {
             OpenWindow::Report { id, .. }
             | OpenWindow::Session { id, .. }
+            | OpenWindow::Connection { id, .. }
             | OpenWindow::ReportedDetails { id, .. }
             | OpenWindow::ReportedManager { id, .. }
             | OpenWindow::AbuseEmail { id, .. }
@@ -257,6 +288,7 @@ impl OpenWindow {
         match self {
             OpenWindow::Report { open, .. }
             | OpenWindow::Session { open, .. }
+            | OpenWindow::Connection { open, .. }
             | OpenWindow::ReportedDetails { open, .. }
             | OpenWindow::ReportedManager { open, .. }
             | OpenWindow::AbuseEmail { open, .. }
@@ -267,6 +299,7 @@ impl OpenWindow {
         match self {
             OpenWindow::Report { open, .. }
             | OpenWindow::Session { open, .. }
+            | OpenWindow::Connection { open, .. }
             | OpenWindow::ReportedDetails { open, .. }
             | OpenWindow::ReportedManager { open, .. }
             | OpenWindow::AbuseEmail { open, .. }
@@ -795,6 +828,45 @@ impl DashboardApp {
         });
     }
 
+    /// Open (or focus) the connection detail window for a conn_track row.
+    fn open_connection(&mut self, ctx: &egui::Context, conn_id: String, ip: String) {
+        if self.has_connection_window(&conn_id) {
+            return;
+        }
+        let id = self.next_window_id;
+        self.next_window_id += 1;
+        self.open_windows.push(OpenWindow::Connection {
+            id,
+            conn_id: conn_id.clone(),
+            ip,
+            detail: None,
+            loading: true,
+            error: None,
+            open: true,
+        });
+        // A freshly opened window becomes the focused one so F5 targets it
+        // immediately, before the user has clicked inside it.
+        self.focused_window_id = Some(id);
+        self.spawn_connection(ctx, conn_id);
+    }
+
+    /// Kick off the background connection detail fetch for the given conn id.
+    fn spawn_connection(&self, ctx: &egui::Context, conn_id: String) {
+        let Some(dash) = self.dashboard.clone() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        self.runtime.spawn(async move {
+            let result = dash
+                .connection_detail(&conn_id)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(AppEvent::ConnectionReady { conn_id, result });
+            ctx.request_repaint();
+        });
+    }
+
     /// Re-fetch the contents of a single floating window, identified by its
     /// numeric id. Used by the per-window Refresh button and by F5.
     fn refresh_window(&mut self, ctx: &egui::Context, window_id: u64) {
@@ -807,6 +879,7 @@ impl DashboardApp {
         let already_loading = match &self.open_windows[idx] {
             OpenWindow::Report { loading, .. }
             | OpenWindow::Session { loading, .. }
+            | OpenWindow::Connection { loading, .. }
             | OpenWindow::AbuseEmail { loading, .. }
             | OpenWindow::EmailDraft { loading, .. } => *loading,
             OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => return,
@@ -818,6 +891,7 @@ impl DashboardApp {
         enum Job {
             Report(ReportKind, String),
             Session(String),
+            Connection(String),
             AbuseEmail(String),
             EmailDraft(String),
         }
@@ -825,6 +899,7 @@ impl DashboardApp {
         let job = match &self.open_windows[idx] {
             OpenWindow::Report { kind, query, .. } => Job::Report(*kind, query.clone()),
             OpenWindow::Session { auth_id, .. } => Job::Session(auth_id.clone()),
+            OpenWindow::Connection { conn_id, .. } => Job::Connection(conn_id.clone()),
             OpenWindow::AbuseEmail { ip, .. } => Job::AbuseEmail(ip.clone()),
             OpenWindow::EmailDraft { ip, .. } => Job::EmailDraft(ip.clone()),
             OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => return,
@@ -843,6 +918,10 @@ impl DashboardApp {
                 }
             }
             OpenWindow::Session { loading, error, .. } => {
+                *loading = true;
+                *error = None;
+            }
+            OpenWindow::Connection { loading, error, .. } => {
                 *loading = true;
                 *error = None;
             }
@@ -877,6 +956,7 @@ impl DashboardApp {
                 }
             }
             Job::Session(auth_id) => self.spawn_session(ctx, auth_id),
+            Job::Connection(conn_id) => self.spawn_connection(ctx, conn_id),
             Job::AbuseEmail(ip) => self.spawn_abuse_email(ctx, ip),
             Job::EmailDraft(ip) => self.spawn_email_draft(ctx, ip),
         }
@@ -905,6 +985,8 @@ impl DashboardApp {
             .retain(|c| !self.config.is_excluded(&c.ip));
         snap.recent_auths
             .retain(|a| !self.config.is_excluded(&a.ip));
+        snap.recent_commands
+            .retain(|c| !self.config.is_excluded(&c.ip));
         snap.live_sessions
             .retain(|s| !self.config.is_excluded(&s.ip));
         snap.recent_sessions
@@ -1016,6 +1098,12 @@ impl DashboardApp {
     fn has_session_window(&self, auth_id: &str) -> bool {
         self.open_windows.iter().any(
             |w| matches!(w, OpenWindow::Session { auth_id: a, open: true, .. } if a == auth_id),
+        )
+    }
+
+    fn has_connection_window(&self, conn_id: &str) -> bool {
+        self.open_windows.iter().any(
+            |w| matches!(w, OpenWindow::Connection { conn_id: c, open: true, .. } if c == conn_id),
         )
     }
 
@@ -1159,6 +1247,30 @@ impl DashboardApp {
                         } = w
                         {
                             if *a == auth_id {
+                                *loading = false;
+                                match result {
+                                    Ok(d) => {
+                                        *detail = Some(d);
+                                        *error = None;
+                                    }
+                                    Err(e) => *error = Some(e),
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                AppEvent::ConnectionReady { conn_id, result } => {
+                    for w in self.open_windows.iter_mut() {
+                        if let OpenWindow::Connection {
+                            conn_id: c,
+                            detail,
+                            loading,
+                            error,
+                            ..
+                        } = w
+                        {
+                            if *c == conn_id {
                                 *loading = false;
                                 match result {
                                     Ok(d) => {
@@ -1498,7 +1610,7 @@ impl eframe::App for DashboardApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.colored_label(
                         GRAY,
-                        "Tip: double-click an IP / password / session to drill in",
+                        "Tip: double-click any row to drill down (conn → auth → session → commands); links drill back up",
                     );
                 });
             });
@@ -1521,6 +1633,7 @@ impl eframe::App for DashboardApp {
                     let mut sections = vec![
                         Section::LiveSessions,
                         Section::RecentAuths,
+                        Section::RecentCommands,
                         Section::RecentConnections,
                         Section::RecentSessions,
                     ];
@@ -1568,6 +1681,10 @@ impl eframe::App for DashboardApp {
         // any pending error without aliasing `&mut self.open_windows`.
         let reported_list: Vec<ReportedIp> = self.reported.values().cloned().collect();
         let reported_error = self.reported_error.clone();
+        // Cloned out of `self` for the same reason as `reported_list`: the
+        // connection detail window draws reported markers next to its auth
+        // rows while `open_windows` is mutably borrowed by the loop.
+        let reported_map = self.reported.clone();
         for w in self.open_windows.iter_mut() {
             let id = w.id();
             let mut open = w.is_open();
@@ -2044,6 +2161,47 @@ impl eframe::App for DashboardApp {
                                             ui.label("Auth ID");
                                             ui.label(&d.auth_id);
                                             ui.end_row();
+                                            ui.label("Session");
+                                            match d.session_start {
+                                                Some(start) => ui.label(format!(
+                                                    "{} → {} ({})",
+                                                    fmt_ts(start),
+                                                    d.session_end
+                                                        .map(fmt_ts)
+                                                        .unwrap_or_else(|| "live".to_string()),
+                                                    fmt_duration(d.duration_seconds),
+                                                )),
+                                                None => ui.label("—"),
+                                            };
+                                            ui.end_row();
+                                            ui.label("Connection");
+                                            match (d.conn_id.as_deref(), d.conn_timestamp) {
+                                                (Some(conn_id), Some(ts)) => {
+                                                    let text = match d.conn_port {
+                                                        Some(p) => {
+                                                            format!("{} · port {p}", fmt_ts(ts))
+                                                        }
+                                                        None => fmt_ts(ts),
+                                                    };
+                                                    // Up-drill: back to the
+                                                    // connection's auth attempts.
+                                                    let r = link_label(
+                                                        ui,
+                                                        &text,
+                                                        "double-click for connection detail",
+                                                    );
+                                                    if r.double_clicked() {
+                                                        actions.push(Action::OpenConnection {
+                                                            conn_id: conn_id.to_string(),
+                                                            ip: d.ip.clone(),
+                                                        });
+                                                    }
+                                                }
+                                                _ => {
+                                                    ui.label("—");
+                                                }
+                                            }
+                                            ui.end_row();
                                         });
 
                                     ui.add_space(6.0);
@@ -2096,6 +2254,145 @@ impl eframe::App for DashboardApp {
                                                             .map(|e| format!("{e:.2}"))
                                                             .unwrap_or_else(|| "—".to_string()),
                                                     );
+                                                    ui.end_row();
+                                                }
+                                            });
+                                    }
+                                });
+                        })
+                }
+                OpenWindow::Connection {
+                    ip,
+                    detail,
+                    loading,
+                    error,
+                    ..
+                } => {
+                    let screen = ctx.content_rect();
+                    egui::Window::new(format!("Connection · {ip}"))
+                        .id(egui::Id::unique(id))
+                        .open(&mut open)
+                        .resizable(true)
+                        .default_width(780.0)
+                        .default_height(500.0)
+                        .constrain_to(screen)
+                        .show(&ctx, |ui| {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(!*loading, egui::Button::new("Refresh (F5)"))
+                                    .clicked()
+                                {
+                                    actions.push(Action::RefreshWindow(id));
+                                }
+                                ui.separator();
+                                let r = link_label(ui, ip, "double-click for IP report");
+                                if r.double_clicked() {
+                                    actions.push(Action::OpenReport(ReportKind::Ip, ip.clone()));
+                                }
+                            });
+
+                            if *loading {
+                                ui.spinner();
+                                ui.label("Loading connection detail…");
+                                return;
+                            }
+                            if let Some(e) = error {
+                                ui.colored_label(RED, format!("Error: {e}"));
+                                return;
+                            }
+                            let Some(d) = detail.as_ref() else {
+                                return;
+                            };
+
+                            // Scrollable body (both axes) so wide rows can't
+                            // stretch the window off-screen.
+                            egui::ScrollArea::both()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.separator();
+                                    egui::Grid::new("conn_meta")
+                                        .striped(true)
+                                        .min_col_width(90.0)
+                                        .show(ui, |ui| {
+                                            ui.label("Connected");
+                                            ui.label(fmt_ts(d.timestamp));
+                                            ui.end_row();
+                                            ui.label("Remote port");
+                                            ui.label(
+                                                d.port
+                                                    .map(|p| p.to_string())
+                                                    .unwrap_or_else(|| "—".to_string()),
+                                            );
+                                            ui.end_row();
+                                            ui.label("Local port");
+                                            ui.label(
+                                                d.local_port
+                                                    .map(|p| p.to_string())
+                                                    .unwrap_or_else(|| "—".to_string()),
+                                            );
+                                            ui.end_row();
+                                        });
+
+                                    ui.add_space(6.0);
+                                    ui.strong(format!("Auth attempts ({})", d.auths.len()));
+                                    if d.auths.is_empty() {
+                                        ui.colored_label(
+                                            GRAY,
+                                            "No auth attempts recorded on this connection.",
+                                        );
+                                    } else {
+                                        egui::Grid::new("conn_auths")
+                                            .striped(true)
+                                            .min_col_width(60.0)
+                                            .show(ui, |ui| {
+                                                ui.strong("Time");
+                                                ui.strong("IP");
+                                                ui.strong("Username");
+                                                ui.strong("Password");
+                                                ui.strong("Auth");
+                                                ui.strong("Success");
+                                                ui.strong("Commands");
+                                                ui.end_row();
+                                                for a in &d.auths {
+                                                    // Drill down: open this
+                                                    // attempt's session detail.
+                                                    let r = link_label(
+                                                        ui,
+                                                        &fmt_ts(a.timestamp),
+                                                        "double-click for session detail",
+                                                    );
+                                                    if r.double_clicked() {
+                                                        actions.push(Action::OpenSession {
+                                                            auth_id: a.auth_id.clone(),
+                                                            ip: a.ip.clone(),
+                                                            username: a.username.clone(),
+                                                            start_time: Some(a.timestamp),
+                                                        });
+                                                    }
+                                                    ui.horizontal(|ui| {
+                                                        reported_marker(
+                                                            ui,
+                                                            &a.ip,
+                                                            &reported_map,
+                                                            &mut actions,
+                                                        );
+                                                        let r = link_label(
+                                                            ui,
+                                                            &a.ip,
+                                                            "double-click for IP report",
+                                                        );
+                                                        if r.double_clicked() {
+                                                            actions.push(Action::OpenReport(
+                                                                ReportKind::Ip,
+                                                                a.ip.clone(),
+                                                            ));
+                                                        }
+                                                    });
+                                                    ui.label(&a.username);
+                                                    ui.label(a.password.as_deref().unwrap_or("—"));
+                                                    ui.label(a.auth_type.as_deref().unwrap_or("—"));
+                                                    success_label(ui, a.successful);
+                                                    ui.label(a.command_count.to_string());
                                                     ui.end_row();
                                                 }
                                             });
@@ -2292,6 +2589,7 @@ impl eframe::App for DashboardApp {
                     username,
                     start_time,
                 } => self.open_session(&ctx, auth_id, ip, username, start_time),
+                Action::OpenConnection { conn_id, ip } => self.open_connection(&ctx, conn_id, ip),
                 Action::RefreshWindow(id) => self.refresh_window(&ctx, id),
                 Action::OpenReportedDetails { ip } => self.open_reported_details(&ctx, ip),
                 Action::OpenReportedManager { prefill_ip } => {
@@ -2329,6 +2627,7 @@ impl eframe::App for DashboardApp {
 enum Section {
     LiveSessions,
     RecentAuths,
+    RecentCommands,
     RecentConnections,
     RecentSessions,
     TopActivity,
@@ -2346,6 +2645,7 @@ fn render_section(
     match section {
         Section::LiveSessions => render_live_sessions(ui, snap, reported, actions),
         Section::RecentAuths => render_recent_auths(ui, snap, reported, actions),
+        Section::RecentCommands => render_recent_commands(ui, snap, reported, actions),
         Section::RecentConnections => render_recent_connections(ui, snap, reported, actions),
         Section::RecentSessions => render_recent_sessions(ui, snap, reported, actions),
         Section::TopActivity => {
@@ -2383,7 +2683,15 @@ fn render_section_row(
                 ui.add_space(SECTION_GAP);
             }
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                render_section(ui, snap, reported, actions, top_loading, top_error, *section);
+                render_section(
+                    ui,
+                    snap,
+                    reported,
+                    actions,
+                    top_loading,
+                    top_error,
+                    *section,
+                );
             });
         }
     });
@@ -2409,7 +2717,17 @@ fn render_live_sessions(
             }
             ui.end_row();
             for s in &snap.live_sessions {
-                ui.label(fmt_ts(s.start_time));
+                // Time cell doubles as the row drill-in (down to the session's
+                // detail window); the IP cell drills to the same place.
+                let r = link_label(ui, &fmt_ts(s.start_time), "double-click for session detail");
+                if r.double_clicked() {
+                    actions.push(Action::OpenSession {
+                        auth_id: s.auth_id.clone(),
+                        ip: s.ip.clone(),
+                        username: s.username.clone(),
+                        start_time: Some(s.start_time),
+                    });
+                }
                 ui.horizontal(|ui| {
                     reported_marker(ui, &s.ip, reported, actions);
                     let r = link_label(ui, &s.ip, "double-click for session detail");
@@ -2422,7 +2740,7 @@ fn render_live_sessions(
                         });
                     }
                 });
-                ui.label(&s.username);
+                ui.label(clip(&s.username, CELL_MAX_CHARS_SHORT));
                 ui.label(s.auth_type.as_deref().unwrap_or("—"));
                 success_label(ui, s.successful);
                 let running = Utc::now()
@@ -2458,7 +2776,19 @@ fn render_recent_auths(
             }
             ui.end_row();
             for a in &snap.recent_auths {
-                ui.label(fmt_ts(a.timestamp));
+                // Time cell doubles as the row drill-in: a double-click opens
+                // the auth/session detail window (down-drill: auth → session,
+                // commands and files). The IP and password cells keep opening
+                // their aggregate reports.
+                let r = link_label(ui, &fmt_ts(a.timestamp), "double-click for session detail");
+                if r.double_clicked() {
+                    actions.push(Action::OpenSession {
+                        auth_id: a.auth_id.clone(),
+                        ip: a.ip.clone(),
+                        username: a.username.clone(),
+                        start_time: Some(a.timestamp),
+                    });
+                }
                 ui.horizontal(|ui| {
                     reported_marker(ui, &a.ip, reported, actions);
                     let r = link_label(ui, &a.ip, "double-click for IP report");
@@ -2466,10 +2796,12 @@ fn render_recent_auths(
                         actions.push(Action::OpenReport(ReportKind::Ip, a.ip.clone()));
                     }
                 });
-                ui.label(&a.username);
+                ui.label(clip(&a.username, CELL_MAX_CHARS_SHORT));
                 match &a.password {
                     Some(p) if !p.is_empty() => {
-                        let r = link_label(ui, p, "double-click for password report");
+                        let clipped = clip(p, CELL_MAX_CHARS_SHORT);
+                        let tip = format!("{p} — double-click for password report");
+                        let r = link_label(ui, &clipped, &tip);
                         if r.double_clicked() {
                             actions.push(Action::OpenReport(ReportKind::Password, p.clone()));
                         }
@@ -2483,6 +2815,65 @@ fn render_recent_auths(
                 }
                 ui.label(a.auth_type.as_deref().unwrap_or("—"));
                 success_label(ui, a.successful);
+                ui.end_row();
+            }
+        });
+}
+
+fn render_recent_commands(
+    ui: &mut egui::Ui,
+    snap: &DashboardSnapshot,
+    reported: &HashMap<String, ReportedIp>,
+    actions: &mut Vec<Action>,
+) {
+    section_header(
+        ui,
+        &format!("Recent Commands ({})", snap.recent_commands.len()),
+    );
+    if snap.recent_commands.is_empty() {
+        ui.colored_label(GRAY, "No commands recorded yet.");
+        return;
+    }
+    egui::Grid::new("recent_commands")
+        .striped(true)
+        .min_col_width(60.0)
+        .show(ui, |ui| {
+            for h in ["Time", "IP", "Username", "Command"] {
+                ui.strong(h);
+            }
+            ui.end_row();
+            for c in &snap.recent_commands {
+                // Time and command cells are the row drill-in: a double-click
+                // opens the session detail window the command belongs to
+                // (up-drill: command → session → auth → connection).
+                let r = link_label(ui, &fmt_ts(c.timestamp), "double-click for session detail");
+                if r.double_clicked() {
+                    actions.push(Action::OpenSession {
+                        auth_id: c.auth_id.clone(),
+                        ip: c.ip.clone(),
+                        username: c.username.clone(),
+                        start_time: Some(c.timestamp),
+                    });
+                }
+                ui.horizontal(|ui| {
+                    reported_marker(ui, &c.ip, reported, actions);
+                    let r = link_label(ui, &c.ip, "double-click for IP report");
+                    if r.double_clicked() {
+                        actions.push(Action::OpenReport(ReportKind::Ip, c.ip.clone()));
+                    }
+                });
+                ui.label(clip(&c.username, CELL_MAX_CHARS_SHORT));
+                let clipped = clip(&c.command, CELL_MAX_CHARS);
+                let tip = format!("{} — double-click for session detail", c.command);
+                let r = link_label(ui, &clipped, &tip);
+                if r.double_clicked() {
+                    actions.push(Action::OpenSession {
+                        auth_id: c.auth_id.clone(),
+                        ip: c.ip.clone(),
+                        username: c.username.clone(),
+                        start_time: Some(c.timestamp),
+                    });
+                }
                 ui.end_row();
             }
         });
@@ -2511,7 +2902,20 @@ fn render_recent_connections(
             }
             ui.end_row();
             for c in &snap.recent_connections {
-                ui.label(fmt_ts(c.timestamp));
+                // Time cell doubles as the row drill-in: a double-click opens
+                // the connection detail window with every auth attempt made on
+                // this connection (down-drill: connection → auths).
+                let r = link_label(
+                    ui,
+                    &fmt_ts(c.timestamp),
+                    "double-click for connection detail",
+                );
+                if r.double_clicked() {
+                    actions.push(Action::OpenConnection {
+                        conn_id: c.conn_id.clone(),
+                        ip: c.ip.clone(),
+                    });
+                }
                 ui.horizontal(|ui| {
                     reported_marker(ui, &c.ip, reported, actions);
                     let r = link_label(ui, &c.ip, "double-click for IP report");
@@ -2557,7 +2961,17 @@ fn render_recent_sessions(
             }
             ui.end_row();
             for s in &snap.recent_sessions {
-                ui.label(fmt_ts(s.start_time));
+                // Time cell doubles as the row drill-in; the IP cell drills to
+                // the same session detail window.
+                let r = link_label(ui, &fmt_ts(s.start_time), "double-click for session detail");
+                if r.double_clicked() {
+                    actions.push(Action::OpenSession {
+                        auth_id: s.auth_id.clone(),
+                        ip: s.ip.clone(),
+                        username: s.username.clone(),
+                        start_time: Some(s.start_time),
+                    });
+                }
                 ui.label(s.end_time.map(fmt_ts).unwrap_or_else(|| "—".to_string()));
                 ui.horizontal(|ui| {
                     reported_marker(ui, &s.ip, reported, actions);
@@ -2571,7 +2985,7 @@ fn render_recent_sessions(
                         });
                     }
                 });
-                ui.label(&s.username);
+                ui.label(clip(&s.username, CELL_MAX_CHARS_SHORT));
                 ui.label(fmt_duration(s.duration_seconds));
                 ui.label(format!("{}", s.command_count));
                 ui.end_row();
@@ -2656,13 +3070,19 @@ fn render_top_list(
                         });
                     }
                     Some(k) => {
-                        let r = link_label(ui, &e.value, "double-click to open report");
+                        // Top passwords/usernames are attacker-controlled and
+                        // can be long; clip the cell, keep the full value on
+                        // hover.
+                        let clipped = clip(&e.value, CELL_MAX_CHARS_SHORT);
+                        let tip =
+                            format!("{e_value} — double-click to open report", e_value = e.value);
+                        let r = link_label(ui, &clipped, &tip);
                         if r.double_clicked() {
                             actions.push(Action::OpenReport(k, e.value.clone()));
                         }
                     }
                     None => {
-                        ui.label(&e.value);
+                        ui.label(clip(&e.value, CELL_MAX_CHARS_SHORT));
                     }
                 }
                 ui.label(format!("{}", e.count));
@@ -2697,6 +3117,25 @@ fn link_label(ui: &mut egui::Ui, text: &str, tip: &str) -> egui::Response {
             .sense(egui::Sense::click()),
     )
     .on_hover_text(tip)
+}
+
+/// Longest attacker-controlled string shown in a feed cell before it is
+/// clipped with an ellipsis. The sections sit in a content-hugging flex row,
+/// so one long command / password / username would otherwise stretch its
+/// section and push the other feeds off-screen. The unclipped text remains
+/// available in the hover tooltip and inside the drill-down detail windows
+/// (which scroll both axes).
+const CELL_MAX_CHARS: usize = 80;
+/// Tighter cap for passwords / usernames / top-list values.
+const CELL_MAX_CHARS_SHORT: usize = 40;
+
+/// Clip `s` to `max_chars` characters (char-boundary safe, multibyte aware),
+/// appending an ellipsis when truncated.
+fn clip(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    format!("{}…", s.chars().take(max_chars).collect::<String>())
 }
 
 /// Normalise an IP string for matching against the reported map: trim and
