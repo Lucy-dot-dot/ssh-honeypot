@@ -1,0 +1,99 @@
+# Local LOGICAL replica of the remote honeypot database (10.0.0.1:5432).
+#
+# Unlike a physical streaming standby, a logical replica is a normal writable
+# cluster that receives row changes from `honeypot_pub` on the primary. That
+# allows replica-only indexes for read-heavy analysis queries, which a
+# physical standby cannot have (no DDL while in recovery):
+#
+#   CREATE EXTENSION pg_trgm;
+#   CREATE INDEX idx_auth_password_btree ON auth (password);
+#   CREATE INDEX idx_auth_password_trgm  ON auth USING gin (password gin_trgm_ops);
+#   CREATE INDEX idx_auth_password_len   ON auth ((length(password)), password);
+#
+# Bootstrap (one-time):
+#   1. Primary: ALTER SYSTEM SET wal_level = 'logical' (+ restart),
+#      CREATE PUBLICATION honeypot_pub FOR ALL TABLES,
+#      GRANT SELECT ON ALL TABLES IN SCHEMA public TO replicator,
+#      ALTER DEFAULT PRIVILEGES FOR ROLE honeypot IN SCHEMA public
+#        GRANT SELECT ON TABLES TO replicator
+#   2. docker compose -f docker-compose.replica.yml up -d   (initdb + start)
+#   3. Restore a schema-only dump from the primary with FOREIGN KEY
+#      constraints and NOTIFY triggers stripped (FKs would break out-of-order
+#      initial table syncs; local NOTIFY has no listeners).
+#   4. CREATE SUBSCRIPTION honeypot_sub CONNECTION 'host=10.0.0.1 user=replicator
+#      password=... dbname=ssh_honeypot' PUBLICATION honeypot_pub
+#      WITH (copy_data = true, create_slot = true, slot_name = 'local_replica_logical');
+#   5. After every table in pg_subscription_rel reaches state 'r': ANALYZE,
+#      then create the indexes above.
+#
+# Ongoing maintenance:
+#   - Schema changes (sqlx migrations) do NOT replicate. After a migration
+#     lands on the primary, dump/apply its schema here too.
+#   - The `trigger-ensure` service re-applies replica-triggers.sql on every
+#     start (fresh bootstrap, reboot, recreate), so the ENABLE REPLICA NOTIFY
+#     triggers need no manual care. Channel list is documented there.
+#   - Do not write to replicated tables locally; changes are not sent back
+#     and will be clobbered by the next apply.
+services:
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: ssh-honeypot-replica-db
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - max_worker_processes=16
+      - -c
+      - max_logical_replication_workers=8
+      - -c
+      - max_sync_workers_per_subscription=4
+      - -c
+      - work_mem=256MB
+      - -c
+      - maintenance_work_mem=1GB
+    shm_size: 1gb
+    environment:
+      POSTGRES_USER: honeypot
+      POSTGRES_PASSWORD: honeypot
+      POSTGRES_DB: ssh_honeypot
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      # 5433 to avoid clashing with the db service in docker-compose.yml,
+      # which claims 127.0.0.1:5432 when the default stack is up.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - replica_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U honeypot -d ssh_honeypot" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Applies replica-triggers.sql on every start of this stack (idempotently).
+  # Exits 0 after success and is restarted by the daemon on boot, so the
+  # ENABLE REPLICA NOTIFY triggers survive reboots and re-bootstrap. If the
+  # schema (and thus the notify_* functions) is not restored yet, it keeps
+  # retrying until it succeeds.
+  trigger-ensure:
+    image: postgres:16-alpine
+    container_name: ssh-honeypot-replica-trigger-ensure
+    restart: unless-stopped
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres-replica
+      PGUSER: honeypot
+      PGPASSWORD: honeypot
+      PGDATABASE: ssh_honeypot
+    volumes:
+      - ./replica-triggers.sql:/triggers.sql:ro
+    entrypoint:
+      - sh
+      - -c
+      - psql -v ON_ERROR_STOP=1 -f /triggers.sql && echo 'triggers ensured; idling' && sleep infinity
+
+volumes:
+  replica_data:
+    name: ssh-honeypot-replica_logical_data
