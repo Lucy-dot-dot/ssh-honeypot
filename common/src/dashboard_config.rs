@@ -33,6 +33,14 @@ pub struct DashboardConfig {
     /// entirely instead of just hiding the results.
     #[serde(default = "default_show_top_activity")]
     pub show_top_activity: bool,
+
+    /// Database URL the GUI connects to, persisted on every successful
+    /// Connect so it survives restarts. `None` falls back to the GUI's
+    /// built-in default (localhost). Contains the DB password in plaintext,
+    /// but it lives in the user's private config dir next to `config.toml`,
+    /// which already stores the same URL for the honeypot itself.
+    #[serde(default)]
+    pub db_url: Option<String>,
 }
 
 fn default_show_geolocation() -> bool {
@@ -49,6 +57,7 @@ impl Default for DashboardConfig {
             excluded_ips: Vec::new(),
             show_geolocation: true,
             show_top_activity: true,
+            db_url: None,
         }
     }
 }
@@ -128,5 +137,39 @@ impl DashboardConfig {
         self.excluded_ips
             .iter()
             .any(|e| e.trim().eq_ignore_ascii_case(ip))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn none_db_url_is_omitted_and_roundtrips() {
+        // A `None` db_url must not break save() (toml must skip the key
+        // instead of erroring on the null value) and an existing file without
+        // the key must deserialize back to None.
+        let cfg = DashboardConfig::default();
+        let text = toml::to_string_pretty(&cfg).expect("serialize None db_url");
+        assert!(
+            !text.contains("db_url"),
+            "None db_url must be omitted, got: {text}"
+        );
+        let parsed: DashboardConfig = toml::from_str(&text).expect("parse without db_url");
+        assert!(parsed.db_url.is_none());
+    }
+
+    #[test]
+    fn db_url_roundtrips_through_toml() {
+        let cfg = DashboardConfig {
+            db_url: Some("postgresql://honeypot:pw@127.0.0.1:5433/ssh_honeypot".to_string()),
+            ..DashboardConfig::default()
+        };
+        let text = toml::to_string_pretty(&cfg).expect("serialize Some db_url");
+        let parsed: DashboardConfig = toml::from_str(&text).expect("parse db_url");
+        assert_eq!(
+            parsed.db_url.as_deref(),
+            Some("postgresql://honeypot:pw@127.0.0.1:5433/ssh_honeypot")
+        );
     }
 }

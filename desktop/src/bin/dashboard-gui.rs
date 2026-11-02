@@ -373,8 +373,15 @@ struct DashboardApp {
 impl DashboardApp {
     fn new() -> Self {
         let (tx, rx) = mpsc::channel();
+        // Load prefs first so a persisted DB URL seeds the connection field
+        // (the URL is saved back on every Connect).
+        let config = DashboardConfig::load();
+        let db_url = config
+            .db_url
+            .clone()
+            .unwrap_or_else(|| DEFAULT_DB_URL.to_string());
         Self {
-            db_url: DEFAULT_DB_URL.to_string(),
+            db_url,
             pool: None,
             dashboard: None,
             connection_status: "Not connected".to_string(),
@@ -397,7 +404,7 @@ impl DashboardApp {
             notify_task: None,
             notify_pending: false,
             last_notify: None,
-            config: DashboardConfig::load(),
+            config,
             exclude_ip_input: String::new(),
             reported: HashMap::new(),
             reported_error: None,
@@ -2580,7 +2587,21 @@ impl eframe::App for DashboardApp {
         // --- Apply queued actions --------------------------------------------
         for action in actions {
             match action {
-                Action::Connect => self.connect(&ctx),
+                Action::Connect => {
+                    // Persist the entered URL (trimmed) so the next start
+                    // restores it; clearing the field restores the default.
+                    let trimmed = self.db_url.trim().to_string();
+                    if trimmed.is_empty() {
+                        if self.config.db_url.is_some() {
+                            self.config.db_url = None;
+                            self.config.save();
+                        }
+                    } else if self.config.db_url.as_deref() != Some(trimmed.as_str()) {
+                        self.config.db_url = Some(trimmed);
+                        self.config.save();
+                    }
+                    self.connect(&ctx);
+                }
                 Action::Refresh => self.refresh(&ctx),
                 Action::OpenReport(kind, query) => self.open_report(&ctx, kind, query),
                 Action::OpenSession {

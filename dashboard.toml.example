@@ -15,6 +15,14 @@ excluded_ips = [
     # "192.168.1.50",
 ]
 
+# Database URL the dashboard connects to. Saved automatically whenever you
+# press Connect, and restored on the next start. Clearing the field and
+# connecting again falls back to the built-in default
+# (postgresql://honeypot:honeypot@localhost:5432/ssh_honeypot).
+# Note: stored as typed, i.e. including any password.
+# Default: none (built-in default)
+# db_url = "postgresql://honeypot:honeypot@127.0.0.1:5433/ssh_honeypot"
+
 # Show geolocation fields (country, city, ISP, org) in session details and IP
 # reports. Toggleable live from the dashboard hotbar.
 # Default: true
