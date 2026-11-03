@@ -41,6 +41,14 @@ pub struct DashboardConfig {
     /// which already stores the same URL for the honeypot itself.
     #[serde(default)]
     pub db_url: Option<String>,
+
+    /// Discord application (client) ID used for Rich Presence. When set, the
+    /// dashboard reports the focused window as your Discord activity
+    /// ("Investigating authentication", "Looking into an IP", ...). Requires
+    /// the Discord desktop client to be running and a `honeypot` art asset
+    /// uploaded in the developer portal. Takes effect at startup.
+    #[serde(default)]
+    pub discord_app_id: Option<String>,
 }
 
 fn default_show_geolocation() -> bool {
@@ -58,6 +66,7 @@ impl Default for DashboardConfig {
             show_geolocation: true,
             show_top_activity: true,
             db_url: None,
+            discord_app_id: None,
         }
     }
 }

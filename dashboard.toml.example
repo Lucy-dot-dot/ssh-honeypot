@@ -23,6 +23,19 @@ excluded_ips = [
 # Default: none (built-in default)
 # db_url = "postgresql://honeypot:honeypot@127.0.0.1:5433/ssh_honeypot"
 
+# Discord application (client) ID for Rich Presence: the dashboard reports
+# what you are doing ("Investigating a session", "Looking into an IP",
+# "Drafting an abuse email", "Enjoying the dashboard", ...) as your Discord
+# activity. Requirements:
+#   - the Discord desktop client must be running while the dashboard runs,
+#   - a Rich Presence art asset named `honeypot` must be uploaded in the
+#     developer portal (source + pre-rendered PNGs in desktop/assets/discord/),
+#   - "Display current activity as status message" enabled in Discord's
+#     Privacy & Safety settings for the status to be visible to others.
+# Takes effect at startup; changing it requires restarting the dashboard.
+# Default: none (Rich Presence disabled)
+# discord_app_id = "1234567890123456789"
+
 # Show geolocation fields (country, city, ISP, org) in session details and IP
 # reports. Toggleable live from the dashboard hotbar.
 # Default: true

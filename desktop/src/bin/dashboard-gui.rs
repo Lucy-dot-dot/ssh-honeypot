@@ -25,6 +25,7 @@ use common::dashboard::{
 use common::dashboard_config::DashboardConfig;
 use common::db::initialize_database_pool;
 use common::report::{ReportFormat, ReportGenerator};
+use desktop::discord::{self, PresenceActivity, PresenceHandle};
 use desktop::whois::{WhoisClient, WhoisInfo};
 use eframe::egui;
 use egui::{Key, KeyboardShortcut, Modifiers};
@@ -368,6 +369,12 @@ struct DashboardApp {
     /// Transient error from a reported-IP write (add/remove/edit notes),
     /// shown in the manager window until the next successful refresh.
     reported_error: Option<String>,
+    /// Discord Rich Presence sender, present only when `discord_app_id` is
+    /// configured. The thread behind it owns the IPC connection lifecycle.
+    presence: Option<PresenceHandle>,
+    /// The activity most recently pushed to Discord, so updates are only
+    /// sent when the derived activity actually changes.
+    presence_current: PresenceActivity,
 }
 
 impl DashboardApp {
@@ -380,6 +387,16 @@ impl DashboardApp {
             .db_url
             .clone()
             .unwrap_or_else(|| DEFAULT_DB_URL.to_string());
+        // Start Rich Presence (if configured) and announce the initial idle
+        // activity, so the presence shows up right after the first Discord
+        // connect instead of waiting for the first window focus.
+        let presence = config
+            .discord_app_id
+            .as_ref()
+            .map(|id| discord::spawn(id.clone()));
+        if let Some(p) = &presence {
+            p.update(PresenceActivity::Idle);
+        }
         Self {
             db_url,
             pool: None,
@@ -408,6 +425,8 @@ impl DashboardApp {
             exclude_ip_input: String::new(),
             reported: HashMap::new(),
             reported_error: None,
+            presence,
+            presence_current: PresenceActivity::Idle,
         }
     }
 
@@ -1114,6 +1133,53 @@ impl DashboardApp {
         )
     }
 
+    // --- Discord Rich Presence -------------------------------------------
+
+    /// Map the focused floating window to a Rich Presence activity; idle
+    /// when no window has focus (including after clicking back into the
+    /// main view).
+    fn presence_activity(&self) -> PresenceActivity {
+        let Some(id) = self.focused_window_id else {
+            return PresenceActivity::Idle;
+        };
+        let Some(w) = self.open_windows.iter().find(|w| w.id() == id) else {
+            return PresenceActivity::Idle;
+        };
+        match w {
+            OpenWindow::Report { kind, query, .. } => match kind {
+                ReportKind::Ip => PresenceActivity::LookingIntoIp { ip: query.clone() },
+                ReportKind::Password => PresenceActivity::LookingIntoPassword {
+                    query: query.clone(),
+                },
+            },
+            OpenWindow::Session { ip, username, .. } => PresenceActivity::InvestigatingSession {
+                label: format!("{username}@{ip}"),
+            },
+            OpenWindow::Connection { ip, .. } => {
+                PresenceActivity::LookingIntoConnection { ip: ip.clone() }
+            }
+            OpenWindow::AbuseEmail { ip, .. } | OpenWindow::EmailDraft { ip, .. } => {
+                PresenceActivity::DraftingAbuseEmail { ip: ip.clone() }
+            }
+            OpenWindow::ReportedDetails { .. } | OpenWindow::ReportedManager { .. } => {
+                PresenceActivity::ReviewingReportedIps
+            }
+        }
+    }
+
+    /// Push the derived activity to Discord when it changed since the last
+    /// frame. No-op when Rich Presence is not configured.
+    fn update_presence(&mut self) {
+        let activity = self.presence_activity();
+        if self.presence_current == activity {
+            return;
+        }
+        if let Some(p) = &self.presence {
+            p.update(activity.clone());
+        }
+        self.presence_current = activity;
+    }
+
     fn poll_events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
@@ -1667,14 +1733,13 @@ impl eframe::App for DashboardApp {
 
         // --- Floating sub-windows --------------------------------------------
         // Detect which window the user clicked this frame (if any) so we can
-        // latch it as the "focused" window. `layer_id_at` returns the true
-        // topmost interactive area under the pointer — robust even when the
-        // click lands on a child widget that consumes the interaction. The
-        // layer's `id` equals the `egui::Id` we pass to each `Window`.
+        // latch it as the "focused" window. Compared by window rect instead of
+        // layer id: clicks inside nested layers (ScrollAreas wrapping the
+        // detail bodies, hover tooltips) return child layer ids that do not
+        // equal the Window's own id, which used to silently drop focus.
         let primary_pressed = ctx.input(|i| i.pointer.primary_pressed());
-        let clicked_layer = if primary_pressed {
+        let clicked_pos = if primary_pressed {
             ctx.input(|i| i.pointer.latest_pos())
-                .and_then(|p| ctx.layer_id_at(p))
         } else {
             None
         };
@@ -1695,7 +1760,7 @@ impl eframe::App for DashboardApp {
         for w in self.open_windows.iter_mut() {
             let id = w.id();
             let mut open = w.is_open();
-            match w {
+            let win_resp = match w {
                 OpenWindow::Report {
                     kind,
                     query,
@@ -2562,9 +2627,13 @@ impl eframe::App for DashboardApp {
                 }
             };
 
-            // If this window was the topmost area under the pointer when the
-            // primary button went down, it becomes the focused window.
-            if clicked_layer.is_some_and(|l| l.id.value() == id) {
+            // If the pointer press landed anywhere inside this window (rect
+            // check, so nested scroll-area and tooltip layers count too), it
+            // becomes the focused window. Overlapping windows resolve to the
+            // last match, which is the topmost one in iteration order.
+            if let Some(r) = &win_resp
+                && clicked_pos.is_some_and(|p| r.response.rect.contains(p))
+            {
                 new_focus = Some(id);
             }
             w.set_open(open);
@@ -2572,6 +2641,12 @@ impl eframe::App for DashboardApp {
 
         if let Some(id) = new_focus {
             self.focused_window_id = Some(id);
+        } else if primary_pressed {
+            // A click that landed on the main dashboard (hotbar, feeds, ...)
+            // rather than any floating window: the operator is back to
+            // browsing, so drop the focused-window state and return the
+            // Rich Presence to idle.
+            self.focused_window_id = None;
         }
 
         // F5: refresh the last-interacted ("focused") floating window, or fall
@@ -2634,6 +2709,10 @@ impl eframe::App for DashboardApp {
                 self.focused_window_id = None;
             }
         }
+
+        // Report the current activity to Discord (derived from the focused
+        // window; idle when the main view has focus).
+        self.update_presence();
 
         if self.auto_refresh && self.pool.is_some() {
             ctx.request_repaint_after(Duration::from_millis(500));

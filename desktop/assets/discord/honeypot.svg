@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- SSH Honeypot Dashboard icon: amber honeypot on a dark rounded tile,
+       faint honeycomb in the corners. Designed to stay readable at the small
+       sizes Discord renders Rich Presence art. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2e3242"/>
+      <stop offset="1" stop-color="#15171f"/>
+    </linearGradient>
+    <linearGradient id="honey" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffcf4d"/>
+      <stop offset="1" stop-color="#e08a0a"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd966"/>
+      <stop offset="1" stop-color="#f0a51e"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+
+  <!-- faint honeycomb, opposite corners -->
+  <g fill="none" stroke="#454f68" stroke-width="12" opacity="0.45">
+    <polygon points="196,120 268,162 268,246 196,288 124,246 124,162"/>
+    <polygon points="880,760 952,802 952,886 880,928 808,886 808,802"/>
+    <polygon points="844,148 904,182 904,250 844,284 784,250 784,182"/>
+    <polygon points="152,780 212,814 212,882 152,916 92,882 92,814"/>
+  </g>
+
+  <!-- pot ground shadow -->
+  <ellipse cx="512" cy="836" rx="232" ry="34" fill="#000000" opacity="0.35"/>
+
+  <!-- pot body -->
+  <path d="M512 400 C 690 400 772 486 772 600 C 772 726 656 812 512 812 C 368 812 252 726 252 600 C 252 486 334 400 512 400 Z" fill="url(#honey)"/>
+
+  <!-- rim / lid -->
+  <rect x="278" y="330" width="468" height="84" rx="42" fill="url(#rim)"/>
+
+  <!-- honey drip running off the rim -->
+  <path d="M620 410 L 688 410 C 688 410 694 538 654 564 C 614 538 620 410 620 410 Z" fill="#c97b06"/>
+  <circle cx="654" cy="614" r="36" fill="#c97b06"/>
+
+  <!-- gloss highlight -->
+  <path d="M332 524 C 340 470 376 438 424 426" stroke="#ffffff" stroke-width="30" stroke-linecap="round" fill="none" opacity="0.35"/>
+</svg>
