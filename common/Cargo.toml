@@ -10,12 +10,12 @@ tokio = { workspace = true, features = ["sync", "macros", "net", "io-util", "rt"
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
-minijinja = "2.21.0"
+minijinja = { version = "3.1.0", features = ["serde"] }
 directories = { workspace = true }
 toml = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true, features = ["brotli", "deflate", "json", "query"] }
-webpki-root-certs = "1.0.9"
+webpki-root-certs = "1.0.12"
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }

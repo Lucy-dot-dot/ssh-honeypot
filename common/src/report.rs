@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
-use minijinja::Environment;
+use minijinja::{value::Serde, Environment};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use std::collections::{HashMap, HashSet};
@@ -259,8 +259,13 @@ fn report_env() -> &'static Environment<'static> {
     static ENV: OnceLock<Environment<'static>> = OnceLock::new();
     ENV.get_or_init(|| {
         let mut env = Environment::new();
-        env.set_trim_blocks(true);
-        env.set_lstrip_blocks(true);
+        env.set_syntax(
+            minijinja::syntax::SyntaxConfig::builder()
+                .trim_blocks(true)
+                .lstrip_blocks(true)
+                .build()
+                .expect("syntax config is valid"),
+        );
         env.add_filter("fmt", format_datetime);
         env.add_template("ip_report.txt", include_str!("../templates/ip_report.txt"))
             .expect("ip_report.txt template is valid");
@@ -422,7 +427,7 @@ impl ReportGenerator {
         };
 
         let template = report_env().get_template("abuse_email.txt")?;
-        Ok(template.render(context)?)
+        Ok(template.render(Serde(&context))?)
     }
 
     /// Generate a generic e-mail draft for an IP address, suitable for any
@@ -457,7 +462,7 @@ impl ReportGenerator {
         };
 
         let template = report_env().get_template("generic_email.txt")?;
-        Ok(template.render(context)?)
+        Ok(template.render(Serde(&context))?)
     }
 
     async fn get_conn_track_for_ip(&self, ip: &str) -> Result<Vec<ConnTrackRecord>, sqlx::Error> {
@@ -812,7 +817,7 @@ impl ReportGenerator {
             commands,
             extended_info,
         );
-        Ok(report_env().get_template("ip_report.txt")?.render(ctx)?)
+        Ok(report_env().get_template("ip_report.txt")?.render(Serde(&ctx))?)
     }
 
     fn generate_html_report(
@@ -824,7 +829,7 @@ impl ReportGenerator {
         commands: &[CommandRecord],
     ) -> Result<String, Box<dyn std::error::Error>> {
         let ctx = self.build_ip_context(ip, records, conn_track, commands_total, commands, false);
-        Ok(report_env().get_template("ip_report.html")?.render(ctx)?)
+        Ok(report_env().get_template("ip_report.html")?.render(Serde(&ctx))?)
     }
 
     fn generate_markdown_report(
@@ -836,7 +841,7 @@ impl ReportGenerator {
         commands: &[CommandRecord],
     ) -> Result<String, Box<dyn std::error::Error>> {
         let ctx = self.build_ip_context(ip, records, conn_track, commands_total, commands, false);
-        Ok(report_env().get_template("ip_report.md")?.render(ctx)?)
+        Ok(report_env().get_template("ip_report.md")?.render(Serde(&ctx))?)
     }
 
     pub async fn generate_password_report(
@@ -1000,7 +1005,7 @@ impl ReportGenerator {
         let ctx = self.build_password_context(password, data);
         Ok(report_env()
             .get_template("password_report.txt")?
-            .render(ctx)?)
+            .render(Serde(&ctx))?)
     }
 
     fn generate_password_html_report(
@@ -1011,7 +1016,7 @@ impl ReportGenerator {
         let ctx = self.build_password_context(password, data);
         Ok(report_env()
             .get_template("password_report.html")?
-            .render(ctx)?)
+            .render(Serde(&ctx))?)
     }
 
     fn generate_password_markdown_report(
@@ -1022,7 +1027,7 @@ impl ReportGenerator {
         let ctx = self.build_password_context(password, data);
         Ok(report_env()
             .get_template("password_report.md")?
-            .render(ctx)?)
+            .render(Serde(&ctx))?)
     }
 }
 
@@ -1188,12 +1193,12 @@ mod tests {
             let tmpl = env.get_template(name).expect("template exists");
             // Full context with extended info enabled.
             let out = tmpl
-                .render(sample_ip_context(true, true))
+                .render(Serde(&sample_ip_context(true, true)))
                 .unwrap_or_else(|e| panic!("rendering {name} failed: {e}"));
             assert!(!out.is_empty(), "{name} produced empty output");
             // Minimal / no-data context.
             let out2 = tmpl
-                .render(sample_ip_context(false, false))
+                .render(Serde(&sample_ip_context(false, false)))
                 .unwrap_or_else(|e| panic!("rendering {name} (minimal) failed: {e}"));
             assert!(!out2.is_empty(), "{name} (minimal) produced empty output");
         }
@@ -1209,7 +1214,7 @@ mod tests {
         ] {
             let tmpl = env.get_template(name).expect("template exists");
             let out = tmpl
-                .render(sample_password_context())
+                .render(Serde(&sample_password_context()))
                 .unwrap_or_else(|e| panic!("rendering {name} failed: {e}"));
             assert!(!out.is_empty(), "{name} produced empty output");
         }
@@ -1250,7 +1255,7 @@ mod tests {
             .get_template("abuse_email.txt")
             .expect("template exists");
         let out = tmpl
-            .render(sample_abuse_email_context())
+            .render(Serde(&sample_abuse_email_context()))
             .unwrap_or_else(|e| panic!("rendering abuse_email.txt failed: {e}"));
         assert!(!out.is_empty(), "abuse_email.txt produced empty output");
         // Key content makes it into the rendered body.
@@ -1291,7 +1296,7 @@ mod tests {
             .get_template("generic_email.txt")
             .expect("template exists");
         let out = tmpl
-            .render(sample_generic_email_context())
+            .render(Serde(&sample_generic_email_context()))
             .unwrap_or_else(|e| panic!("rendering generic_email.txt failed: {e}"));
         assert!(!out.is_empty(), "generic_email.txt produced empty output");
         // Key content makes it into the rendered body.

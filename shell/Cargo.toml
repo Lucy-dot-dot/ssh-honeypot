@@ -10,7 +10,7 @@ chrono = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-flate2 = "1.1.9"
+flate2 = "1.1.11"
 tar = "0.4.46"
 shlex = "2.0.1"
 log = { workspace = true }

@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 common = { workspace = true }
-discord-rich-presence = "0.2"
+discord-rich-presence = "1.1"
 eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow"] }
 egui = { version = "0.37.0", default-features = false, features = ["default_fonts"]}
 sqlx = { workspace = true }
@@ -19,5 +19,5 @@ serde_json = { workspace = true }
 eframe = { version = "0.37.0", features = ["x11", "wayland"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-clipboard-win = "5.4.1"
+clipboard-win = "5.4.3"
 image = { version = "0.25.10", default-features = false, features = ["bmp"] }

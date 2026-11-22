@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use russh_sftp::protocol::{
-    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode, Version,
+    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, SftpHandle, Status, StatusCode,
+    Version,
 };
 use russh_sftp::server::Handler;
 use sha2::{Digest, Sha256};
@@ -207,16 +208,19 @@ impl Handler for HoneypotSftpSession {
                 },
             );
 
-            Ok(Handle { id, handle })
+            Ok(Handle {
+                id,
+                handle: handle.into(),
+            })
         }
     }
 
     fn close(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
-        let handle = handle;
+        let handle = String::from_utf8_lossy(handle.as_bytes()).into_owned();
         let handles = self.handles.clone();
 
         async move {
@@ -234,10 +238,11 @@ impl Handler for HoneypotSftpSession {
     fn read(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
         offset: u64,
         len: u32,
     ) -> impl Future<Output = Result<Data, Self::Error>> + Send {
+        let handle = String::from_utf8_lossy(handle.as_bytes()).into_owned();
         let fs = self.fs.clone();
         let handles = self.handles.clone();
 
@@ -293,11 +298,11 @@ impl Handler for HoneypotSftpSession {
     fn write(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
         offset: u64,
         data: Vec<u8>,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
-        let handle = handle;
+        let handle = String::from_utf8_lossy(handle.as_bytes()).into_owned();
         let fs = self.fs.clone();
         let handles = self.handles.clone();
         let db_tx = self.db_tx.clone();
@@ -437,8 +442,9 @@ impl Handler for HoneypotSftpSession {
     fn fstat(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
     ) -> impl Future<Output = Result<Attrs, Self::Error>> + Send {
+        let handle = String::from_utf8_lossy(handle.as_bytes()).into_owned();
         let handles = self.handles.clone();
         let fs = self.fs.clone();
 
@@ -535,9 +541,10 @@ impl Handler for HoneypotSftpSession {
     fn fsetstat(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
         attrs: FileAttributes,
     ) -> impl Future<Output = Result<Status, Self::Error>> + Send {
+        let handle = String::from_utf8_lossy(handle.as_bytes()).into_owned();
         let handles = self.handles.clone();
         let fs = self.fs.clone();
 
@@ -625,16 +632,19 @@ impl Handler for HoneypotSftpSession {
                 },
             );
 
-            Ok(Handle { id, handle })
+            Ok(Handle {
+                id,
+                handle: handle.into(),
+            })
         }
     }
 
     fn readdir(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
     ) -> impl Future<Output = Result<Name, Self::Error>> + Send {
-        let handle = handle;
+        let handle = String::from_utf8_lossy(handle.as_bytes()).into_owned();
         let fs = self.fs.clone();
         let handles = self.handles.clone();
 
@@ -1113,7 +1123,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!handle.handle.is_empty());
+        assert!(!handle.handle.as_bytes().is_empty());
 
         let fs_guard = session.fs.read().await;
         assert!(
@@ -1160,7 +1170,7 @@ mod tests {
             .unwrap();
 
         let guard = session.handles.read().await;
-        let entry = guard.get(&handle.handle);
+        let entry = guard.get(std::str::from_utf8(handle.handle.as_bytes()).unwrap());
         assert!(entry.is_some(), "handle should be tracked after open");
         let entry = entry.unwrap();
         assert_eq!(entry.path, "/tmp/data.bin");
@@ -1175,7 +1185,7 @@ mod tests {
     async fn test_close_returns_ok_status() {
         let (mut session, _rx) = create_session_with_tmp();
 
-        let status = session.close(1, "some_handle".to_string()).await.unwrap();
+        let status = session.close(1, "some_handle".into()).await.unwrap();
         assert_eq!(status.status_code, StatusCode::Ok);
     }
 
@@ -1193,12 +1203,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(session.handles.read().await.contains_key(&handle.handle));
+        assert!(session.handles.read().await.contains_key(std::str::from_utf8(handle.handle.as_bytes()).unwrap()));
 
         session.close(2, handle.handle.clone()).await.unwrap();
 
         assert!(
-            !session.handles.read().await.contains_key(&handle.handle),
+            !session.handles.read().await.contains_key(std::str::from_utf8(handle.handle.as_bytes()).unwrap()),
             "close should deregister the handle"
         );
     }
@@ -1455,7 +1465,7 @@ mod tests {
         let (mut session, _rx) = create_test_session(fs);
 
         let handle = session.opendir(1, "/var".to_string()).await.unwrap();
-        assert!(!handle.handle.is_empty());
+        assert!(!handle.handle.as_bytes().is_empty());
     }
 
     #[tokio::test]
@@ -1467,7 +1477,7 @@ mod tests {
         let handle = session.opendir(1, "/var".to_string()).await.unwrap();
 
         let guard = session.handles.read().await;
-        let entry = guard.get(&handle.handle);
+        let entry = guard.get(std::str::from_utf8(handle.handle.as_bytes()).unwrap());
         assert!(entry.is_some());
         let entry = entry.unwrap();
         assert_eq!(entry.path, "/var");
@@ -2236,7 +2246,7 @@ mod tests {
         let (mut session, _rx) = create_session_with_tmp();
 
         let result = session
-            .fstat(1, "nonexistent_handle".to_string())
+            .fstat(1, "nonexistent_handle".into())
             .await
             .unwrap();
         // Unknown handle should still return Ok with default attrs.
@@ -2395,7 +2405,7 @@ mod tests {
         let (mut session, _rx) = create_session_with_tmp();
 
         let status = session
-            .fsetstat(1, "bogus_handle".to_string(), FileAttributes::default())
+            .fsetstat(1, "bogus_handle".into(), FileAttributes::default())
             .await
             .unwrap();
         assert_eq!(status.status_code, StatusCode::Failure);

@@ -110,7 +110,7 @@ pub fn spawn(app_id: String) -> PresenceHandle {
 }
 
 fn connect(app_id: &str) -> Result<DiscordIpcClient, Box<dyn std::error::Error>> {
-    let mut client = DiscordIpcClient::new(app_id)?;
+    let mut client = DiscordIpcClient::new(app_id);
     client.connect()?;
     Ok(client)
 }
