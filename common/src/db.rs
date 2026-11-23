@@ -1,6 +1,8 @@
+use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use sqlx::types::uuid::Uuid;
 use sqlx::{Error, PgPool, Row, query};
+use sqlx::postgres::PgConnectOptions;
 use tokio::sync::mpsc;
 
 /// Honeypot module that produced an event (ssh, mysql, mssql, postgres, ...).
@@ -288,8 +290,11 @@ pub async fn connect_to_db_with_retry(
     const MAX_RETRIES: u8 = 100;
     let mut retry_count = 0;
 
+    let connect_options = PgConnectOptions::from_str(database_url)?
+        .application_name("honeypot_collector");
+
     loop {
-        match PgPool::connect(database_url).await {
+        match PgPool::connect_with(connect_options.clone()).await {
             Ok(pool) => {
                 return Ok(pool);
             }
