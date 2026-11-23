@@ -16,7 +16,10 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "SSH Honeypot Report Viewer",
         options,
-        Box::new(|_cc| Ok(Box::new(ReportApp::new()))),
+        Box::new(|cc| {
+            desktop::fonts::install(&cc.egui_ctx);
+            Ok(Box::new(ReportApp::new()))
+        }),
     )
 }
 

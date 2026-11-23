@@ -1683,7 +1683,9 @@ impl eframe::App for DashboardApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.colored_label(
                         GRAY,
-                        "Tip: double-click any row to drill down (conn → auth → session → commands); links drill back up",
+                        // ASCII arrows: U+2192 is not covered by egui's default
+                        // fonts on Windows and renders as tofu boxes.
+                        "Tip: double-click any row to drill down (conn -> auth -> session -> commands); links drill back up",
                     );
                 });
             });
@@ -2236,7 +2238,9 @@ impl eframe::App for DashboardApp {
                                             ui.label("Session");
                                             match d.session_start {
                                                 Some(start) => ui.label(format!(
-                                                    "{} → {} ({})",
+                                                    // ASCII arrow: U+2192 renders as
+                                                    // tofu with the default fonts.
+                                                    "{} -> {} ({})",
                                                     fmt_ts(start),
                                                     d.session_end
                                                         .map(fmt_ts)
@@ -2723,7 +2727,7 @@ impl eframe::App for DashboardApp {
 // ---- section renderers --------------------------------------------------
 
 /// A dashboard section that can be placed in a responsive column layout.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Section {
     LiveSessions,
     RecentAuths,
@@ -2756,8 +2760,11 @@ fn render_section(
 
 /// Pick how many sections sit side-by-side based on the available width,
 /// so wide / 4K viewports use horizontal space instead of one tall column.
+/// The feed tables are realistically 700-900 px wide (timestamp + IP +
+/// username + password/command columns), so sizing below that just produces
+/// rows whose sections overflow and need internal scrolling anyway.
 fn column_count(avail_width: f32) -> usize {
-    const MIN_SECTION_WIDTH: f32 = 460.0;
+    const MIN_SECTION_WIDTH: f32 = 700.0;
     const MAX_COLUMNS: usize = 5;
     ((avail_width / MIN_SECTION_WIDTH).floor() as usize).clamp(1, MAX_COLUMNS)
 }
@@ -2767,7 +2774,10 @@ const SECTION_GAP: f32 = 40.0;
 
 /// Lay `row` out side-by-side with each block hugging its content width,
 /// like flex items on a row, instead of stretching into equal-width
-/// columns which strand dead space between the tables.
+/// columns which strand dead space between the tables. Each block is capped
+/// at its share of the row width (minus gaps): wider blocks get a per-section
+/// horizontal scrollbar instead of pushing the rest of the row past the
+/// viewport edge, which used to clip the last feeds off-screen entirely.
 fn render_section_row(
     ui: &mut egui::Ui,
     row: &[Section],
@@ -2778,20 +2788,30 @@ fn render_section_row(
     top_error: Option<&str>,
 ) {
     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+        let gaps = SECTION_GAP * row.len().saturating_sub(1) as f32;
+        let share = ((ui.available_width() - gaps) / row.len() as f32).max(320.0);
         for (i, section) in row.iter().enumerate() {
             if i > 0 {
                 ui.add_space(SECTION_GAP);
             }
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                render_section(
-                    ui,
-                    snap,
-                    reported,
-                    actions,
-                    top_loading,
-                    top_error,
-                    *section,
-                );
+                egui::ScrollArea::horizontal()
+                    .id_salt(format!("dash_hscroll_{:?}", section))
+                    .max_width(share)
+                    // Hug content width so narrow blocks keep the flex look;
+                    // the cap only bites when a table is wider than its share.
+                    .auto_shrink([true, true])
+                    .show(ui, |ui| {
+                        render_section(
+                            ui,
+                            snap,
+                            reported,
+                            actions,
+                            top_loading,
+                            top_error,
+                            *section,
+                        );
+                    });
             });
         }
     });
@@ -3495,6 +3515,9 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "SSH Honeypot Dashboard",
         options,
-        Box::new(|_cc| Ok(Box::new(DashboardApp::new()))),
+        Box::new(|cc| {
+            desktop::fonts::install(&cc.egui_ctx);
+            Ok(Box::new(DashboardApp::new()))
+        }),
     )
 }
